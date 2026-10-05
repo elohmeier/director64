@@ -10,6 +10,8 @@ import {createRequire} from "node:module";
 import {isDeepStrictEqual} from "node:util";
 import {dirname, join} from "node:path";
 import {pathToFileURL} from "node:url";
+import {availableParallelism} from "node:os";
+import {Worker} from "node:worker_threads";
 
 const [tools, iso, work, profilePath, metaPath] = process.argv.slice(2);
 if (!metaPath) {
@@ -20,7 +22,19 @@ const root = new URL("../../../", import.meta.url).pathname;
 const {importGame} = await import(pathToFileURL(join(tools, "pipeline.mjs")).href);
 const {loadConverter} = await import(pathToFileURL(join(root, "platforms/web/import/convert.mjs")).href);
 const {DirectorFile} = await import(pathToFileURL(join(root, "node_modules/projectorrays/dist/pkg/node.es.js")).href);
-const converter = await loadConverter(readFileSync(join(tools, "convert.wasm")));
+const converterModule = await WebAssembly.compile(readFileSync(join(tools, "convert.wasm")));
+const converter = await loadConverter(converterModule);
+// The importer's worker pool, as the browser runs it (D64_POOL=0: in-thread).
+const {Pool} = await import(pathToFileURL(join(root, "platforms/web/import/pool.mjs")).href);
+const poolSize = process.env.D64_POOL === "0" ? 0 : Math.max(1, Math.min(availableParallelism() - 1, 12));
+const pool = poolSize ? new Pool(Array.from({length: poolSize}, () => {
+  const worker = new Worker(join(root, "platforms/web/node/pool-worker.mjs"));
+  return {
+    receive: (handler) => worker.on("message", handler),
+    send: (message, transfer) => worker.postMessage(message, transfer ?? []),
+    close: () => worker.terminate(),
+  };
+}), {type: "init", converter: converterModule, parser: null}) : undefined;
 const handle = openSync(iso, "r");
 const size = fstatSync(handle).size;
 const readAt = (offset, length) => {
@@ -33,7 +47,7 @@ const result = await importGame({
   source: {size, readAt},
   profile: JSON.parse(readFileSync(profilePath, "utf8")),
   tools: {
-    converter, DirectorFile,
+    converter, DirectorFile, pool,
     parserWasm: readFileSync(join(root, "node_modules/projectorrays/dist/projectorrays.wasm")),
     names: readFileSync(join(root, "runtime/lingo/names.txt"), "utf8"),
     bytecodeHeader: readFileSync(join(root, "runtime/lingo/lingo_bytecode.h")),
@@ -47,6 +61,7 @@ const result = await importGame({
     substituteFont: readFileSync(join(tools, "droid-sans.ttf")),
   },
 });
+pool?.close();
 // The program the console runs: with the port's fixes and launcher when it
 // has them. A port's model is rewritten by its host post-processor, so the
 // two sides compare as JSON.
@@ -56,7 +71,9 @@ const sameJson = (text, path) => isDeepStrictEqual(JSON.parse(text), JSON.parse(
 const same = (a, b) => Buffer.compare(Buffer.from(a), b) === 0;
 const summary = {
   seconds: Number(((performance.now() - started) / 1000).toFixed(1)),
+  pool: poolSize,
   stages_ms: result.report.stages,
+  convert_ms: result.report.convert,
   memory_bytes: result.report.memory_bytes,
   program: sameJson(result.program, nativeProgram),
   model: sameJson(result.model, join(work, "director/model.json")),

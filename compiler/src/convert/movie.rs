@@ -134,6 +134,38 @@ pub struct Converted {
     pub font_records: Vec<FontRecord>,
 }
 
+impl Converted {
+    /// As JSON, for the browser importer's pool, which converts movies on
+    /// several workers and merges their results in movie order.
+    pub fn to_json(&self) -> Value {
+        json!({"movie": self.movie, "problems": self.problems, "limits": self.limits,
+            "fontRecords": self.font_records.iter()
+                .map(|r| json!({"hash": r.hash, "names": r.names, "source": r.source})).collect::<Vec<_>>()})
+    }
+    pub fn from_json(mut value: Value) -> R<Converted> {
+        let list = |v: Value| -> R<Vec<Value>> {
+            match v {
+                Value::Array(items) => Ok(items),
+                _ => Err("converted movie without a list".into()),
+            }
+        };
+        let font_records = list(value["fontRecords"].take())?
+            .into_iter()
+            .map(|mut r| FontRecord {
+                hash: r["hash"].as_str().unwrap_or("").to_string(),
+                names: r["names"].as_array().into_iter().flatten().filter_map(|n| n.as_str().map(str::to_string)).collect(),
+                source: r["source"].take(),
+            })
+            .collect();
+        Ok(Converted {
+            movie: value["movie"].take(),
+            problems: list(value["problems"].take())?,
+            limits: list(value["limits"].take())?,
+            font_records,
+        })
+    }
+}
+
 fn obj(pairs: Vec<(&str, Value)>) -> Value {
     Value::Object(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
 }

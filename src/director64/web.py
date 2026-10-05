@@ -291,6 +291,7 @@ def build_tools(root: Path, engine: str) -> dict:
     files = {
         "converterModule": "convert.mjs",
         "importer": "importer.js",
+        "pool": "pool.js",
         "converter": "convert.wasm",
         "mkfont": "mkfont.js",
         "mkfontWasm": "mkfont.wasm",

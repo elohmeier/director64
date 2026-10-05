@@ -6,8 +6,8 @@
 // dump-format.mjs, then the Rust converter) run over the in-memory file
 // system; nothing leaves the machine.
 import {Vfs} from "./vfs.mjs";
-import {dumpDirector} from "../../../tools/director/dump-format.mjs";
 import {fontTools} from "./fonts.mjs";
+import {answer, runJob} from "./jobs.mjs";
 
 const STAGES = ["verify", "extract", "parse", "analyze", "audit", "scores", "convert", "port", "compile", "package", "sound", "video"];
 const decoder = new TextDecoder();
@@ -77,6 +77,22 @@ function streamPack(vfs, folders, converter) {
 }
 
 // Named files concatenated into one blob with a name -> [offset, length] index.
+// Without a worker pool (the Node parity run by default), the same jobs run
+// one at a time in this thread.
+function localPool(tools) {
+  return {
+    size: 1,
+    async map(kind, count, input, consume, {signal, onProgress} = {}) {
+      for (let i = 0; i < count; i++) {
+        check(signal);
+        const made = input(i);
+        consume(i, await runJob(kind, made?.payload !== undefined ? made.payload : made, tools));
+        onProgress?.((i + 1) / count);
+      }
+    },
+  };
+}
+
 function packFiles(entries) {
   entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const total = entries.reduce((n, [, data]) => n + data.length, 0);
@@ -94,7 +110,8 @@ function packFiles(entries) {
  * source: {size, readAt(offset, length) -> Uint8Array} (synchronous)
  * profile: a supported game's profile (profiles.json)
  * tools: {converter, DirectorFile, parserWasm, names, bytecodeHeader, meta,
- *         fonts: {createMkfont, createMksprite, mkfontWasm, mkspriteWasm}, substituteFont}
+ *         fonts: {createMkfont, createMksprite, mkfontWasm, mkspriteWasm}, substituteFont,
+ *         pool (optional): a pool.mjs Pool running parse, prescale and sound jobs}
  */
 export async function importGame({source, profile, tools, onProgress = () => {}, signal, verified = false}) {
   const vfs = new Vfs();
@@ -104,6 +121,7 @@ export async function importGame({source, profile, tools, onProgress = () => {},
     return hash.hex();
   };
   const director = (stage, request) => tools.converter.director({stage, ...request}, vfs);
+  const pool = tools.pool ?? localPool(tools);
   const report = {stages: {}, profile: profile.slug, source: profile.source.id};
   const stage = async (name, work) => {
     check(signal);
@@ -156,17 +174,15 @@ export async function importGame({source, profile, tools, onProgress = () => {},
   // what it saw.
   await stage("parse", async (progress) => {
     const plan = director("plan", {media, policy, dumps});
-    let done = 0;
-    for (const entry of plan.dumps) {
-      check(signal);
-      const file = await tools.DirectorFile.read(vfs.read(entry.input));
-      try {
-        vfs.write(entry.output, dumpDirector(file));
-      } finally {
-        file.destroy();
-      }
-      progress(++done / plan.dumps.length);
-    }
+    // Largest first, so the biggest files do not finish last on one worker;
+    // written in plan order, as one thread would.
+    const order = plan.dumps.map((entry, i) => [vfs.size(entry.input), i]).sort((a, b) => b[0] - a[0]);
+    const parsed = new Array(plan.dumps.length);
+    await pool.map("parse", order.length, (n) => {
+      const bytes = vfs.read(plan.dumps[order[n][1]].input).slice();
+      return {payload: bytes, transfer: [bytes.buffer]};
+    }, (n, dump) => { parsed[order[n][1]] = dump; }, {signal, onProgress: progress});
+    plan.dumps.forEach((entry, i) => vfs.write(entry.output, parsed[i]));
   });
   await stage("analyze", async () =>
     director("analyze", {media, dumps, output: "/work/analysis", policy, now: new Date().toISOString()}));
@@ -174,9 +190,73 @@ export async function importGame({source, profile, tools, onProgress = () => {},
     director("audit", {media, dumps, output: "/work/analysis/source", policy, parser: sha256(tools.parserWasm)}));
   await stage("scores", async () =>
     director("recover", {manifest: "/work/analysis/source/manifest.json", output: "/work/analysis/score-recovery"}));
-  const converted = await stage("convert", async () => director("compile", {output: "/work/director",
-    recovery: "/work/analysis/score-recovery", media, policy, dumps,
-    defer_video: !!profile.port.asset_postprocessor}));
+  const converted = await stage("convert", async (progress) => {
+    const request = {output: "/work/director", recovery: "/work/analysis/score-recovery", media, policy, dumps,
+      defer_video: !!profile.port.asset_postprocessor};
+    // On a worker pool each movie converts on a worker, against its own copy
+    // of what it writes; the movies' files and records merge here in movie
+    // order, as one thread would have left them.
+    let prescale;
+    const parts = report.convert = {};
+    let mark = performance.now();
+    const lap = (name) => {
+      const now = performance.now();
+      parts[name] = Math.round(now - mark);
+      mark = now;
+    };
+    if (tools.pool) {
+      const {movies, names, inputs} = director("compile", {...request, external_movies: true});
+      // Largest Director file first, so no big movie starts last.
+      const sizes = new Map(filesUnder(vfs, media).map((path) => [path.split("/").pop().toUpperCase(),
+        vfs.size(`${media}/${path}`)]));
+      const order = names.map((name, k) => [sizes.get(name.toUpperCase()) ?? 0, k]).sort((a, b) => b[0] - a[0]);
+      lap("setup");
+      const outputs = new Array(movies);
+      const batch = `${Date.now()}-${Math.random()}`;
+      // Each job travels with the files it is known to read; anything else
+      // it asks for.
+      await pool.map("movie", movies, (n) => {
+        const index = order[n][1];
+        const {answers, transfer} = answer(vfs, inputs[index].map((path) => ({op: "read", path})));
+        return {payload: {request, index, batch, answers}, transfer};
+      },
+        (n, output) => { outputs[order[n][1]] = output; },
+        {signal, onProgress: (f) => progress(f / 2), provide: (requests) => answer(vfs, requests)});
+      lap("movies");
+      vfs.mkdir("/work/movie-records", true);
+      outputs.forEach(({record, files}, k) => {
+        for (const [path, bytes] of files) {
+          vfs.mkdir(vfs.parent(path), true);
+          vfs.write(path, bytes);
+        }
+        vfs.write(`/work/movie-records/${k}.json`, record);
+      });
+      lap("write");
+      ({prescale} = director("compile-merge", {...request, results: "/work/movie-records", movies}));
+      vfs.remove("/work/movie-records");
+      lap("merge");
+    } else {
+      ({prescale} = director("compile", {...request, external_prescale: true}));
+    }
+    // The stage prescale (800x600 movies) resamples each image on the pool;
+    // its results are content-addressed, so they are the same in any order.
+    const scaled = new Array(prescale.length);
+    await pool.map("prescale", prescale.length, (i) => {
+      const bytes = vfs.read(`/work/director/images/${prescale[i]}`).slice();
+      return {payload: bytes, transfer: [bytes.buffer]};
+    }, (i, image) => { scaled[i] = image; }, {signal, onProgress: (f) => progress(0.5 + f / 2)});
+    lap("prescale");
+    const renames = {};
+    prescale.forEach((name, i) => {
+      const image = scaled[i];
+      if (image && !vfs.exists(`/work/director/images/${image.name}`))
+        vfs.write(`/work/director/images/${image.name}`, image.stored);
+      renames[name] = image ? image.name : name;
+    });
+    const finished = director("compile-finish", {...request, renames});
+    lap("finish");
+    return finished;
+  });
   if (converted.fatal.length)
     throw new ImportError(`${converted.fatal.length} cast members could not be converted, ` +
       `first: ${JSON.stringify(converted.fatal[0])}`);
@@ -324,22 +404,20 @@ export async function importGame({source, profile, tools, onProgress = () => {},
     let done = 0;
     for (const kind of ["audio", "streams"]) {
       const {index, blob} = result[kind];
-      // Eight at a time: the browser runs each encoder on its own thread.
+      // Each WAV is resampled and encoded on the pool; anything else (MP3
+      // streams) stays as it is.
       const work = Object.entries(index);
-      const entries = new Array(work.length);
-      let next = 0;
-      const lane = async () => {
-        while (next < work.length) {
-          const i = next++;
-          const [name, [at, length, ...rest]] = work[i];
-          check(signal);
-          const bytes = blob.subarray(at, at + length);
-          const wave = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
-          entries[i] = [name, wave ? await tools.encodeAudio(bytes) : bytes.slice(), rest];
-          progress(++done / total);
-        }
-      };
-      await Promise.all(Array.from({length: 8}, lane));
+      const entries = work.map(([name, [at, length, ...rest]]) => [name, blob.subarray(at, at + length), rest]);
+      const isWave = (b) => b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46;
+      const waves = entries.map((entry, i) => i).filter((i) => isWave(entries[i][1]));
+      for (const entry of entries) if (!isWave(entry[1])) entry[1] = entry[1].slice();
+      done += entries.length - waves.length;
+      await pool.map("sound", waves.length, (n) => {
+        const bytes = entries[waves[n]][1].slice();
+        return {payload: bytes, transfer: [bytes.buffer]};
+      }, (n, encoded) => {
+        entries[waves[n]][1] = encoded;
+      }, {signal, onProgress: () => progress(++done / total)});
       const packed = packFiles(entries.map(([name, bytes]) => [name, bytes]));
       for (const [name, , rest] of entries) packed.index[name].push(...rest);
       result[kind] = packed;
@@ -352,16 +430,12 @@ export async function importGame({source, profile, tools, onProgress = () => {},
   result.video = await stage("video", async (progress) => {
     const entries = [];
     if (tools.encodeVideo) {
-      for (const [i, {path, name}] of videoSources.entries()) {
-        check(signal);
-        const frames = tools.converter.frames(vfs.read(path));
-        try {
-          entries.push([name, await tools.encodeVideo(frames)]);
-        } finally {
-          frames.close();
-        }
-        progress((i + 1) / videoSources.length);
-      }
+      // One movie per job, longest first: each decodes and encodes on its own.
+      const order = videoSources.map(({path}, i) => [vfs.size(path), i]).sort((a, b) => b[0] - a[0]);
+      await pool.map("video", order.length, (n) => {
+        const bytes = vfs.read(videoSources[order[n][1]].path).slice();
+        return {payload: bytes, transfer: [bytes.buffer]};
+      }, (n, encoded) => entries.push([videoSources[order[n][1]].name, encoded]), {signal, onProgress: progress});
     }
     result.report.videos = entries.length;
     return packFiles(entries);

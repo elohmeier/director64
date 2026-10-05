@@ -12,11 +12,16 @@ Policy confines the page to its own origin.
 | Game | Family | Source | Import | Status |
 | --- | --- | --- | --- | --- |
 | Pettersson und Findus (Workshop) | D6 | `FINDUS.iso` | 6 s | plays |
-| Autos bauen mit Willy Werkel | extended D6 | the edition's ZIP | 6 s | plays |
-| Findus: Christmas calendar | D7 | `FINDUS3.ISO` | 5 s | plays |
-| Findus bei den Mucklas | D8 | `Findus4.iso` | 15 s | plays |
-| Lernerfolg Deutsch 1/2 | D10 | `Deutsch12.iso` | 47 s | plays |
-| Löwenzahn 1 | D5 | `LOEWENZA.iso` | 38 s | plays, with video and printing |
+| Autos bauen mit Willy Werkel | extended D6 | the edition's ZIP | 7 s | plays |
+| Findus: Christmas calendar | D7 | `FINDUS3.ISO` | 6 s | plays |
+| Findus bei den Mucklas | D8 | `Findus4.iso` | 14 s | plays |
+| Lernerfolg Deutsch 1/2 | D10 | `Deutsch12.iso` | 27 s | plays |
+| Löwenzahn 1 | D5 | `LOEWENZA.iso` | 14 s | plays, with video and printing |
+
+Import times are headless Chrome on a 16-core machine, with the worker pool
+described under [Importing a disc](#importing-a-disc). In one thread the
+same imports took 12 s (Workshop), 26 s (Mucklas), 60 s (Lernerfolg) and
+41 s (Löwenzahn).
 
 A game is offered once it has a browser profile, `games/<slug>/web.toml`.
 
@@ -29,7 +34,7 @@ uv run director64 web --game findus-workshop --serve
 This writes the source-free site to `build/web/site/` and serves it at
 <http://127.0.0.1:18064/> (`--port` changes the port, `--no-build` serves the
 existing build). Open it, choose `FINDUS.iso`, and play once the import
-finishes: about 9 s in Chrome. The build needs Docker (Emscripten 6.0.10,
+finishes: about 6 s in Chrome. The build needs Docker (Emscripten 6.0.10,
 pinned by digest in `src/director64/web.py`, run without network), Rust with
 the `wasm32-unknown-unknown` target, and Node with the locked dev
 dependencies (`npm ci --ignore-scripts`).
@@ -72,6 +77,20 @@ its dumps (`compiler/src/convert/dump.rs`) are what the stages read. Embedded
 PFR1 fonts recover in the converter too (`compiler/src/convert/pfr.rs`,
 `cff.rs`), so games with original fonts convert in the browser as well.
 Because it is one codebase, parity is byte-level.
+
+The independent parts of an import run on a pool of workers
+(`platforms/web/import/pool.mjs`, one per spare core up to twelve), each
+with its own converter and parser instance: parsing each Director file,
+converting each movie, the 4/5 stage prescale of each image, and encoding
+each sound and each linked movie's video. A pool needs no shared memory, so
+the site needs no cross-origin isolation. A movie job converts against
+`ProxyFiles` (`jobs.mjs`): what it writes stays on its worker, and it is sent
+the files it is known to read (`Setup::job_inputs`); anything else it asks
+for, and it runs again with the answers, so a result is only made from
+complete inputs. The import worker merges the movies' files and records in
+movie order (`compile-merge`) and finishes the stage, so the output is the
+one-thread output byte for byte; `--check-import` runs the same pool under
+Node with `worker_threads` (`D64_POOL=0` runs it in one thread).
 `platforms/web/import/parity.mjs` drives the built bundle from the disc under
 Node and compares its outputs with the native pipeline's.
 

@@ -11,6 +11,11 @@ use sha2::{Digest, Sha256};
 
 static mut RESULT: Vec<u8> = Vec::new();
 static mut HASHES: Vec<Option<Sha256>> = Vec::new();
+/// The compile stage between its two calls ("compile" with
+/// external_prescale, then "compile-finish").
+static mut PENDING: Option<director64_aot::convert::compile::Pending> = None;
+/// A pool worker's external-palette cache across its "compile-movie" calls.
+static mut PALETTES: Option<std::collections::HashMap<String, Vec<u8>>> = None;
 
 #[allow(static_mut_refs)]
 fn set_result(bytes: Vec<u8>) {
@@ -152,6 +157,27 @@ pub extern "C" fn d64c_zip_file(size: f64, index: u32) -> u32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn d64c_inflate(ptr: *const u8, len: usize) -> u32 {
     finish(director64_aot::convert::files::inflate(unsafe { input(ptr, len) }))
+}
+
+/// One stored image of the compile stage's prescale queue at 4/5, for the
+/// importer's worker pool: empty when the image keeps its size, else the
+/// new name's length (one byte), the name, and the image as stored
+/// (deflated, as files::DeflatingImages writes it).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn d64c_prescale(ptr: *const u8, len: usize) -> u32 {
+    use director64_aot::convert::{compile, files};
+    finish((|| {
+        let plain = files::inflate(unsafe { input(ptr, len) })?;
+        Ok(match compile::prescale_asset(&plain)? {
+            None => Vec::new(),
+            Some((name, scaled)) => {
+                let mut out = vec![name.len() as u8];
+                out.extend_from_slice(name.as_bytes());
+                out.extend_from_slice(&files::deflate(&scaled));
+                out
+            }
+        })
+    })())
 }
 
 // ---- External sound streams ----
@@ -387,6 +413,21 @@ impl Files for HostFiles {
     }
 }
 
+fn compile_options<'a>(
+    request: &'a serde_json::Value,
+    policy: &'a serde_json::Value,
+) -> Result<director64_aot::convert::compile::Options<'a>, String> {
+    let arg = |key: &str| request[key].as_str().ok_or_else(|| format!("director request without {key}"));
+    Ok(director64_aot::convert::compile::Options {
+        output: arg("output")?,
+        recovery: arg("recovery")?,
+        media: arg("media")?,
+        dumps: arg("dumps")?,
+        policy,
+        defer_video: request["defer_video"].as_bool().unwrap_or(false),
+    })
+}
+
 /// One converter stage, as `director64-aot director <stage>` runs it on the
 /// host. Input: JSON {"stage": ..., stage arguments}; output: the stage's
 /// JSON result.
@@ -410,15 +451,62 @@ pub unsafe extern "C" fn d64c_director(ptr: *const u8, len: usize) -> u32 {
             "audit" => audit::audit(fs, arg("media")?, arg("dumps")?, arg("output")?, policy, arg("parser")?)?,
             "recover" => recover::recover(fs, arg("manifest")?, arg("output")?, &recover::provenance())?,
             "compile" => {
-                let options = compile::Options {
-                    output: arg("output")?,
-                    recovery: arg("recovery")?,
-                    media: arg("media")?,
-                    dumps: arg("dumps")?,
-                    policy,
-                    defer_video: request["defer_video"].as_bool().unwrap_or(false),
-                };
-                let compiled = compile::compile(fs, &options)?;
+                let options = compile_options(&request, policy)?;
+                // With external_movies the importer converts each movie on its
+                // worker pool ("compile-movie"), merges them ("compile-merge")
+                // and resamples the prescale queue there too (d64c_prescale),
+                // finishing with "compile-finish". external_prescale alone
+                // converts the movies here.
+                if request["external_movies"].as_bool().unwrap_or(false) {
+                    let setup = compile::compile_setup(fs, &options)?;
+                    let inputs: Vec<Vec<String>> = (0..setup.jobs.len()).map(|k| setup.job_inputs(&options, k)).collect();
+                    json!({"movies": setup.jobs.len(), "names": setup.job_names(), "inputs": inputs})
+                } else if request["external_prescale"].as_bool().unwrap_or(false) {
+                    let pending = compile::compile_start(fs, &options)?;
+                    let queue = json!({"prescale": pending.prescale});
+                    unsafe { PENDING = Some(pending) };
+                    queue
+                } else {
+                    let compiled = compile::compile(fs, &options)?;
+                    json!({"movies": compiled.movies, "problems": compiled.problems, "fatal": compiled.fatal})
+                }
+            }
+            // One movie, on a pool worker: its converted record.
+            "compile-movie" => {
+                let options = compile_options(&request, policy)?;
+                let setup = compile::compile_setup(fs, &options)?;
+                #[allow(static_mut_refs)]
+                let palettes = unsafe { PALETTES.get_or_insert_with(Default::default) };
+                let index = request["index"].as_u64().ok_or("compile-movie without an index")? as usize;
+                compile::convert_job(fs, &options, &setup, palettes, index)?.to_json()
+            }
+            // The pool's movie records, in job order, from `results`.
+            "compile-merge" => {
+                let options = compile_options(&request, policy)?;
+                let results = arg("results")?;
+                let count = request["movies"].as_u64().ok_or("compile-merge without a movie count")? as usize;
+                let mut converted = Vec::with_capacity(count);
+                for k in 0..count {
+                    let path = format!("{results}/{k}.json");
+                    let value: Value = serde_json::from_slice(&fs.read(&path)?).map_err(|e| format!("{path}: {e}"))?;
+                    converted.push(director64_aot::convert::movie::Converted::from_json(value)?);
+                }
+                let pending = compile::compile_merge(fs, &options, converted)?;
+                let queue = json!({"prescale": pending.prescale});
+                unsafe { PENDING = Some(pending) };
+                queue
+            }
+            "compile-finish" => {
+                let options = compile_options(&request, policy)?;
+                #[allow(static_mut_refs)]
+                let pending = unsafe { PENDING.take() }.ok_or("compile-finish without a pending compile")?;
+                let renames: std::collections::HashMap<String, String> = request["renames"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                    .collect();
+                let compiled = compile::compile_finish(fs, &options, pending, &renames)?;
                 json!({"movies": compiled.movies, "problems": compiled.problems, "fatal": compiled.fatal})
             }
             // The port's additions (compiler/src/ports.rs) over the importer's files.

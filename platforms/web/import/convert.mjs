@@ -43,7 +43,8 @@ function fileOperations(current, memory) {
 export async function loadConverter(bytes) {
   let readAt = null, files = null;
   const host = fileOperations(() => files, () => new Uint8Array(instance.exports.memory.buffer));
-  const {instance} = await WebAssembly.instantiate(bytes, {
+  // A compiled module (a pool worker's copy) instantiates to the instance alone.
+  const instantiated = await WebAssembly.instantiate(bytes, {
     env: {
       ...host,
       d64c_read_at: (offset, pointer, length) => {
@@ -58,6 +59,7 @@ export async function loadConverter(bytes) {
       },
     },
   });
+  const instance = instantiated.instance ?? instantiated;
   const x = instance.exports;
   const memory = () => new Uint8Array(x.memory.buffer);
   function put(data) {
@@ -106,10 +108,14 @@ export async function loadConverter(bytes) {
     // One converter stage (`director64-aot director <stage>`) over `vfs`
     // (the importer's Vfs); returns the stage's JSON result.
     director(request, vfs) {
+      return JSON.parse(decoder.decode(this.directorBytes(request, vfs)));
+    },
+    // The same, the stage's JSON result as bytes.
+    directorBytes(request, vfs) {
       const input = put(JSON.stringify(request));
       files = vfs;
       try {
-        return JSON.parse(decoder.decode(call(x.d64c_director(...input))));
+        return call(x.d64c_director(...input));
       } finally {
         files = null;
         release(input);
@@ -141,6 +147,18 @@ export async function loadConverter(bytes) {
       const input = put(data);
       try {
         return call(x.d64c_inflate(...input));
+      } finally {
+        release(input);
+      }
+    },
+    // One stored image of the compile stage's prescale queue at 4/5:
+    // {name, stored}, or null when it keeps its size (d64c_prescale).
+    prescale(stored) {
+      const input = put(stored);
+      try {
+        const out = call(x.d64c_prescale(...input));
+        if (!out.length) return null;
+        return {name: decoder.decode(out.subarray(1, 1 + out[0])), stored: out.slice(1 + out[0])};
       } finally {
         release(input);
       }

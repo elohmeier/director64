@@ -15,6 +15,8 @@ node --check platforms/web/site/player.js
 node --check platforms/web/site/cache.js
 node --check platforms/web/import/worker.mjs
 node --check platforms/web/import/pipeline.mjs
+node --check platforms/web/import/jobs.mjs
+node --check platforms/web/import/pool.mjs
 node --check platforms/web/node/probe.mjs
 node --test tests/node/*.test.mjs
 "$repo_root/.mise-tasks/test-native"

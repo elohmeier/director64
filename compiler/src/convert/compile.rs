@@ -12,7 +12,7 @@ use super::fdi::prescale_image;
 use super::files::{self, Files};
 use super::film::compose_film_frame;
 use super::js;
-use super::movie::{convert_movie, image_asset_name, write_asset, MovieJob, Sources};
+use super::movie::{convert_movie, image_asset_name, write_asset, Converted, MovieJob, Sources};
 use super::source::sha256;
 use super::text::{bind_text_fonts, text_reachability};
 
@@ -33,6 +33,19 @@ pub struct Compiled {
     pub fatal: Vec<Value>,
 }
 
+/// The stage between converting the movies and the stage prescale: the
+/// browser importer resamples the prescale queue on its worker pool, then
+/// finishes with the renames (compile_finish).
+pub struct Pending {
+    movies: Vec<Value>,
+    problems: Vec<Value>,
+    limits: Vec<Value>,
+    fonts: Vec<Value>,
+    /// The images the stage prescale resamples, in first-use order; empty
+    /// when the policy has no prescale.
+    pub prescale: Vec<String>,
+}
+
 fn int(v: &Value) -> i64 {
     v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)).unwrap_or(0)
 }
@@ -50,13 +63,66 @@ fn basename(path: &str) -> &str {
 }
 
 pub fn compile(fs: &mut dyn Files, options: &Options) -> R<Compiled> {
+    let pending = compile_start(fs, options)?;
+    let mut rescaled = HashMap::new();
+    for name in &pending.prescale {
+        let data = fs.read(&files::join(options.output, &format!("images/{name}")))?;
+        let out = match prescale_asset(&data)? {
+            None => name.clone(),
+            Some((out, scaled)) => {
+                write_asset(fs, &files::join(options.output, &format!("images/{out}")), &scaled)?;
+                out
+            }
+        };
+        rescaled.insert(name.clone(), out);
+    }
+    compile_finish(fs, options, pending, &rescaled)
+}
+
+/// What every movie's conversion shares: the recovered files, their source
+/// paths and the policy's palettes, and which files convert as movies.
+pub struct Setup {
+    recovered_files: Vec<Value>,
+    source_paths: Map<String, Value>,
+    common_palette: Option<Vec<u8>>,
+    common_palette_hash: Option<String>,
+    d5_stage_palette: Option<Vec<u8>>,
+    /// The movies' indices into the recovered files, in conversion order.
+    pub jobs: Vec<usize>,
+}
+
+impl Setup {
+    /// Each job's recovered file name, in job order.
+    pub fn job_names(&self) -> Vec<String> {
+        self.jobs.iter().map(|&i| self.recovered_files[i]["name"].as_str().unwrap_or("").to_string()).collect()
+    }
+
+    /// The files job `k` is known to read: the recovery manifest, its movie's
+    /// dump and its recovered score resources. A worker that converts it
+    /// elsewhere is sent these with the job.
+    pub fn job_inputs(&self, options: &Options, k: usize) -> Vec<String> {
+        let source = &self.recovered_files[self.jobs[k]];
+        let name = source["name"].as_str().unwrap_or("");
+        let relative = self.source_paths.get(name).and_then(Value::as_str).unwrap_or(name);
+        let mut inputs = vec![
+            files::join(options.recovery, "manifest.json"),
+            super::plan::dump_path(options.dumps, &super::plan::file_key(relative)),
+        ];
+        for resource in source["resources"].as_array().into_iter().flatten() {
+            inputs.push(files::join(options.recovery, resource["blob"].as_str().unwrap_or("")));
+        }
+        inputs
+    }
+}
+
+pub fn compile_setup(fs: &mut dyn Files, options: &Options) -> R<Setup> {
     let (output, policy) = (options.output, options.policy);
     let recovery: Value =
         serde_json::from_slice(&fs.read(&files::join(options.recovery, "manifest.json"))?).map_err(|e| e.to_string())?;
     for directory in ["images", "wav", "alpha", "fonts"] {
         fs.mkdir_all(&files::join(output, directory))?;
     }
-    let recovered_files = recovery["files"].as_array().ok_or("recovery manifest without files")?;
+    let recovered_files = recovery["files"].as_array().ok_or("recovery manifest without files")?.clone();
     let source_paths: Map<String, Value> = recovered_files
         .iter()
         .map(|f| {
@@ -85,29 +151,72 @@ pub fn compile(fs: &mut dyn Files, options: &Options) -> R<Compiled> {
         }
         d5_stage_palette = Some(bytes);
     }
+    let projector_name = policy["projector"].as_str().map(|p| basename(p).to_uppercase());
+    let has_startup = policy["startup_movie"].as_str().is_some_and(|s| !s.is_empty());
+    let jobs = recovered_files
+        .iter()
+        .enumerate()
+        .filter(|(_, source)| {
+            let name = source["name"].as_str().unwrap_or("");
+            let projector = projector_name.as_deref() == Some(name) && has_startup;
+            name.ends_with(".DXR") || name.ends_with(".CXT") || projector
+        })
+        .map(|(i, _)| i)
+        .collect();
+    Ok(Setup { recovered_files, source_paths, common_palette, common_palette_hash, d5_stage_palette, jobs })
+}
+
+/// The movie of job `k` (its movie id is k + 1). `palettes` caches external
+/// palettes across calls; it changes no result.
+pub fn convert_job(
+    fs: &mut dyn Files,
+    options: &Options,
+    setup: &Setup,
+    palettes: &mut HashMap<String, Vec<u8>>,
+    k: usize,
+) -> R<Converted> {
+    let mut sources = Sources {
+        media: options.media,
+        dumps: options.dumps,
+        source_paths: &setup.source_paths,
+        palettes: std::mem::take(palettes),
+    };
+    let job = MovieJob {
+        source: &setup.recovered_files[setup.jobs[k]],
+        movie_id: k + 1,
+        policy: options.policy,
+        recovery: options.recovery,
+        output: options.output,
+        common_palette: setup.common_palette.as_deref(),
+        common_palette_hash: setup.common_palette_hash.as_deref(),
+        d5_stage_palette: setup.d5_stage_palette.as_deref(),
+    };
+    let result = convert_movie(fs, &mut sources, &job);
+    *palettes = sources.palettes;
+    result
+}
+
+/// Converts every movie and flattens the film loops; the stage prescale's
+/// queue is left to the caller.
+pub fn compile_start(fs: &mut dyn Files, options: &Options) -> R<Pending> {
+    let setup = compile_setup(fs, options)?;
+    let mut palettes = HashMap::new();
+    let mut converted = Vec::with_capacity(setup.jobs.len());
+    for k in 0..setup.jobs.len() {
+        converted.push(convert_job(fs, options, &setup, &mut palettes, k)?);
+    }
+    compile_merge(fs, options, converted)
+}
+
+/// The movies' results, in job order, into one model: embedded fonts, film
+/// loops and the prescale queue.
+pub fn compile_merge(fs: &mut dyn Files, options: &Options, converted: Vec<Converted>) -> R<Pending> {
+    let (output, policy) = (options.output, options.policy);
     let mut movies: Vec<Value> = Vec::new();
     let mut problems: Vec<Value> = Vec::new();
     let mut limits: Vec<Value> = Vec::new();
     let mut font_records = Vec::new();
-    let projector_name = policy["projector"].as_str().map(|p| basename(p).to_uppercase());
-    let has_startup = policy["startup_movie"].as_str().is_some_and(|s| !s.is_empty());
-    for source in recovered_files {
-        let name = source["name"].as_str().unwrap_or("");
-        let projector = projector_name.as_deref() == Some(name) && has_startup;
-        if !(name.ends_with(".DXR") || name.ends_with(".CXT")) && !projector {
-            continue;
-        }
-        let job = MovieJob {
-            source,
-            movie_id: movies.len() + 1,
-            policy,
-            recovery: options.recovery,
-            output,
-            common_palette: common_palette.as_deref(),
-            common_palette_hash: common_palette_hash.as_deref(),
-            d5_stage_palette: d5_stage_palette.as_deref(),
-        };
-        let result = convert_movie(fs, &mut sources, &job)?;
+    for result in converted {
         movies.push(result.movie);
         problems.extend(result.problems);
         limits.extend(result.limits);
@@ -161,8 +270,19 @@ pub fn compile(fs: &mut dyn Files, options: &Options) -> R<Compiled> {
         }
     }
     flatten_films(fs, output, &mut movies, &mut problems, &mut limits)?;
+    let prescale = if truthy(&policy["stage_prescale"]) { prescale_queue(&movies) } else { Vec::new() };
+    Ok(Pending { movies, problems, limits, fonts, prescale })
+}
+
+/// The rest of the stage, given each prescaled image's new name.
+pub fn compile_finish(fs: &mut dyn Files, options: &Options, pending: Pending, rescaled: &HashMap<String, String>) -> R<Compiled> {
+    let (output, policy) = (options.output, options.policy);
+    let Pending { mut movies, problems, mut limits, mut fonts, prescale } = pending;
     if truthy(&policy["stage_prescale"]) {
-        prescale(fs, output, &mut movies, &mut limits)?;
+        if let Some(name) = prescale.iter().find(|n| !rescaled.contains_key(*n)) {
+            return Err(format!("prescale result missing for {name}"));
+        }
+        apply_prescale(&mut movies, rescaled, &mut limits);
     }
     // Policy-pinned deferrals turn documented residual conversions into
     // explicit approximations; a pin without its problem is stale.
@@ -368,8 +488,9 @@ fn flatten_films(fs: &mut dyn Files, output: &str, movies: &mut [Value], problem
     Ok(())
 }
 
-/// The 4/5 prescale of every finished image asset for an 800x600 stage.
-fn prescale(fs: &mut dyn Files, output: &str, movies: &mut [Value], limits: &mut Vec<Value>) -> R<()> {
+/// The finished image assets the 4/5 prescale of an 800x600 stage
+/// resamples, in first-use order.
+fn prescale_queue(movies: &[Value]) -> Vec<String> {
     let mut queue: Vec<String> = Vec::new();
     let mut queued = BTreeSet::new();
     let mut enqueue = |name: &Value| {
@@ -379,7 +500,7 @@ fn prescale(fs: &mut dyn Files, output: &str, movies: &mut [Value], limits: &mut
         }
         queue.push(name.to_string());
     };
-    for movie in movies.iter() {
+    for movie in movies {
         for m in movie["members"].as_array().unwrap() {
             enqueue(&m["asset"]);
             for name in m["filmAssets"].as_array().into_iter().flatten() {
@@ -387,21 +508,20 @@ fn prescale(fs: &mut dyn Files, output: &str, movies: &mut [Value], limits: &mut
             }
         }
     }
-    let mut rescaled: HashMap<String, String> = HashMap::new();
-    for name in queue {
-        let data = fs.read(&files::join(output, &format!("images/{name}")))?;
-        let out = match prescale_image(&data)? {
-            None => name.clone(),
-            Some(scaled) => {
-                let kind = &scaled[..4];
-                let extension = if kind == b"FDIA" { ".fda" } else if kind == b"FDI2" { ".fd2" } else { ".fdi" };
-                let out = format!("{}{extension}", &sha256(&scaled)[..24]);
-                write_asset(fs, &files::join(output, &format!("images/{out}")), &scaled)?;
-                out
-            }
-        };
-        rescaled.insert(name, out);
-    }
+    queue
+}
+
+/// One image asset at 4/5: its content-addressed name and bytes, or None
+/// when it keeps its size.
+pub fn prescale_asset(data: &[u8]) -> R<Option<(String, Vec<u8>)>> {
+    Ok(prescale_image(data)?.map(|scaled| {
+        let kind = &scaled[..4];
+        let extension = if kind == b"FDIA" { ".fda" } else if kind == b"FDI2" { ".fd2" } else { ".fdi" };
+        (format!("{}{extension}", &sha256(&scaled)[..24]), scaled)
+    }))
+}
+
+fn apply_prescale(movies: &mut [Value], rescaled: &HashMap<String, String>, limits: &mut Vec<Value>) {
     for movie in movies.iter_mut() {
         for m in movie["members"].as_array_mut().unwrap() {
             let m = m.as_object_mut().unwrap();
@@ -419,5 +539,4 @@ fn prescale(fs: &mut dyn Files, output: &str, movies: &mut [Value], limits: &mut
     }
     limits.push(json!({"kind": "stage-prescale", "scale": "4/5", "skipped": "<=16x16", "resampled": rescaled.len(),
         "implemented": true, "original_projector_verified": false}));
-    Ok(())
 }
