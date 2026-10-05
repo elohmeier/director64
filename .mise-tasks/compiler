@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Build and test the bytecode compiler (compiler/), then the pipeline tests that run it"
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+cargo build --release --manifest-path compiler/Cargo.toml
+cargo test --release --manifest-path compiler/Cargo.toml
+uv run --locked pytest -q tests/test_aot_bytecode.py tests/test_lingo.py

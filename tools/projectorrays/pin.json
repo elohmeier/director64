@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "upstream_repository": "https://github.com/ProjectorRays/ProjectorRays.git",
+  "upstream_commit": "6f9bcebf626b43719abe2affcbbcb041d154d666",
+  "extension_commit": "562c5690aafb3c35850b756df6c11591055afae9",
+  "extension_tree": "59c1e4a01250e55bcf15a833eb8b8b079b295692",
+  "commit_object": "extension.commit",
+  "commit_object_sha256": "6965f750ccbea5f7bd8d3ae029ba97b1b85d40516623c459b4af9ba94424ead1",
+  "integration_patch": "upstream.patch",
+  "patch_sha256": "24cf84d7642028a151095cff1fc3885599a78366f602a50a84f249b9a2d21bd6",
+  "overlay_files": [
+    "score_recovery.cpp",
+    "score_recovery.h"
+  ],
+  "format_reference": {
+    "repository": "https://github.com/scummvm/scummvm",
+    "commit": "41ac2b31847622d0662d22c03fe6979e3b43cfbc",
+    "paths": [
+      "engines/director/score.cpp",
+      "engines/director/frame.cpp",
+      "engines/director/frame.h",
+      "engines/director/movie.cpp",
+      "engines/director/types.h",
+      "engines/director/castmember/transition.cpp"
+    ]
+  }
+}

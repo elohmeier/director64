@@ -1,0 +1,6 @@
+# Document addresses embedded in the cartridge; do not rename after release.
+# The placeholder host resolves nowhere. Put the address you serve the PDFs
+# from in the ignored host/printing.local.toml, e.g.
+#   base_url = "https://print.example.net/lz1-f319/"
+base_url = "https://print.invalid/lz1-f319/"
+publish_directory = "print/lz1-f319"

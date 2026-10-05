@@ -1,0 +1,12 @@
+schema_version = 1
+slug = "fritz-fertig-1"
+title = "Fritz & Fertig"
+status = "catalogued"
+default_source = "sha256-d3a2ac348afa"
+
+[[sources]]
+id = "sha256-d3a2ac348afa"
+file = "FritzFertig.01.iso"
+sha256 = "d3a2ac348afa513e224001190b94220dfb54d3a0d32f27c81f9787bbd245e7c0"
+bytes = 713625600
+kind = "iso9660"

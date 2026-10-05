@@ -1,0 +1,292 @@
+# Semantic implementation, reference matching and platform results are independent.
+# Prototype evidence is historical; passing cases require pinned versioned run records.
+schema_version = 1
+catalog_version = "capabilities-v1"
+
+[[capabilities]]
+id = "language.handler-dispatch"
+description = "Dispatch movie, frame, mouse and custom handlers with arguments and return values"
+status = "missing"
+patterns = ['(?im)^\s*on\s+[A-Za-z_][A-Za-z0-9_]*']
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "language.global-state"
+description = "Shared Director globals and their scene-transition lifetime"
+status = "missing"
+patterns = ['(?im)^\s*global\b']
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "language.control-flow"
+description = "Conditions, repeat loops, exit and return semantics"
+status = "missing"
+patterns = ['(?i)\b(?:if|else|repeat|return|exit)\b']
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "language.result"
+description = "Director's implicit result value across handler calls"
+status = "missing"
+patterns = ['(?i)\bthe\s+result\b']
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "language.symbols"
+description = "Symbol literals such as #true, #false and application-specific results"
+status = "missing"
+patterns = ['(?i)#[A-Za-z_][A-Za-z0-9_]*']
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "data.lists"
+description = "Director list construction, indexing, mutation and search"
+status = "missing"
+calls = ["list", "getAt", "setAt", "add", "append", "deleteAt", "count", "getOne"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "data.properties"
+description = "Property-list construction, lookup and mutation"
+status = "missing"
+calls = [
+  "getProp",
+  "setProp",
+  "getAProp",
+  "setAProp",
+  "addProp",
+  "deleteProp",
+  "getPropAt",
+]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "data.conversion"
+description = "String, numeric and value conversion helpers"
+status = "missing"
+calls = [
+  "string",
+  "integer",
+  "integerp",
+  "float",
+  "value",
+  "length",
+  "chars",
+  "charToNum",
+  "numToChar",
+]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "data.random-math"
+description = "Director random number and arithmetic helper semantics"
+status = "missing"
+calls = ["random", "abs", "sqrt", "sin", "cos", "min", "max"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "geometry.points-rects"
+description = "Point and rectangle construction and comparison"
+status = "missing"
+calls = ["point", "rect", "inside", "intersect"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "sprite.properties"
+description = "Sprite location, bounds, visibility, blend, ink and movie properties"
+status = "missing"
+patterns = ['(?i)\bthe\s+[A-Za-z_][A-Za-z0-9_]*\s+of\s+sprite\b']
+calls = ["sprite"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "sprite.puppet"
+description = "Puppet ownership and scripted sprite updates"
+status = "missing"
+calls = ["puppetSprite"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "sprite.bounds"
+description = "Imperative sprite-box changes"
+status = "missing"
+calls = ["spriteBox"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "cast.members"
+description = "Cast/member lookup, castNum changes and registration points"
+status = "missing"
+patterns = ['(?i)\bthe\s+(?:castNum|regPoint|name)\s+of\s+(?:sprite|cast)\b']
+calls = ["member", "cast"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "score.navigation"
+description = "Frame labels, frame jumps, play ranges and movie transitions"
+status = "missing"
+calls = ["go", "play"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "score.tempo"
+description = "Score tempo and deterministic wait semantics"
+status = "missing"
+calls = ["puppetTempo"]
+patterns = ['(?i)\bthe\s+(?:tempo|frame)\b']
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "stage.update"
+description = "Explicit Director stage presentation points"
+status = "missing"
+calls = ["updateStage"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "stage.transitions"
+description = "Director visual transitions"
+status = "missing"
+calls = ["puppetTransition"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "stage.palette"
+description = "Movie palette selection and palette changes"
+status = "missing"
+calls = ["puppetPalette"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "assets.preload"
+description = "Cast/member preload requests mapped onto scene-bank residency"
+status = "missing"
+calls = ["preloadCast", "preloadMember"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "input.pointer"
+description = "Mouse position, button state and click target mapped from N64 input"
+status = "missing"
+patterns = ['(?i)\bthe\s+(?:mouseH|mouseV|mouseDown|mouseUp|clickOn)\b']
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "input.rollover"
+description = "Sprite rollover/hit-testing semantics"
+status = "missing"
+calls = ["rollOver"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "input.cursor"
+description = "Cursor shape and visibility changes"
+status = "missing"
+calls = ["cursor"]
+patterns = ['(?i)\bthe\s+cursor\b']
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "audio.playback"
+description = "Channel selection, member playback, stop and looping behavior"
+status = "missing"
+calls = ["puppetSound", "sound", "beep"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "audio.status"
+description = "Playback completion, volume and enabled-state queries"
+status = "missing"
+calls = ["soundBusy", "soundLevel", "soundEnabled"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "time.timer"
+description = "Director timer reads and timer reset behavior"
+status = "missing"
+patterns = ['(?i)\bthe\s+timer\b']
+calls = ["startTimer"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "time.delay"
+description = "Blocking Director delay replacement without stalling the N64 render/audio loop"
+status = "missing"
+calls = ["delay"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "text.fields"
+description = "Director field access and text mutation"
+status = "missing"
+patterns = ['(?i)\bthe\s+text\s+of\s+field\b']
+calls = ["field"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "xtra.fileio"
+description = "Native save-service replacement for FileIO object operations"
+status = "missing"
+calls = [
+  "fileio",
+  "objectp",
+  "openXLib",
+  "closeXLib",
+  "ReadObject",
+  "WriteObject",
+  "getNthFileNameInFolder",
+]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "language.noop"
+description = "Explicit decompiler no-op calls"
+status = "missing"
+calls = ["nothing"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "application.quit"
+description = "Exit-to-system behavior"
+status = "missing"
+calls = ["quit"]
+required_cases = []
+evidence = []
+
+[[capabilities]]
+id = "source.unresolved-calls"
+description = "Custom calls with no recovered handler; resolve from score context or reference behavior"
+status = "missing"
+calls = ["GetRuta", "up", "STARTFJADER"]
+required_cases = []
+evidence = []

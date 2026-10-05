@@ -1,0 +1,29 @@
+schema_version = 1
+slug = "lernerfolg-deutsch-1-2"
+title = "Lernerfolg Grundschule Deutsch 1-2"
+status = "experimental"
+default_source = "sha256-4c87e10dcc99"
+
+[[sources]]
+id = "sha256-4c87e10dcc99"
+file = "Deutsch12.iso"
+sha256 = "4c87e10dcc99dfb68882b51c9daceb7ce4761b482a2a43bf620093289353e0f4"
+bytes = 543436800
+kind = "iso9660"
+
+[recovery]
+director_version = 1000
+media_root = "."
+
+[port]
+extended_d6 = true
+director_version = 1000
+media_root = "."
+entry_movie = "DEUTSCH"
+launcher_movie = "DEUTSCH.DXR"
+native_compatibility = true
+rom_title = "Lernerfolg Deutsch12"
+rom_save_type = 80
+controller_count = 4
+host_package = "director64_lernerfolg_deutsch_1_2"
+asset_postprocessor = "full_media"

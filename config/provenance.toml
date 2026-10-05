@@ -1,0 +1,23 @@
+[libdragon]
+repository = "https://github.com/elohmeier/libdragon"
+upstream_repository = "https://github.com/DragonMinded/libdragon"
+branch = "findus64"
+commit = "8e5947881d467bd5f2122af7caa2908b29d42742"
+local_checkout = "third_party/libdragon"
+container_base = "ghcr.io/dragonminded/libdragon:preview@sha256:d0076cdba66586d018a57879a2babcc063f751267502394dbbd96776f555f283"
+
+[projectorrays]
+repository = "https://github.com/ProjectorRays/ProjectorRays"
+commit = "6f9bcebf626b43719abe2affcbbcb041d154d666"
+local_checkout = "../../ProjectorRays/ProjectorRays"
+usage = "Director-format analysis reference; commercial media remains local and ignored"
+
+[projectorrays_wasm]
+repository = "https://github.com/dirtools/ProjectorRays-wasm"
+npm_version = "1.1.1"
+wasm_sha256 = "e4d7ab15a9cb20586d0e5afc54ad4d48412254d98b78a0c834b5adc8e2e3983e"
+usage = "Actual locked host extraction parser; distinct from the upstream C++ analysis checkout"
+
+[gopher64]
+version = "v1.1.36-2-g0b96c50"
+usage = "marker-gated emulator smoke tests and capture"

@@ -1,0 +1,9 @@
+# Browser player profile (docs/web.md). Not a conversion input: editing it
+# does not invalidate the game's asset receipt.
+schema_version = 1
+
+# The save archive's virtual files in archive order, as probe states report them.
+save_files = [
+  "vakt1.txt", "vakt2.txt", "vakt3.txt", "vakt4.txt", "vakt5.txt", "vakt6.txt",
+  "vakt7.txt", "byggfil.txt", "musikfil.txt",
+]

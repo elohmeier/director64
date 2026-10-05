@@ -1,0 +1,13 @@
+min_version = "2026.9.1"
+
+[tools]
+python = "3.14.6"
+uv = "0.12.6"
+node = "24.18.0"
+
+[settings]
+python.uv_venv_auto = "create|source"
+
+[env]
+UV_PYTHON = { value = "{{ tools.python.path }}", tools = true }
+DOCKER = "{{ env.DOCKER | default(value='docker') }}"

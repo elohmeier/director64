@@ -1,0 +1,21 @@
+[package]
+name = "director64-convert-wasm"
+version = "0.1.0"
+edition = "2024"
+description = "The converter's Rust stages as a WebAssembly module for the browser importer"
+license = "MIT AND MPL-2.0 AND LGPL-2.1-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+director64-aot = { path = ".." }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 3
+lto = true
+debug = false

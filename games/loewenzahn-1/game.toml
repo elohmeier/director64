@@ -1,0 +1,30 @@
+schema_version = 1
+slug = "loewenzahn-1"
+title = "Löwenzahn 1"
+status = "experimental"
+default_source = "sha256-f31970b980f0"
+
+[[sources]]
+id = "sha256-f31970b980f0"
+file = "LOEWENZA.iso"
+sha256 = "f31970b980f096a343a9aec5f10d52931709fbdda3cf09e5a80023791e402af2"
+bytes = 628160512
+kind = "iso9660"
+
+[recovery]
+director_version = 500
+media_root = "MEDIA"
+
+[port]
+director_version = 500
+media_root = "MEDIA"
+entry_movie = "START"
+launcher_movie = "START.DXR"
+rom_title = "Loewenzahn 1"
+rom_save_type = 80
+controller_count = 4
+host_package = "director64_loewenzahn_1"
+asset_postprocessor = "full_media"
+native_compatibility = true
+asset_inputs = ["host/printing.py", "host/printing.toml"]
+optional_asset_inputs = ["host/printing.local.toml"]

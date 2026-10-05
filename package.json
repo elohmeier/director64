@@ -1,0 +1,14 @@
+{
+  "name": "director64-director-tools",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": "24.18.0"
+  },
+  "dependencies": {
+    "projectorrays": "1.1.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

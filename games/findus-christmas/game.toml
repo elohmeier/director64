@@ -1,0 +1,28 @@
+schema_version = 1
+slug = "findus-christmas"
+title = "Pettersson und Findus: Christmas calendar"
+status = "experimental"
+default_source = "sha256-1b087d267195"
+
+[[sources]]
+id = "sha256-1b087d267195"
+file = "FINDUS3.ISO"
+sha256 = "1b087d267195d9be864f75c3d14dcb4a119ef0ded2ba178c41315a35475b18d3"
+bytes = 259665920
+kind = "iso9660"
+
+[recovery]
+director_version = 700
+media_root = "MAIN"
+
+[port]
+extended_d6 = true
+director_version = 700
+media_root = "MAIN"
+entry_movie = "START"
+launcher_movie = "START.DXR"
+rom_title = "Findus Weihnachten"
+rom_save_type = 80
+controller_count = 4
+host_package = "director64_findus_christmas"
+asset_postprocessor = "full_media"

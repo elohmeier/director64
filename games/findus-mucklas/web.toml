@@ -1,0 +1,9 @@
+# Browser player profile (docs/web.md). Not a conversion input: editing it
+# does not invalidate the game's asset receipt.
+schema_version = 1
+
+# The save archive's virtual files in archive order, as probe states report them.
+save_files = [
+  "player1.p3", "player2.p3", "player3.p3", "player4.p3", "player5.p3", "player6.p3",
+  "data.p3", "moblemang.dxt", "pettson3.ini",
+]

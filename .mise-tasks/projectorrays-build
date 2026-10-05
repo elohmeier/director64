@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+# MISE description="Reconstruct the pinned score extension and build its native probe"
+"""Build shared structural code; --upstream also builds ProjectorRays itself."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[1]
+tools_dir = root / "tools/projectorrays"
+pin = json.loads((tools_dir / "pin.json").read_text())
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--upstream", action="store_true")
+parser.add_argument("--source", type=Path, default=os.environ.get("PROJECTORRAYS_SOURCE"))
+args = parser.parse_args()
+
+for file_key, hash_key in (
+    ("integration_patch", "patch_sha256"),
+    ("commit_object", "commit_object_sha256"),
+):
+    if hashlib.sha256((tools_dir / pin[file_key]).read_bytes()).hexdigest() != pin[hash_key]:
+        raise SystemExit(f"{pin[file_key]} changed; create and pin a new extension commit")
+
+
+def git(*arguments, cwd=None, content=None):
+    return (
+        subprocess.run(
+            ["git", *arguments],
+            cwd=cwd,
+            input=content,
+            capture_output=True,
+            check=True,
+        )
+        .stdout.decode()
+        .strip()
+    )
+
+
+build = root / "build/projectorrays"
+build.mkdir(parents=True, exist_ok=True)
+checkout = build / pin["extension_commit"]
+if not checkout.exists():
+    staging = Path(tempfile.mkdtemp(prefix="prepare-", dir=build))
+    source = args.source or root.parents[1] / "ProjectorRays/ProjectorRays"
+    if Path(source).is_dir():
+        git("clone", "--shared", "--no-checkout", str(source), str(staging))
+    else:
+        git(
+            "clone", "--filter=blob:none", "--no-checkout", pin["upstream_repository"], str(staging)
+        )
+    git("checkout", "--detach", pin["upstream_commit"], cwd=staging)
+    git("apply", str(tools_dir / pin["integration_patch"]), cwd=staging)
+    for name in pin["overlay_files"]:
+        shutil.copyfile(tools_dir / name, staging / "src/director" / name)
+    git(
+        "add",
+        "Makefile",
+        "src/common/json.cpp",
+        "src/common/json.h",
+        "src/director/chunk.h",
+        "src/director/dirfile.cpp",
+        "src/director/scorechunk.cpp",
+        "src/director/scorechunk.h",
+        "src/director/score_recovery.cpp",
+        "src/director/score_recovery.h",
+        cwd=staging,
+    )
+    if git("write-tree", cwd=staging) != pin["extension_tree"]:
+        raise SystemExit(f"score extension differs from pinned tree; inspect {staging}")
+    commit = git(
+        "hash-object",
+        "-t",
+        "commit",
+        "-w",
+        "--stdin",
+        cwd=staging,
+        content=(tools_dir / pin["commit_object"]).read_bytes(),
+    )
+    if commit != pin["extension_commit"]:
+        raise SystemExit("score extension commit metadata does not match its pin")
+    git("checkout", "--detach", commit, cwd=staging)
+    staging.rename(checkout)
+if git("rev-parse", "HEAD", cwd=checkout) != pin["extension_commit"]:
+    raise SystemExit("ProjectorRays checkout is at a different commit")
+if git("status", "--porcelain", "--untracked-files=no", cwd=checkout):
+    raise SystemExit("ProjectorRays checkout has tracked edits; preserve and inspect them")
+for name in pin["overlay_files"]:
+    if (tools_dir / name).read_bytes() != (checkout / "src/director" / name).read_bytes():
+        raise SystemExit(f"{name} changed; create and pin a new extension commit")
+
+compiler = shlex.split(os.environ.get("CXX", "c++"))
+host = root / "build/host"
+host.mkdir(parents=True, exist_ok=True)
+executable = host / "score-probe"
+with tempfile.TemporaryDirectory(prefix="score-build-", dir=host) as build_directory:
+    pending = Path(build_directory) / "score-probe"
+    subprocess.run(
+        [
+            *compiler,
+            "-std=c++17",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-pedantic",
+            *shlex.split(os.environ.get("DIRECTOR64_SCORE_CXXFLAGS", "")),
+            str(checkout / "src/director/score_recovery.cpp"),
+            str(tools_dir / "probe.cpp"),
+            "-I",
+            str(checkout / "src/director"),
+            "-o",
+            str(pending),
+        ],
+        check=True,
+    )
+    pending.replace(executable)
+print(executable)
+if args.upstream:
+    subprocess.run(
+        ["make", f"-j{min(os.cpu_count() or 1, 8)}", f"CXX={shlex.join(compiler)}"],
+        cwd=checkout,
+        check=True,
+    )
+    print(checkout / "projectorrays")

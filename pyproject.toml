@@ -1,0 +1,34 @@
+[project]
+name = "director64"
+version = "0.1.0"
+description = "Director/Lingo ahead-of-time ports for Nintendo 64"
+readme = "README.md"
+license = "MIT AND MPL-2.0 AND LGPL-2.1-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.14,<3.15"
+dependencies = []
+
+[project.scripts]
+director64 = "director64.cli:main"
+
+[dependency-groups]
+dev = [
+  "hypothesis>=6.100",
+  "pytest>=9.0.0",
+  "ruff>=0.13.0",
+]
+
+[build-system]
+requires = ["uv-build>=0.12.6,<0.13"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests", "games/findus-workshop/tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

@@ -1,0 +1,10 @@
+{
+  "paige_reference": {
+    "upstream": "https://github.com/nmatavka/Hermes-Paige",
+    "revision": "cddd9543709db505077b7b0426962fadd85b343d",
+    "files": [
+      "PGSOURCE/PGREAD.C",
+      "PGHEADER/PAIGE.H"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+/* games/loewenzahn-1/host/print.typ as print CSS: A4, the same margins,
+   sizes and artwork frame; Liberation Sans where installed. */
+@page { size: A4; margin: 50pt 50pt 40pt 60pt; }
+html, body { margin: 0; background: #fff; color: #000; }
+body { font: 12pt/16pt "Liberation Sans", Arial, Helvetica, sans-serif; position: relative; }
+.logo { position: absolute; top: 0; right: 0; }
+h1 { margin: 58pt 0 14pt; font-size: 18pt; line-height: 22pt; font-weight: bold; }
+#body p { margin: 0 0 12pt; break-inside: avoid; }
+.illustration { display: block; margin-top: 8pt; width: 451pt; height: 356pt; break-inside: avoid; }
+.illustration[hidden] { display: none; }
+footer { position: fixed; bottom: 0; right: 0; font-size: 9pt; }
+@media screen { body { width: 485pt; padding: 50pt 50pt 40pt 60pt; } }

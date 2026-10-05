@@ -1,0 +1,12 @@
+schema_version = 1
+slug = "findus-garden"
+title = "Neues von Pettersson und Findus"
+status = "catalogued"
+default_source = "sha256-d13f26cf91cf"
+
+[[sources]]
+id = "sha256-d13f26cf91cf"
+file = "Petterson.zip"
+sha256 = "d13f26cf91cfeb02e7ae2df796f70916986aa186ad4a724b4e19fd1cecc1a311"
+bytes = 84937326
+kind = "zip"

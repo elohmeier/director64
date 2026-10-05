@@ -1,0 +1,37 @@
+{
+  "director_version": 500,
+  "image_codec_tiers": [
+    {
+      "min_decompressed_bytes": 65536,
+      "level": 2
+    }
+  ],
+  "wav_resample_hz": 16000,
+  "startup_movie": "START.DXR",
+  "directories": [
+    "."
+  ],
+  "director_files": 22,
+  "counts": {
+    "bitmap_references": 949,
+    "bytecode_sites": 12324,
+    "files": 22,
+    "handlers": 590,
+    "members": 1418,
+    "movie_references": 31,
+    "resources": 3944,
+    "score_bytes": 90430,
+    "score_chunks": 58,
+    "scripts": 391,
+    "sound_references": 109
+  },
+  "projector": "../STARTW95.EXE",
+  "source_sha256": "f31970b980f096a343a9aec5f10d52931709fbdda3cf09e5a80023791e402af2",
+  "d5_stage_palette": {
+    "file": "CURSOR.CXT",
+    "member": 1,
+    "sha256": "7aaffbe8a1ea820744db632ddbd749d0fde5b18de958e78cf4db27d7deeab583"
+  },
+  "image_indexed": true,
+  "image_pack_budget_mib": 32
+}

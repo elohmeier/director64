@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The page talks to its own origin only: a disc image and its conversion
+     never leave the machine. WebAssembly compilation is the one exception to
+     script-src 'self'. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; img-src 'self' blob: data:; style-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<title>Director64</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="bar">
+  <div class="identity">
+    <span class="mark">Director64</span>
+    <span id="title" class="title"></span>
+    <span id="edition" class="edition"></span>
+  </div>
+  <div class="actions">
+    <span id="save-state" class="save-state" role="status" aria-live="polite"></span>
+    <button id="mute" type="button" aria-pressed="false">Mute</button>
+    <button id="fullscreen" type="button">Fullscreen</button>
+    <details class="menu">
+      <summary>Saves</summary>
+      <div class="menu-body">
+        <button id="export" type="button" disabled>Export save…</button>
+        <label class="file">Import save…<input id="save-import" type="file" accept=".d64save,.bin,application/octet-stream" disabled></label>
+        <p class="hint">Saves stay in this browser for this site. Export keeps a copy of your own.</p>
+      </div>
+    </details>
+  </div>
+</header>
+<main class="stage-area">
+  <div id="stage" class="stage">
+    <canvas id="screen" width="640" height="480" aria-label="Game screen"></canvas>
+    <input id="text-entry" class="text-entry" type="text" maxlength="20" autocomplete="off" spellcheck="false" aria-label="Text entry" hidden>
+    <div id="overlay" class="overlay">
+      <div class="panel">
+        <p id="overlay-heading" class="heading">Loading</p>
+        <p id="overlay-text" class="text"></p>
+        <progress id="progress" max="1" value="0" hidden></progress>
+        <p id="overlay-detail" class="detail"></p>
+        <ul id="library" class="library" hidden></ul>
+        <div class="buttons">
+          <button id="start" type="button" hidden>Play</button>
+          <label id="choose" class="file primary" hidden>Choose disc image…<input id="disc-input" type="file" accept=".iso,.zip,application/x-iso9660-image,application/zip,application/octet-stream"></label>
+          <button id="cancel" type="button" hidden>Cancel</button>
+          <button id="reload" type="button" hidden>Reload</button>
+          <button id="restore" type="button" hidden>Restore previous save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+<footer class="bar small">
+  <span id="diagnostics" class="diagnostics"></span>
+  <span class="note">Bring your own disc: it is converted in this browser and never uploaded. Not affiliated with the games' publishers. <a href="https://github.com/elohmeier/director64">Source</a> · <a href="NOTICES.txt">Notices</a></span>
+</footer>
+</body>
+</html>

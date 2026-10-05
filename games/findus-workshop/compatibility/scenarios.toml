@@ -1,0 +1,92 @@
+# Passing requires all declared assertions in pinned versioned evidence.
+# Platforms qualify independently; the legacy prototype is not source-scene completion.
+schema_version = 1
+catalog_version = "scenarios-v1"
+
+[[scenarios]]
+version = 1
+layer = "user-journey"
+required_assertions = []
+platforms = {}
+id = "boot-new-profile-to-hub"
+description = "Cold boot, create/select a new profile and reach the main hub"
+scenes = ["START.DXR", "VAKT.DXR", "PINTRO.DXR"]
+status = "missing"
+evidence = []
+
+[[scenarios]]
+version = 1
+layer = "user-journey"
+required_assertions = []
+platforms = {}
+id = "boot-existing-profile-to-hub"
+description = "Cold boot, load an existing profile and preserve its treasure state"
+scenes = ["START.DXR", "VAKT.DXR", "SHARED.CXT", "PINTRO.DXR"]
+status = "missing"
+evidence = []
+
+[[scenarios]]
+version = 1
+layer = "user-journey"
+required_assertions = []
+platforms = {}
+id = "hub-activity-roundtrip"
+description = "Navigate from PINTRO through a sub-hub into an activity and back"
+scenes = ["PINTRO.DXR", "BYRAN.DXR", "FOTING.DXR"]
+status = "missing"
+evidence = []
+
+[[scenarios]]
+version = 1
+layer = "user-journey"
+required_assertions = []
+platforms = {}
+id = "vemory-complete-round"
+description = "Start, play and complete a representative VEMORY round"
+scenes = ["PINTRO.DXR", "VEMORY.DXR", "PETTTALK.CXT"]
+status = "missing"
+evidence = []
+
+[[scenarios]]
+version = 1
+layer = "user-journey"
+required_assertions = []
+platforms = {}
+id = "construction-complete-level"
+description = "Complete one data-driven KONSTR level and return to PINTRO"
+scenes = ["PINTRO.DXR", "KONSTR01.DXR", "PETTTALK.CXT"]
+status = "missing"
+evidence = []
+
+[[scenarios]]
+version = 1
+layer = "user-journey"
+required_assertions = []
+platforms = {}
+id = "dialogue-audio-interrupt"
+description = "Play shared dialogue animation, wait on sound and exercise interruption"
+scenes = ["PETTTALK.CXT", "PINTRO.DXR"]
+status = "missing"
+evidence = []
+
+[[scenarios]]
+version = 1
+layer = "user-journey"
+required_assertions = []
+platforms = {}
+id = "save-reload-profile"
+description = "Write, cold-reload and validate a profile plus corruption recovery"
+scenes = ["START.DXR", "VAKT.DXR", "SHARED.CXT"]
+status = "missing"
+evidence = []
+
+[[scenarios]]
+version = 1
+layer = "user-journey"
+required_assertions = []
+platforms = {}
+id = "transition-soak"
+description = "Repeat representative scene transitions while checking memory high-water and audio"
+scenes = ["PINTRO.DXR", "BYRAN.DXR", "MVEGGEN.DXR", "SNIKBOD.DXR"]
+status = "missing"
+evidence = []

@@ -1,0 +1,4 @@
+[submodule "third_party/libdragon"]
+	path = third_party/libdragon
+	url = https://github.com/elohmeier/libdragon.git
+	branch = findus64

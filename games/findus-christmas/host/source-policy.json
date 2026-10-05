@@ -1,0 +1,114 @@
+{
+  "director_version": 700,
+  "image_codec_tiers": [
+    {
+      "min_decompressed_bytes": 65536,
+      "level": 2
+    }
+  ],
+  "startup_movie": "START.DXR",
+  "directories": [
+    "."
+  ],
+  "director_files": 31,
+  "counts": {
+    "bitmap_references": 1995,
+    "bytecode_sites": 54221,
+    "files": 31,
+    "handlers": 653,
+    "members": 3230,
+    "movie_references": 49,
+    "resources": 8272,
+    "score_bytes": 291686,
+    "score_chunks": 78,
+    "scripts": 587,
+    "sound_references": 578,
+    "unresolved_recovery_records": 78
+  },
+  "projector": "../FINDUS3.EXE",
+  "source_sha256": "1b087d267195d9be864f75c3d14dcb4a119ef0ded2ba178c41315a35475b18d3",
+  "projector_selection": {
+    "offset": 2596664,
+    "archives": [
+      {
+        "offset": 2596664,
+        "bytes": 1259086,
+        "sha256": "4963e2d3b0c0db554e59b5fdf98bad909b93c98432dfa5ccb2b2d0cf5cdd6386"
+      },
+      {
+        "offset": 3855750,
+        "bytes": 11630,
+        "sha256": "4af51d80ecf26e34d43916372c8d0073927d0f3e8f896d712d17cf86e80b27b0"
+      },
+      {
+        "offset": 3867380,
+        "bytes": 1132346,
+        "sha256": "ee52c8d5dbc093520d4a70c5cc6e7e6a386cb2a08b8f804c60ad139ff452fe48"
+      },
+      {
+        "offset": 4999726,
+        "bytes": 10686,
+        "sha256": "422446d31415593759aeccdb4f08be6177aab72933c171a6bdde69c97740e5ec"
+      },
+      {
+        "offset": 5010412,
+        "bytes": 1258162,
+        "sha256": "69d1db739c8eaff7718a2b204c9cdb4502ada0103bacb7a69d23d2082ad8c4e6"
+      }
+    ]
+  },
+  "bitmap_palette_overrides": [
+    {
+      "movie": "DAG24.DXR",
+      "cast": 0,
+      "member": 21,
+      "chunk": 2404,
+      "sha256": "4e68de040f2de5d6182ffc718deeebc622806b47b133ee1066137edcf066b34a"
+    }
+  ],
+  "shape_pattern_overrides": [
+    {
+      "movie": "DAG15.DXR",
+      "cast": 1,
+      "member": 25,
+      "sha256": "83eaf1ded8e3b1d9cade13ec435322215aad9277a847116fbe835729ee4b3082",
+      "from": 63,
+      "to": 1
+    }
+  ],
+  "extended_d6": true,
+  "projector_copies": [
+    {
+      "offset": 3855750,
+      "movie": "KICKER.DXR",
+      "script_sha256": "f53408ec445da5bcdfe92a69d0486b0a8fffd5cf97fe04633d67808798cb40b9",
+      "different_members": [],
+      "disposition": "identical script copy; compile the external media"
+    },
+    {
+      "offset": 3867380,
+      "movie": "KALENDER.DXR",
+      "script_sha256": "2113fa4d2d5f515749d9a289cefdaedc76c9c886232d3d2a33b7c3a4489f44c9",
+      "different_members": [
+        12
+      ],
+      "disposition": "alternate pre-December 2000 date gate; compile the external calendar with the fixed Christmas Eve clock"
+    },
+    {
+      "offset": 4999726,
+      "movie": "ROUTS.CXT",
+      "script_sha256": "92fc4c9ef9b6c395884ab3ba7ddd6165fc266985900d66c5ce6fd6284488f5c4",
+      "different_members": [],
+      "disposition": "identical script copy; compile the external media"
+    },
+    {
+      "offset": 5010412,
+      "movie": "SHARED.CXT",
+      "script_sha256": "01a3a648d2247d4100a41fe845f47e16064398f0b025a07df1d5fbc94b91295b",
+      "different_members": [],
+      "disposition": "identical script copy; compile the external media"
+    }
+  ],
+  "image_indexed": true,
+  "image_pack_budget_mib": 49
+}

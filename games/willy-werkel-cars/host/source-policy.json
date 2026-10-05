@@ -1,0 +1,34 @@
+{
+  "director_version": 600,
+  "image_codec_tiers": [
+    {
+      "min_decompressed_bytes": 65536,
+      "level": 2
+    }
+  ],
+  "startup_movie": "START.DXR",
+  "directories": [
+    "MOVIES",
+    "Data"
+  ],
+  "director_files": 29,
+  "counts": {
+    "bitmap_references": 1624,
+    "bytecode_sites": 54802,
+    "files": 29,
+    "handlers": 1349,
+    "members": 3064,
+    "movie_references": 38,
+    "resources": 7874,
+    "score_bytes": 623697,
+    "score_chunks": 73,
+    "scripts": 299,
+    "sound_references": 584,
+    "unresolved_recovery_records": 73
+  },
+  "projector": "Willy32.exe",
+  "source_sha256": "938be20a50e2825f5acf4788aabfdc145b94d1a1fb61b7264a4a81156428afac",
+  "extended_d6": true,
+  "image_indexed": true,
+  "image_pack_budget_mib": 50
+}

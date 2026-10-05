@@ -1,0 +1,26 @@
+{
+  "director_version": 800,
+  "image_codec_tiers": [
+    { "min_decompressed_bytes": 0, "level": 2 }
+  ],
+  "image_color_bits": 4,
+  "startup_movie": "START.DXR",
+  "external_cast_aliases": {"VARLDLJUD.CXT": "VARLDLJU.CXT"},
+  "directories": [".", "P3CAST", "P3LJUD"],
+  "director_files": 48,
+  "counts": {
+    "files": 48,
+    "scripts": 629,
+    "handlers": 1887,
+    "bytecode_sites": 162215,
+    "members": 7566,
+    "movie_references": 35,
+    "score_chunks": 96,
+    "bitmap_references": 5344,
+    "sound_references": 1285
+  },
+  "projector": "../DATA/FINDUS4.EXE",
+  "source_sha256": "ad4c7afb4b19339c45c2a69756b522b59ba4869199740fd528527f190a806925",
+  "image_indexed": true,
+  "image_pack_budget_mib": 44
+}

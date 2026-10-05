@@ -1,0 +1,131 @@
+{
+  "director_version": 1000,
+  "extended_d6": true,
+  "field_text_styles": true,
+  "image_codec_tiers": [
+    { "min_decompressed_bytes": 65536, "level": 2 }
+  ],
+  "image_color_bits": 4,
+  "startup_movie": "DEUTSCH.DXR",
+  "directories": [
+    "data",
+    "global"
+  ],
+  "director_files": 76,
+  "counts": {
+    "files": 76,
+    "scripts": 631,
+    "handlers": 4542,
+    "bytecode_sites": 224125,
+    "members": 11656,
+    "movie_references": 54,
+    "score_chunks": 135,
+    "bitmap_references": 9290,
+    "sound_references": 314
+  },
+  "projector": "Deutsch.dat",
+  "source_sha256": "4c87e10dcc99dfb68882b51c9daceb7ce4761b482a2a43bf620093289353e0f4",
+  "deferred_conversions": [
+    {
+      "movie": "GAME002_PICT.CXT",
+      "cast": 1,
+      "member": 89,
+      "error": "SWF frame count exceeds conversion bounds",
+      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
+    },
+    {
+      "movie": "GAME002_PICT.CXT",
+      "cast": 1,
+      "member": 91,
+      "error": "SWF frame count exceeds conversion bounds",
+      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
+    },
+    {
+      "movie": "GAME002_PICT.CXT",
+      "cast": 1,
+      "member": 93,
+      "error": "SWF frame count exceeds conversion bounds",
+      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
+    },
+    {
+      "movie": "GAME002_PICT.CXT",
+      "cast": 1,
+      "member": 95,
+      "error": "SWF frame count exceeds conversion bounds",
+      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
+    },
+    {
+      "movie": "GAME002_PICT.CXT",
+      "cast": 1,
+      "member": 97,
+      "error": "SWF frame count exceeds conversion bounds",
+      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
+    },
+    {
+      "movie": "GAME002_PICT.CXT",
+      "cast": 1,
+      "member": 114,
+      "error": "SWF frame count exceeds conversion bounds",
+      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
+    },
+    {
+      "movie": "GAME002_PICT.CXT",
+      "cast": 1,
+      "member": 116,
+      "error": "SWF frame count exceeds conversion bounds",
+      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
+    },
+    {
+      "movie": "SCRIPTS2.CXT",
+      "cast": 1,
+      "member": 55,
+      "error": "Xtra cursor requires native conversion",
+      "disposition": "Cursor Asset member; native cursor selection pending"
+    },
+    {
+      "movie": "SCRIPTS2.CXT",
+      "cast": 1,
+      "member": 72,
+      "error": "unsupported static SWF tag 34",
+      "disposition": "Flash button member; interactive playback pending"
+    },
+    {
+      "movie": "TIVOLAINTRO2.CXT",
+      "cast": 1,
+      "member": 3,
+      "error": "unsupported static SWF tag 18",
+      "disposition": "intro timeline with streaming sound; native playback pending"
+    },
+    {
+      "movie": "TIVOLAINTRO2.CXT",
+      "cast": 1,
+      "member": 5,
+      "error": "unsupported static SWF tag 18",
+      "disposition": "intro timeline with streaming sound; native playback pending"
+    },
+    {
+      "movie": "LOGIN.DXR",
+      "cast": 5,
+      "member": 3,
+      "error": "film-loop non-bitmap/script child",
+      "disposition": "film loop with text child; native composition pending"
+    },
+    {
+      "movie": "ROOM08.DXR",
+      "cast": 5,
+      "member": 37,
+      "error": "film-loop non-bitmap/script child",
+      "disposition": "film loop nesting another film loop; native composition pending"
+    },
+    {
+      "movie": "TIVOLAINTRO2.CXT",
+      "cast": 1,
+      "member": 4,
+      "error": "film-loop non-bitmap/script child",
+      "disposition": "film loop with Flash Xtra child; native composition pending"
+    }
+  ],
+  "stage_prescale": true,
+  "image_pack_budget_mib": 30.5,
+  "image_indexed": true
+}

@@ -1,0 +1,23 @@
+[package]
+name = "director64-aot"
+version = "0.1.0"
+edition = "2024"
+description = "Lower recovered Lingo source AST to resumable bytecode for the Director64 runtime"
+license = "MIT AND MPL-2.0 AND LGPL-2.1-or-later"
+
+[lib]
+name = "director64_aot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "director64-aot"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+
+[profile.release]
+opt-level = 3
+debug = false

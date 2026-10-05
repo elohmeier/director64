@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Build the isolated Wine original-reference capture image"
+set -euo pipefail
+repo_root=$(git rev-parse --show-toplevel)
+"${DOCKER:-docker}" build --tag "${DIRECTOR64_REFERENCE_IMAGE:-director64-reference:local}" "$repo_root/docker/reference"

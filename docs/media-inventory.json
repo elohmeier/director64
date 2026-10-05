@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "purpose": "Local source inventory. Original containers are ignored under media/<game>/<source-id>/; identities and inspection limits are retained.",
+  "reference": {
+    "repository": "https://github.com/scummvm/scummvm",
+    "commit": "41ac2b31847622d0662d22c03fe6979e3b43cfbc",
+    "worktree": "clean when inspected",
+    "file": "engines/director/detection_tables.h"
+  },
+  "total_containers": 8,
+  "total_bytes": 3086733780,
+  "sources": [
+    {
+      "display_title": "Pettersson und Findus",
+      "identification_evidence": "Supported original game; local ScummVM pettson1 title mapping and existing source audit.",
+      "source_id": "sha256-fc24ffe284ec",
+      "bytes": 119457792,
+      "sha256": "fc24ffe284ec90d4661f807a0c84c29a23171bf9e43b85225f414504f12fe389",
+      "inspection_scope": "Container metadata and selected identification files; full SHA-256 verified and current importer inventory passed. Game execution is separately qualified.",
+      "container": {
+        "kind": "iso9660-image",
+        "normal_file_records": 50,
+        "associated_file_records": 0,
+        "duplicate_path_groups": 0,
+        "extensions_normal_files": {
+          ".cxt": 2,
+          ".dll": 1,
+          ".dxr": 36,
+          ".exe": 2,
+          ".txt": 9
+        },
+        "current_importer": "inventory passed; associated streams use the __associated__ namespace"
+      },
+      "path": "media/findus-workshop/sha256-fc24ffe284ec/FINDUS.iso",
+      "game_slug": "findus-workshop",
+      "port_status": "supported",
+      "refactor_verification": {
+        "sha256": "passed before relocation",
+        "inventory": "passed with new importer"
+      }
+    },
+    {
+      "display_title": "Neues von Pettersson und Findus",
+      "identification_evidence": "Petterson/LIESMICH.TXT names the title; executable and Pinnspel.dxr sizes/tail hashes match local ScummVM pettson2 German entry.",
+      "source_id": "sha256-d13f26cf91cf",
+      "bytes": 84937326,
+      "sha256": "d13f26cf91cfeb02e7ae2df796f70916986aa186ad4a724b4e19fd1cecc1a311",
+      "inspection_scope": "Container metadata and selected identification files; full SHA-256 verified and current importer inventory passed. Game execution is separately qualified. All ZIP entry CRCs passed.",
+      "container": {
+        "kind": "zip-tree",
+        "entries": 53,
+        "files": 48,
+        "expanded_bytes": 149924770,
+        "extensions": {
+          ".dxr": 24,
+          ".exe": 3,
+          ".ico": 1,
+          ".pet": 2,
+          ".pev": 7,
+          ".txt": 2,
+          ".x16": 2,
+          ".x32": 7
+        }
+      },
+      "path": "media/findus-garden/sha256-d13f26cf91cf/Petterson.zip",
+      "game_slug": "findus-garden",
+      "port_status": "catalogued",
+      "refactor_verification": {
+        "sha256": "passed before relocation",
+        "inventory": "passed with new importer",
+        "zip_crc": "all entries passed"
+      }
+    },
+    {
+      "display_title": "Pettersson und Findus: Christmas calendar",
+      "identification_evidence": "FINDUS3.EXE size/head hash matches local ScummVM pettsonjk German entry; MAIN contains KALENDER and DAG01 through DAG24. Display title here is descriptive.",
+      "source_id": "sha256-1b087d267195",
+      "bytes": 259665920,
+      "sha256": "1b087d267195d9be864f75c3d14dcb4a119ef0ded2ba178c41315a35475b18d3",
+      "inspection_scope": "Container metadata and selected identification files; full SHA-256 verified and current importer inventory passed. Game execution is separately qualified.",
+      "container": {
+        "kind": "iso9660-image",
+        "normal_file_records": 32,
+        "associated_file_records": 0,
+        "duplicate_path_groups": 0,
+        "extensions_normal_files": {
+          ".cxt": 5,
+          ".dxr": 26,
+          ".exe": 1
+        },
+        "current_importer": "inventory passed; associated streams use the __associated__ namespace"
+      },
+      "path": "media/findus-christmas/sha256-1b087d267195/FINDUS3.ISO",
+      "game_slug": "findus-christmas",
+      "port_status": "catalogued",
+      "refactor_verification": {
+        "sha256": "passed before relocation",
+        "inventory": "passed with new importer"
+      }
+    },
+    {
+      "display_title": "Findus bei den Mucklas",
+      "identification_evidence": "ISO READ_ME.TXT explicitly identifies Findus bei den Mucklas, Version 1.0. Prefer this over filename numbering.",
+      "source_id": "sha256-ad4c7afb4b19",
+      "bytes": 551503872,
+      "sha256": "ad4c7afb4b19339c45c2a69756b522b59ba4869199740fd528527f190a806925",
+      "inspection_scope": "Container metadata and selected identification files; full SHA-256 verified and current importer inventory passed. Game execution is separately qualified.",
+      "container": {
+        "kind": "iso9660-image",
+        "normal_file_records": 76,
+        "associated_file_records": 2,
+        "duplicate_path_groups": 2,
+        "extensions_normal_files": {
+          ".cxt": 16,
+          ".dat": 2,
+          ".dll": 1,
+          ".dxr": 32,
+          ".dxt": 1,
+          ".exe": 2,
+          ".ico": 1,
+          ".inf": 1,
+          ".p3": 7,
+          ".pct": 1,
+          ".txt": 2,
+          ".x32": 10
+        },
+        "current_importer": "inventory passed; associated streams use the __associated__ namespace"
+      },
+      "path": "media/findus-mucklas/sha256-ad4c7afb4b19/Findus4.iso",
+      "game_slug": "findus-mucklas",
+      "port_status": "experimental",
+      "refactor_verification": {
+        "sha256": "passed before relocation",
+        "inventory": "passed with new importer"
+      }
+    },
+    {
+      "display_title": "Autos bauen mit Willy Werkel",
+      "identification_evidence": "Supplied archive name and Willy1/AutoBau program tree; exact edition remains to audit.",
+      "source_id": "sha256-938be20a50e2",
+      "bytes": 185945958,
+      "sha256": "938be20a50e2825f5acf4788aabfdc145b94d1a1fb61b7264a4a81156428afac",
+      "inspection_scope": "Container metadata and selected identification files; full SHA-256 verified and current importer inventory passed. Game execution is separately qualified. All ZIP entry CRCs passed.",
+      "container": {
+        "kind": "zip-tree",
+        "entries": 109,
+        "files": 102,
+        "expanded_bytes": 1407923921,
+        "extensions": {
+          ".car": 2,
+          ".cnt": 1,
+          ".cst": 2,
+          ".cxt": 6,
+          ".dxr": 68,
+          ".exe": 2,
+          ".hlp": 1,
+          ".htm": 1,
+          ".ico": 1,
+          ".isu": 1,
+          ".scr": 10,
+          ".x16": 3,
+          ".x32": 4
+        }
+      },
+      "path": "media/willy-werkel-cars/sha256-938be20a50e2/Autos bauen mit Willy Werkel.zip",
+      "game_slug": "willy-werkel-cars",
+      "port_status": "catalogued",
+      "refactor_verification": {
+        "sha256": "passed before relocation",
+        "inventory": "passed with new importer",
+        "zip_crc": "all entries passed"
+      }
+    },
+    {
+      "display_title": "Fritz & Fertig",
+      "identification_evidence": "AUTORUN.INI identifies Fritz und Fertig.exe. The first-volume slug is proposed from the unnumbered product title and supplied .01 filename; confirm volume before freezing the catalog.",
+      "source_id": "sha256-d3a2ac348afa",
+      "bytes": 713625600,
+      "sha256": "d3a2ac348afa513e224001190b94220dfb54d3a0d32f27c81f9787bbd245e7c0",
+      "inspection_scope": "Container metadata and selected identification files; full SHA-256 verified and current importer inventory passed. Game execution is separately qualified.",
+      "container": {
+        "kind": "iso9660-image",
+        "normal_file_records": 1480,
+        "associated_file_records": 0,
+        "duplicate_path_groups": 0,
+        "extensions_normal_files": {
+          "": 21,
+          ".aif": 1327,
+          ".cxt": 17,
+          ".dll": 5,
+          ".dxr": 58,
+          ".exe": 6,
+          ".fbk": 1,
+          ".gif": 1,
+          ".htm": 3,
+          ".ico": 1,
+          ".inf": 1,
+          ".ini": 3,
+          ".msi": 1,
+          ".pdf": 1,
+          ".swf": 2,
+          ".txt": 1,
+          ".wri": 1,
+          ".x32": 30
+        },
+        "current_importer": "inventory passed; associated streams use the __associated__ namespace"
+      },
+      "path": "media/fritz-fertig-1/sha256-d3a2ac348afa/FritzFertig.01.iso",
+      "game_slug": "fritz-fertig-1",
+      "port_status": "catalogued",
+      "refactor_verification": {
+        "sha256": "passed before relocation",
+        "inventory": "passed with new importer"
+      }
+    },
+    {
+      "display_title": "Löwenzahn 1",
+      "identification_evidence": "LIESMICH.WRI identifies Löwenzahn; STARTW95.EXE size/tail hash matches the local ScummVM loewe1 entry. Complete detector matching was not performed.",
+      "source_id": "sha256-f31970b980f0",
+      "bytes": 628160512,
+      "sha256": "f31970b980f096a343a9aec5f10d52931709fbdda3cf09e5a80023791e402af2",
+      "inspection_scope": "Container metadata and selected identification files; full SHA-256 verified and current importer inventory passed. Game execution is separately qualified.",
+      "container": {
+        "kind": "iso9660-image",
+        "normal_file_records": 331,
+        "associated_file_records": 63,
+        "duplicate_path_groups": 63,
+        "extensions_normal_files": {
+          ".aif": 219,
+          ".aio": 3,
+          ".cxt": 1,
+          ".dll": 2,
+          ".dxr": 21,
+          ".exe": 4,
+          ".ico": 1,
+          ".inf": 1,
+          ".ini": 1,
+          ".mov": 66,
+          ".pct": 6,
+          ".pdf": 2,
+          ".wri": 2,
+          ".x16": 1,
+          ".x32": 1
+        },
+        "current_importer": "inventory passed; associated streams use the __associated__ namespace"
+      },
+      "path": "media/loewenzahn-1/sha256-f31970b980f0/LOEWENZA.iso",
+      "game_slug": "loewenzahn-1",
+      "port_status": "catalogued",
+      "refactor_verification": {
+        "sha256": "passed before relocation",
+        "inventory": "passed with new importer"
+      }
+    },
+    {
+      "display_title": "Lernerfolg Grundschule Deutsch 1-2",
+      "identification_evidence": "install.exe version resources name the product and Tivola Publishing GmbH, Hamburg; the disc `version` file reads LernerfolgGerman 12 v2013 and hilfe/Hilfe.htm repeats the title. Deutsch.ini keeps a stale 'Mathe Premium 1' project name from a sibling title and was not used. The local ScummVM checkout has no detection entry for this game.",
+      "source_id": "sha256-4c87e10dcc99",
+      "bytes": 543436800,
+      "sha256": "4c87e10dcc99dfb68882b51c9daceb7ce4761b482a2a43bf620093289353e0f4",
+      "inspection_scope": "Local rip of the pressed CD cut to the declared ISO 9660 volume (265,350 sectors); full SHA-256 recorded from that image and current importer inventory passed. The file set and total bytes match the mounted UDF view exactly, and 179 of the 180 non-audio files hash-identically against the disc. Game execution is separately qualified.",
+      "container": {
+        "kind": "iso9660-image",
+        "normal_file_records": 4160,
+        "associated_file_records": 0,
+        "duplicate_path_groups": 0,
+        "extensions_normal_files": {
+          "(none)": 1,
+          ".aif": 3711,
+          ".cst": 1,
+          ".cxt": 30,
+          ".dat": 2,
+          ".db": 266,
+          ".dll": 4,
+          ".dxr": 45,
+          ".exe": 2,
+          ".htm": 1,
+          ".ico": 3,
+          ".inf": 1,
+          ".ini": 1,
+          ".jpg": 3,
+          ".pcz": 11,
+          ".png": 36,
+          ".wav": 3,
+          ".wmz": 11,
+          ".x32": 26,
+          ".xml": 2
+        },
+        "current_importer": "inventory passed; the ISO 9660 primary descriptor retains the original mixed-case names"
+      },
+      "disc": {
+        "medium": "single-track CD-ROM, ISO 9660 / UDF 1.02 bridge, volume label 'Deutsch 12'",
+        "device_reported_sectors": 348450,
+        "readable_sectors": 297144,
+        "iso9660_volume_sectors": 265350,
+        "retained": "the declared ISO 9660 volume; the readable tail beyond it holds a UDF backup anchor and 1,694 high-entropy sectors, no file data",
+        "read_limits": "sectors at and beyond 297,144 fail on the local drive; Tivola.dat returns a short read through the UDF mount, while its ISO 9660 extent re-read from the disc matches the retained image exactly"
+      },
+      "path": "media/lernerfolg-deutsch-1-2/sha256-4c87e10dcc99/Deutsch12.iso",
+      "game_slug": "lernerfolg-deutsch-1-2",
+      "port_status": "catalogued"
+    }
+  ]
+}

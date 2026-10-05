@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Report host prerequisites, pinned SDK state and toolchain compatibility"
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+exec uv run --locked --no-sync director64 doctor "$@"

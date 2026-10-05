@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#MISE description="Run portable runtime and game adapter C contracts"
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+mkdir -p build/tests
+includes=(-Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage -Iplatforms/n64 -Igames/findus-workshop/runtime)
+compile() {
+    local name=$1
+    shift
+    "${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic "${includes[@]}" "$@" -lm -o "build/tests/$name"
+    "build/tests/$name"
+}
+compile lingo tests/native/test_lingo.c runtime/lingo/lingo_runtime.c
+compile lingo_d8 -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_lingo_d8.c runtime/lingo/lingo_runtime.c
+compile lingo_collect tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
+compile lingo_collect_extended_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
+compile archive games/findus-workshop/tests/test_archive.c games/findus-workshop/runtime/{archive,save}.c
+for test in director director_timing director_state; do
+    compile "$test" "tests/native/test_$test.c" runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
+compile pointer tests/native/test_pointer.c runtime/interaction/{pointer,input}.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile director_d8 -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_director_d8.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile director_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile director_d6_events -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile director_d6_frame_events -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_frame_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile willy_input -DDIRECTOR64_EXTENDED_D6=1 -Igames/willy-werkel-cars/runtime games/willy-werkel-cars/tests/test_input.c games/willy-werkel-cars/runtime/willy_input.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile director_d5 -DDIRECTOR64_DIRECTOR_VERSION=5 tests/native/test_director_d5.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+for version in 5 6 8; do
+    compile "cursor_d$version" -DDIRECTOR64_DIRECTOR_VERSION="$version" tests/native/test_cursor.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
+compile cursor_extended_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_cursor.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile loewenzahn_printing -DDIRECTOR64_DIRECTOR_VERSION=5 -Igames/loewenzahn-1/runtime -Igames/loewenzahn-1/tests/printing-fixtures games/loewenzahn-1/tests/test_printing.c games/loewenzahn-1/runtime/printing.c runtime/lingo/lingo_runtime.c
+compile director_d8_events -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_director_d8_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile director_d8_controls -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_director_d8_controls.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile mucklas_controls -DDIRECTOR64_DIRECTOR_VERSION=8 -Igames/findus-mucklas/runtime games/findus-mucklas/tests/test_controls.c games/findus-mucklas/runtime/controls.c runtime/interaction/input.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile director_text -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_director_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile shape tests/native/test_shape.c runtime/director/shape.c
+compile audio tests/native/test_audio_bounds.c
+compile bitmap_tiles tests/native/test_bitmap_tiles.c
+compile image_alpha tests/native/test_image_alpha.c
+compile native_image_hit -Iplatforms/native tests/native/test_native_image_hit.c platforms/native/image.c runtime/lingo/lingo_runtime.c
+
+"${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic -Iruntime -Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage -Igames/findus-mucklas/runtime games/findus-mucklas/tests/test_save.c games/findus-mucklas/runtime/{archive,game}.c -o build/tests/mucklas_save
+build/tests/mucklas_save
+
+"${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic -Iruntime/storage -Igames/willy-werkel-cars/runtime games/willy-werkel-cars/tests/test_archive.c games/willy-werkel-cars/runtime/archive.c -o build/tests/willy_archive
+build/tests/willy_archive
+
+compile director_d7 -DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d7.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+
+"${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic -Iruntime/storage -Igames/findus-christmas/runtime games/findus-christmas/tests/test_archive.c games/findus-christmas/runtime/archive.c -o build/tests/christmas_archive
+build/tests/christmas_archive
+
+"${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic -Iruntime/storage -Igames/lernerfolg-deutsch-1-2/runtime games/lernerfolg-deutsch-1-2/tests/test_archive.c games/lernerfolg-deutsch-1-2/runtime/archive.c -o build/tests/deutsch_archive
+build/tests/deutsch_archive
+
+compile director_d7_frame_events -DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_frame_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+
+compile director_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d10.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+# The D7/D10 lenient absent-cursor path conflicts with test_cursor's strict
+# D5/D6/D8 contract; test_director_d10.c covers the versioned behavior instead.
+compile director_d10_frame_events -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_frame_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile web_compositor -Iplatforms/web tests/native/test_web_compositor.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+compile package -Iruntime/package tests/native/test_package.c runtime/package/package.c

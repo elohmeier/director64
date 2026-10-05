@@ -1,0 +1,7 @@
+# Browser player profile (docs/web.md). Not a conversion input: editing it
+# does not invalidate the game's asset receipt.
+schema_version = 1
+
+# The recovered game keeps no player saves (runtime/game.c).
+saves = false
+save_files = []

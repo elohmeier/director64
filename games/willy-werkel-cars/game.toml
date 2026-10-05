@@ -1,0 +1,30 @@
+schema_version = 1
+slug = "willy-werkel-cars"
+title = "Autos bauen mit Willy Werkel"
+status = "experimental"
+default_source = "sha256-938be20a50e2"
+
+[[sources]]
+id = "sha256-938be20a50e2"
+file = "Autos bauen mit Willy Werkel.zip"
+sha256 = "938be20a50e2825f5acf4788aabfdc145b94d1a1fb61b7264a4a81156428afac"
+bytes = 185945958
+kind = "zip"
+
+[recovery]
+director_version = 600
+media_root = "Willy1"
+
+[port]
+extended_d6 = true
+native_compatibility = true
+director_version = 600
+media_root = "Willy1"
+entry_movie = "START"
+launcher_movie = "START.DXR"
+rom_title = "Willy Werkel Cars"
+rom_save_type = 80
+controller_count = 4
+host_package = "director64_willy_werkel_cars"
+asset_postprocessor = "full_media"
+asset_inputs = ["host/text_metrics.py"]

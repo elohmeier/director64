@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "id": "original-boot-observation-v1",
+  "clock": "host_monotonic_ms",
+  "duration_ms": 45000,
+  "actions": [
+    {"at_ms": 5000, "type": "checkpoint", "id": "boot-5s"},
+    {"at_ms": 15000, "type": "checkpoint", "id": "boot-15s"},
+    {"at_ms": 30000, "type": "checkpoint", "id": "boot-30s"},
+    {"at_ms": 44000, "type": "checkpoint", "id": "boot-44s"}
+  ]
+}

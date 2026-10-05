@@ -1,0 +1,628 @@
+# Each milestone has its own applicability record and pinned assertion evidence.
+# A verified source no-op still requires evidence; missing work never shrinks the denominator.
+schema_version = 1
+catalog_version = "scenes-v1"
+
+[milestones]
+asset_bank = "Target assets are deterministic, bounded and validated"
+load_unload = "Scene loads, unloads and survives repeated transitions"
+timeline = "Score frames, labels, layers and timing are represented"
+input = "Pointer/button behavior and hit regions match the reference"
+audio = "Playback, waits, channels and looping match the reference"
+logic = "Native scene/game state matches relevant Lingo behavior"
+transitions = "Every inbound and outbound transition preserves required state"
+service_api = "Shared-cast behavior is exposed through a tested native service"
+reference_match = "Named reference scenarios pass with recorded evidence"
+
+[requirements]
+movie = [
+  "asset_bank",
+  "load_unload",
+  "timeline",
+  "input",
+  "audio",
+  "logic",
+  "transitions",
+  "reference_match",
+]
+cast = ["asset_bank", "service_api", "logic", "reference_match"]
+
+[[scenes]]
+file = "BREDHOGN.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "BRODER.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "BYRAN.DXR"
+kind = "movie"
+role = "hub"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "FINNDUNK.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "FOTING.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "GARDEN.DXR"
+kind = "movie"
+role = "hub"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "GINTRO.DXR"
+kind = "movie"
+role = "intro"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "HALLTYST.DXR"
+kind = "movie"
+role = "interstitial"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "HYVEL.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "INIT.DXR"
+kind = "movie"
+role = "bootstrap"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KISTA.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR01.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR02.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR03.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR04.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR05.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR06.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR07.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR08.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR09.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR10.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR11.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "KONSTR12.DXR"
+kind = "movie"
+role = "construction-level"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "LUFFSPEL.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "MALAR.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "MOSSEN.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "MVEGGEN.DXR"
+kind = "movie"
+role = "hub"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "PETTTALK.CXT"
+kind = "cast"
+role = "dialogue-service"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+service_api = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "PINTRO.DXR"
+kind = "movie"
+role = "main-hub"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "PLOCKIN.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "PLOCKSPL.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "SAGOR.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "SHARED.CXT"
+kind = "cast"
+role = "profile-treasure-service"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+service_api = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "SNIKBOD.DXR"
+kind = "movie"
+role = "hub"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "START.DXR"
+kind = "movie"
+role = "bootstrap"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "VAKT.DXR"
+kind = "movie"
+role = "profile-select"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "VEMORY.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+
+[[scenes]]
+file = "VERKORK.DXR"
+kind = "movie"
+role = "activity"
+platforms = {}
+
+[scenes.milestone_status]
+asset_bank = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+load_unload = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+timeline = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+input = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+audio = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+logic = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+transitions = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }
+reference_match = { status = "missing", reason = "Source behavior not yet validated", evidence = [] }

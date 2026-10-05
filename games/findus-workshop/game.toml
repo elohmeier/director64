@@ -1,0 +1,21 @@
+schema_version = 1
+slug = "findus-workshop"
+title = "Pettersson und Findus"
+status = "supported"
+default_source = "sha256-fc24ffe284ec"
+
+[[sources]]
+id = "sha256-fc24ffe284ec"
+file = "FINDUS.iso"
+sha256 = "fc24ffe284ec90d4661f807a0c84c29a23171bf9e43b85225f414504f12fe389"
+bytes = 119457792
+kind = "iso9660"
+
+[port]
+director_version = 600
+media_root = "POFMEDIA"
+entry_movie = "START"
+rom_title = "Findus Workshop"
+rom_save_type = 80
+controller_count = 4
+host_package = "director64_findus_workshop"

@@ -1,0 +1,27 @@
+schema_version = 1
+slug = "findus-mucklas"
+title = "Findus bei den Mucklas"
+status = "experimental"
+default_source = "sha256-ad4c7afb4b19"
+
+[[sources]]
+id = "sha256-ad4c7afb4b19"
+file = "Findus4.iso"
+sha256 = "ad4c7afb4b19339c45c2a69756b522b59ba4869199740fd528527f190a806925"
+bytes = 551503872
+kind = "iso9660"
+
+[recovery]
+director_version = 800
+media_root = "P3MEDIA"
+
+[port]
+director_version = 800
+media_root = "P3MEDIA"
+entry_movie = "START"
+rom_title = "Findus Mucklas"
+rom_save_type = 80
+controller_count = 4
+host_package = "director64_findus_mucklas"
+launcher_movie = "START.DXR"
+native_compatibility = true

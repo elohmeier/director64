@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#MISE description="Run host-tool tests, lint, tracker validation and Node syntax checks"
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+uv run --locked ruff check src tests games
+uv run --locked pytest
+uv run --locked director64 compatibility --game findus-workshop validate --inventory-mode optional
+node --check tools/director/dump.mjs
+node --check tools/director/dump-format.mjs
+node --check platforms/web/site/app.js
+node --check platforms/web/site/player.js
+node --check platforms/web/site/cache.js
+node --check platforms/web/import/worker.mjs
+node --check platforms/web/import/pipeline.mjs
+node --check platforms/web/node/probe.mjs
+node --test tests/node/*.test.mjs
+"$repo_root/.mise-tasks/test-native"
+if command -v cargo >/dev/null 2>&1; then
+    cargo build --release --manifest-path compiler/Cargo.toml
+    cargo test --release --manifest-path compiler/Cargo.toml
+fi

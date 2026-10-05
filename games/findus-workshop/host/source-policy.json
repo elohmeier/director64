@@ -1,0 +1,26 @@
+{
+  "director_files": 38,
+  "image_codec_tiers": [
+    {
+      "min_decompressed_bytes": 65536,
+      "level": 2
+    }
+  ],
+  "palette": {
+    "file": "PINTRO.DXR",
+    "chunk": 112,
+    "sha256": "c125c7c3bd648a944fa2693aa89cd5ecb4156fb1ee2c63e909fb9927ad315663",
+    "external_cast": "PETTTALK.CXT"
+  },
+  "counts": {
+    "files": 38,
+    "scripts": 1524,
+    "bitmap_references": 4552,
+    "sound_references": 955,
+    "movie_references": 63
+  },
+  "projector": "../ANNAT/PETT16.EXE",
+  "source_sha256": "fc24ffe284ec90d4661f807a0c84c29a23171bf9e43b85225f414504f12fe389",
+  "image_indexed": true,
+  "image_pack_budget_mib": 49
+}

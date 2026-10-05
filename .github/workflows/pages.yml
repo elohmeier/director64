@@ -1,0 +1,80 @@
+# Tests the host tools and builds the browser player; on main, publishes it to
+# GitHub Pages. No game media is available here: tests run on synthetic
+# fixtures and the site carries only the engine, the converter and profiles.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      # Python, uv and Node as pinned in mise.toml.
+      - uses: jdx/mise-action@v3
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            compiler -> target
+            compiler/wasm -> target
+
+      - name: Install dependencies
+        run: |
+          npm ci --ignore-scripts
+          uv sync --locked
+
+      # The host pipeline's tests run the bytecode compiler binary.
+      - name: Test
+        run: |
+          cargo build --release --locked --manifest-path compiler/Cargo.toml
+          cargo test --release --locked --manifest-path compiler/Cargo.toml
+          uv run --locked ruff check src tests games
+          uv run --locked pytest -q
+          node --test tests/node/*.test.mjs
+
+      # Emscripten runs in the pinned emscripten/emsdk image, pulled by digest.
+      - name: Build the site
+        run: |
+          for profile in games/*/web.toml; do
+            uv run --locked director64 web --game "$(basename "$(dirname "$profile")")"
+          done
+          test "$(jq length build/web/site/profiles.json)" = "$(ls games/*/web.toml | wc -l)"
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/web/site
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
