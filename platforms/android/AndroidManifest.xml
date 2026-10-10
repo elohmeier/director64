@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One game's APK (docs/android.md). Built without Gradle by
+     src/director64/android.py, which renames the package per game
+     (org.director64.tv.<slug>), sets the label to the game's title and the
+     SDK and version numbers. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.director64.tv">
+
+  <uses-feature android:name="android.software.leanback" android:required="false" />
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+  <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+
+  <application
+      android:label="@TITLE@"
+      android:icon="@drawable/icon"
+      android:banner="@drawable/banner"
+      android:theme="@style/Theme"
+      android:isGame="true"
+      android:allowBackup="false"
+      android:extractNativeLibs="false">
+
+    <activity
+        android:name=".GameActivity"
+        android:exported="true"
+        android:launchMode="singleTask"
+        android:screenOrientation="landscape"
+        android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|density">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+        <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

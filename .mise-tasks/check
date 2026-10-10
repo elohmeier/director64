@@ -21,6 +21,9 @@ node --check platforms/web/import/pipeline.mjs
 node --check platforms/web/import/jobs.mjs
 node --check platforms/web/import/pool.mjs
 node --check platforms/web/node/probe.mjs
+for module in export pool-worker video; do
+    node --check "platforms/android/export/$module.mjs"
+done
 node --test tests/node/*.test.mjs
 "$repo_root/.mise-tasks/test-native"
 if command -v cargo >/dev/null 2>&1; then

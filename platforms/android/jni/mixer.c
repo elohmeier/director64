@@ -1,0 +1,439 @@
+#include "mixer.h"
+#include "decode.h"
+#include <aaudio/AAudio.h>
+#include <android/log.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#define LOG(...) __android_log_print(ANDROID_LOG_INFO, "director64", __VA_ARGS__)
+
+enum { CHANNELS = 8, VIDEO_VOICES = 8, VOICES = CHANNELS + VIDEO_VOICES, JOBS = 32 };
+// Decoded sounds are many times their stored size; keep the recent ones.
+#define CACHE_BYTES (48u * 1024u * 1024u)
+
+typedef struct {
+  sound_t *sound;
+  double position, rate;
+  bool looping;
+  double loop_start, loop_end; // in decoded frames
+  // A start waiting for its sound to decode: the decoder's answer applies
+  // only while the voice still waits for it.
+  unsigned pending;
+} voice_t;
+
+typedef struct {
+  char *name;
+  sound_t *sound;
+  unsigned last;
+} cached_t;
+
+typedef struct {
+  unsigned voice, token;
+  const uint8_t *bytes;
+  uint64_t offset, length;
+  bool looping, stream;
+  uint32_t loop_start, loop_end;
+  double requested, offset_seconds;
+  char name[64];
+} job_t;
+
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
+static voice_t voices[VOICES];
+static float gains[VOICES];
+static float master = 1.0f;
+static unsigned video_sprite[VIDEO_VOICES];
+static unsigned tokens;
+static cached_t *cache;
+static unsigned cache_count, cache_cap, cache_clock;
+static size_t cache_bytes;
+static const pack_t *sound_pack, *stream_pack;
+static AAudioStream *stream;
+static int32_t output_rate = 48000;
+static atomic_bool disconnected, suspended;
+static job_t jobs[JOBS];
+static unsigned job_count;
+static pthread_t worker;
+static bool worker_running, stopping;
+
+static double now(void) {
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (double)t.tv_sec + t.tv_nsec / 1e9;
+}
+
+// ---- Output ----
+
+static aaudio_data_callback_result_t render(AAudioStream *s, void *user, void *data,
+                                            int32_t frames) {
+  (void)s;
+  (void)user;
+  float *out = data;
+  memset(out, 0, (size_t)frames * 2 * sizeof(float));
+  pthread_mutex_lock(&lock);
+  for (unsigned v = 0; v < VOICES; v++) {
+    voice_t *voice = &voices[v];
+    sound_t *sound = voice->sound;
+    if (!sound)
+      continue;
+    float gain = gains[v] * master;
+    double step = voice->rate * sound->rate / output_rate;
+    double end = voice->looping ? voice->loop_end : sound->frames;
+    const int16_t *pcm = sound->pcm;
+    unsigned ch = sound->channels;
+    for (int32_t i = 0; i < frames; i++) {
+      if (voice->position >= end) {
+        if (!voice->looping || voice->loop_end <= voice->loop_start) {
+          voice->sound = NULL;
+          sound_release(sound);
+          break;
+        }
+        voice->position -= voice->loop_end - voice->loop_start;
+      }
+      uint32_t at = (uint32_t)voice->position;
+      float frac = (float)(voice->position - at);
+      uint32_t next = at + 1 < sound->frames ? at + 1 : at;
+      float l = pcm[at * ch] + (pcm[next * ch] - pcm[at * ch]) * frac;
+      float r = ch == 2 ? pcm[at * 2 + 1] + (pcm[next * 2 + 1] - pcm[at * 2 + 1]) * frac : l;
+      out[i * 2] += l * (gain / 32768.0f);
+      out[i * 2 + 1] += r * (gain / 32768.0f);
+      voice->position += step;
+    }
+  }
+  pthread_mutex_unlock(&lock);
+  for (int32_t i = 0; i < frames * 2; i++)
+    out[i] = out[i] > 1.0f ? 1.0f : out[i] < -1.0f ? -1.0f : out[i];
+  return AAUDIO_CALLBACK_RESULT_CONTINUE;
+}
+
+static void failed(AAudioStream *s, void *user, aaudio_result_t error) {
+  (void)s;
+  (void)user;
+  LOG("audio output error %d", error);
+  atomic_store(&disconnected, true);
+}
+
+static void open_output(void) {
+  AAudioStreamBuilder *builder;
+  if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK)
+    return;
+  AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
+  AAudioStreamBuilder_setChannelCount(builder, 2);
+  AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_GAME);
+  AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_SONIFICATION);
+  AAudioStreamBuilder_setDataCallback(builder, render, NULL);
+  AAudioStreamBuilder_setErrorCallback(builder, failed, NULL);
+  if (AAudioStreamBuilder_openStream(builder, &stream) != AAUDIO_OK) {
+    LOG("no audio output");
+    stream = NULL;
+  } else {
+    output_rate = AAudioStream_getSampleRate(stream);
+    if (!atomic_load(&suspended))
+      AAudioStream_requestStart(stream);
+    LOG("audio output %d Hz", output_rate);
+  }
+  AAudioStreamBuilder_delete(builder);
+}
+
+static void close_output(void) {
+  if (stream) {
+    AAudioStream_requestStop(stream);
+    AAudioStream_close(stream);
+    stream = NULL;
+  }
+}
+
+void audio_poll(void) {
+  if (atomic_exchange(&disconnected, false)) {
+    close_output();
+    open_output();
+  }
+}
+
+void audio_suspend(bool on) {
+  atomic_store(&suspended, on);
+  if (!stream)
+    return;
+  if (on)
+    AAudioStream_requestPause(stream);
+  else
+    AAudioStream_requestStart(stream);
+}
+
+// ---- Sounds ----
+
+// The decoded sound of a cached name, retained; NULL when not cached.
+static sound_t *cached(const char *name) {
+  for (unsigned i = 0; i < cache_count; i++)
+    if (!strcmp(cache[i].name, name)) {
+      cache[i].last = ++cache_clock;
+      return sound_retain(cache[i].sound);
+    }
+  return NULL;
+}
+
+static void keep(const char *name, sound_t *sound) {
+  if (cache_count == cache_cap) {
+    unsigned cap = cache_cap ? cache_cap * 2 : 64;
+    cached_t *grown = realloc(cache, cap * sizeof(cached_t));
+    if (!grown)
+      return;
+    cache = grown;
+    cache_cap = cap;
+  }
+  cache[cache_count++] = (cached_t){strdup(name), sound_retain(sound), ++cache_clock};
+  cache_bytes += sound_bytes(sound);
+  while (cache_bytes > CACHE_BYTES && cache_count > 1) {
+    unsigned oldest = 0;
+    for (unsigned i = 1; i < cache_count; i++)
+      if (cache[i].last < cache[oldest].last)
+        oldest = i;
+    cache_bytes -= sound_bytes(cache[oldest].sound);
+    sound_release(cache[oldest].sound);
+    free(cache[oldest].name);
+    cache[oldest] = cache[--cache_count];
+  }
+}
+
+// Starts a voice, `offset` seconds in. Called with the lock held.
+static void start(unsigned v, sound_t *sound, bool looping, uint32_t loop_start,
+                  uint32_t loop_end, double offset) {
+  voice_t *voice = &voices[v];
+  if (voice->sound)
+    sound_release(voice->sound);
+  voice->sound = NULL;
+  voice->pending = 0;
+  double position = offset * sound->rate;
+  voice->looping = looping;
+  voice->loop_start = 0;
+  voice->loop_end = sound->frames;
+  if (looping) {
+    // The console's rule (platforms/n64/audio_bounds.h): the loop end clamps
+    // to the decoded length, and an empty loop loops the whole sound.
+    uint32_t end = loop_end < sound->frames ? loop_end : sound->frames;
+    if (loop_start < end) {
+      voice->loop_start = loop_start;
+      voice->loop_end = end;
+    }
+    while (position >= voice->loop_end && voice->loop_end > voice->loop_start)
+      position -= voice->loop_end - voice->loop_start;
+  } else if (position >= sound->frames) {
+    sound_release(sound);
+    return;
+  }
+  voice->position = position;
+  voice->rate = voice->rate > 0 ? voice->rate : 1.0;
+  voice->sound = sound;
+}
+
+static void stop_voice(unsigned v) {
+  voice_t *voice = &voices[v];
+  voice->pending = 0;
+  if (voice->sound)
+    sound_release(voice->sound);
+  voice->sound = NULL;
+}
+
+static void *decoder(void *arg) {
+  (void)arg;
+  pthread_mutex_lock(&lock);
+  while (!stopping) {
+    if (!job_count) {
+      pthread_cond_wait(&wake, &lock);
+      continue;
+    }
+    job_t job = jobs[0];
+    memmove(jobs, jobs + 1, --job_count * sizeof(job_t));
+    if (voices[job.voice].pending != job.token)
+      continue;
+    pthread_mutex_unlock(&lock);
+    sound_t *sound = NULL;
+    if (job.bytes && is_wav(job.bytes, job.length))
+      sound = decode_wav(job.bytes, job.length);
+    else
+      sound = decode_media(job.stream ? stream_pack->fd : sound_pack->fd, job.offset, job.length);
+    if (!sound)
+      LOG("could not decode %s", job.name);
+    pthread_mutex_lock(&lock);
+    if (sound && !job.stream)
+      keep(job.name, sound);
+    if (sound && voices[job.voice].pending == job.token)
+      start(job.voice, sound_retain(sound), job.looping, job.loop_start, job.loop_end,
+            job.offset_seconds + (now() - job.requested));
+    sound_release(sound);
+  }
+  pthread_mutex_unlock(&lock);
+  return NULL;
+}
+
+// Plays `entry` of `pack` on voice `v`: at once when decoded before or a
+// WAVE file, otherwise once decoded, as far in as the time it took.
+static void play_entry(unsigned v, const pack_t *pack, const pack_entry_t *entry,
+                       const char *name, bool stream_entry, bool looping, uint32_t loop_start,
+                       uint32_t loop_end, double offset) {
+  sound_t *sound = stream_entry ? NULL : cached(name);
+  const uint8_t *bytes = pack_data(pack, entry);
+  if (!sound && is_wav(bytes, entry->length)) {
+    sound = decode_wav(bytes, entry->length);
+    if (sound && !stream_entry)
+      keep(name, sound);
+    if (!sound)
+      LOG("malformed sound %s", name);
+  }
+  if (sound) {
+    start(v, sound, looping, loop_start, loop_end, offset);
+    return;
+  }
+  if (job_count == JOBS)
+    return;
+  unsigned token = ++tokens ? tokens : ++tokens;
+  voices[v].pending = token;
+  job_t *job = &jobs[job_count++];
+  *job = (job_t){.voice = v, .token = token, .bytes = bytes, .offset = pack->base + entry->offset,
+                 .length = entry->length, .looping = looping, .stream = stream_entry,
+                 .loop_start = loop_start, .loop_end = loop_end, .requested = now(),
+                 .offset_seconds = offset};
+  snprintf(job->name, sizeof(job->name), "%s", name);
+  pthread_cond_signal(&wake);
+}
+
+void audio_init(const pack_t *sounds, const pack_t *streams) {
+  sound_pack = sounds;
+  stream_pack = streams;
+  for (unsigned i = 0; i < VOICES; i++) {
+    gains[i] = 1.0f;
+    voices[i].rate = 1.0;
+  }
+  stopping = false;
+  worker_running = pthread_create(&worker, NULL, decoder, NULL) == 0;
+  open_output();
+}
+
+void audio_shutdown(void) {
+  close_output();
+  pthread_mutex_lock(&lock);
+  stopping = true;
+  job_count = 0;
+  pthread_cond_broadcast(&wake);
+  pthread_mutex_unlock(&lock);
+  if (worker_running)
+    pthread_join(worker, NULL);
+  worker_running = false;
+  for (unsigned i = 0; i < VOICES; i++)
+    stop_voice(i);
+  for (unsigned i = 0; i < cache_count; i++) {
+    sound_release(cache[i].sound);
+    free(cache[i].name);
+  }
+  free(cache);
+  cache = NULL;
+  cache_count = cache_cap = 0;
+  cache_bytes = 0;
+}
+
+void audio_play(unsigned channel, const char *name, bool looping, uint32_t loop_start,
+                uint32_t loop_end) {
+  if (channel >= CHANNELS)
+    return;
+  pthread_mutex_lock(&lock);
+  stop_voice(channel);
+  const pack_entry_t *entry = name ? pack_find(sound_pack, name) : NULL;
+  if (entry)
+    play_entry(channel, sound_pack, entry, name, false, looping, loop_start, loop_end, 0);
+  else if (name)
+    LOG("missing sound %s", name);
+  pthread_mutex_unlock(&lock);
+}
+
+uint32_t audio_play_stream(unsigned channel, const char *name) {
+  if (channel >= CHANNELS)
+    return 0;
+  pthread_mutex_lock(&lock);
+  stop_voice(channel);
+  const pack_entry_t *entry = name ? pack_find(stream_pack, name) : NULL;
+  if (entry)
+    play_entry(channel, stream_pack, entry, name, true, false, 0, 0, 0);
+  else if (name)
+    LOG("missing stream %s", name);
+  pthread_mutex_unlock(&lock);
+  return entry ? entry->extra : 0;
+}
+
+void audio_stop(unsigned channel) {
+  if (channel >= CHANNELS)
+    return;
+  pthread_mutex_lock(&lock);
+  stop_voice(channel);
+  pthread_mutex_unlock(&lock);
+}
+
+void audio_gain(unsigned channel, float gain) {
+  if (channel < CHANNELS)
+    gains[channel] = gain;
+}
+
+void audio_volume(float volume) { master = volume; }
+
+void audio_stop_all(void) {
+  pthread_mutex_lock(&lock);
+  for (unsigned i = 0; i < VOICES; i++)
+    stop_voice(i);
+  memset(video_sprite, 0, sizeof(video_sprite));
+  pthread_mutex_unlock(&lock);
+}
+
+double audio_duration(const char *name) {
+  const pack_entry_t *entry = pack_find(sound_pack, name);
+  return entry ? wav_duration(pack_data(sound_pack, entry), entry->length) : 0;
+}
+
+// The voice that plays a video sprite's sound; `claim` takes a free one.
+static int video_voice(unsigned sprite, bool claim) {
+  for (unsigned i = 0; i < VIDEO_VOICES; i++)
+    if (video_sprite[i] == sprite)
+      return CHANNELS + (int)i;
+  if (!claim)
+    return -1;
+  for (unsigned i = 0; i < VIDEO_VOICES; i++)
+    if (!video_sprite[i]) {
+      video_sprite[i] = sprite;
+      return CHANNELS + (int)i;
+    }
+  return -1;
+}
+
+void audio_play_video(unsigned sprite, const char *name, double offset) {
+  pthread_mutex_lock(&lock);
+  int v = video_voice(sprite, true);
+  const pack_entry_t *entry = pack_find(sound_pack, name);
+  if (v >= 0) {
+    stop_voice((unsigned)v);
+    if (entry)
+      play_entry((unsigned)v, sound_pack, entry, name, false, false, 0, 0, offset);
+  }
+  pthread_mutex_unlock(&lock);
+}
+
+void audio_video_rate(unsigned sprite, double rate, float gain) {
+  pthread_mutex_lock(&lock);
+  int v = video_voice(sprite, false);
+  if (v >= 0) {
+    voices[v].rate = rate > 0 ? rate : 1.0;
+    gains[v] = gain;
+  }
+  pthread_mutex_unlock(&lock);
+}
+
+void audio_stop_video(unsigned sprite) {
+  pthread_mutex_lock(&lock);
+  int v = video_voice(sprite, false);
+  if (v >= 0) {
+    stop_voice((unsigned)v);
+    video_sprite[v - CHANNELS] = 0;
+  }
+  pthread_mutex_unlock(&lock);
+}

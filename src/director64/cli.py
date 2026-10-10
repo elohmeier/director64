@@ -189,6 +189,11 @@ def main(argv=None):
     }
     sub.add_parser("games", help="list ports and catalogued sources")
     sub.add_parser("doctor", help="report host prerequisites, SDK state and image compatibility")
+    sub.add_parser(
+        "android",
+        help="the Android TV player, one APK per game: build | install --game SLUG",
+        add_help=False,
+    )
     for name in (
         "assets",
         "build",
@@ -229,6 +234,10 @@ def main(argv=None):
             from .doctor import main as doctor
 
             return doctor(repository())
+        if args.command == "android":
+            from .android import main as android
+
+            return android(remaining)
         if args.command == "games":
             if remaining:
                 parser.error("unexpected arguments")

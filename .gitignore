@@ -9,9 +9,15 @@
 __pycache__/
 *.py[cod]
 /mise.local.toml
+# Machine- and network-specific agent notes (CLAUDE.local.md imports them).
+/AGENTS.local.md
+/CLAUDE.local.md
 /compiler/target/
 /compiler/wasm/target/
 /games/*/host/*.local.toml
+# Box art for the Android launcher (docs/android.md): the publishers' artwork,
+# kept local like the discs.
+/games/*/cover.*
 /.claude/
 /.agents/
 /skills-lock.json

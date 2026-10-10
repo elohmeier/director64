@@ -94,6 +94,13 @@ typedef struct {
   unsigned externals;
   // Counters for the page's diagnostics.
   unsigned loads, evictions, renders;
+#if DG_D10
+  // The last composited scene without its cursors, and the snapshot of it a
+  // script kept as a member's image (`member.image = (the stage).image`).
+  uint32_t scene[WC_WIDTH * WC_HEIGHT];
+  wc_image_t stage_snapshot;
+  uint32_t snapshot_member;
+#endif
 } wc_t;
 
 void wc_init(wc_t *, wc_host_t, size_t image_budget);
@@ -108,6 +115,10 @@ bool wc_hit(wc_t *, lv_runtime_t *, const dg_member_t *, unsigned ink, int x,
             int y);
 // Composites the stage and the pointer. Returns false when nothing changed
 // since the last composite (the framebuffer still holds it).
+#if DG_D10
+// Keeps what the stage shows now (without cursors) as the member's image.
+void wc_capture_stage(wc_t *, uint32_t member);
+#endif
 bool wc_render(wc_t *, dg_runtime_t *, int pointer_x, int pointer_y,
                bool pointer_shown, unsigned externals);
 // The same with up to WC_POINTERS cursors, drawn in order (the last on top).

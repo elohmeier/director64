@@ -590,6 +590,22 @@ void dg_bounds(dg_runtime_t *d, unsigned index, int *left, int *top, int *right,
 static void sprite_rect(dg_runtime_t *d, const dg_sprite_t *s, int *left,
                         int *top, int *right, int *bottom) {
   const dg_member_t *m = dg_member(d, s->value.member);
+#if DG_D10
+  // A bitmap whose image a script replaced takes the new image's size,
+  // registered at its centre: another member's, or the authored 800x600
+  // stage's for a stage snapshot.
+  dg_member_t resized;
+  uint32_t source;
+  if (m && m->type == 1 && d->image_alias_count && dg_image_source(d, m->id, &source)) {
+    const dg_member_t *from = source ? dg_member(d, source) : NULL;
+    resized = *m;
+    resized.width = from ? from->width : 800;
+    resized.height = from ? from->height : 600;
+    resized.reg_x = (int16_t)(resized.width / 2);
+    resized.reg_y = (int16_t)(resized.height / 2);
+    m = &resized;
+  }
+#endif
   int width = s->value.width, height = s->value.height, rx = width / 2,
       ry = height / 2;
   if (m) {

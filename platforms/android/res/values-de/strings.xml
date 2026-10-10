@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="menu_resume">Weiterspielen</string>
+  <string name="menu_louder">Lauter (Lautstärke %1$d %%)</string>
+  <string name="menu_quieter">Leiser (Lautstärke %1$d %%)</string>
+  <string name="menu_diagnostics">Diagnose zeigen</string>
+  <string name="menu_hide_diagnostics">Diagnose ausblenden</string>
+  <string name="menu_controls">Steuerung</string>
+  <string name="menu_quit">Spiel beenden</string>
+  <string name="controls_text">Linker Stick oder Steuerkreuz: der Mauszeiger (L1 gehalten: fein). ✕ oder A: Klick. ○ oder B: zweite Taste. Options oder Start: Start. Rechter Stick: die C-Tasten. PS, Share, Zurück oder Menü: dieses Menü. Jeder Controller bewegt seinen eigenen Zeiger.\n\nVerbunden:</string>
+  <string name="text_title">Text eingeben</string>
+  <string name="text_bad_character">Dieses Zeichen kann hier nicht eingegeben werden.</string>
+  <string name="text_refused">Das Spiel hat den Text nicht angenommen.</string>
+  <string name="game_ended">Das Spiel ist zu Ende</string>
+  <string name="game_stopped">Das Spiel wurde angehalten</string>
+  <string name="saves_kept">Deine Spielstände bleiben erhalten.</string>
+  <string name="close">Schließen</string>
+  <string name="no_printing">Drucken ist auf dem Fernseher nicht möglich.</string>
+  <string name="save_failed">Das Spiel konnte nicht gespeichert werden.</string>
+</resources>

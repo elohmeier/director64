@@ -7,8 +7,11 @@
 // The console's 128 KiB FlashRAM; every adapter's archive is laid out in it.
 #define WEB_FLASH_BYTES (128u * 1024u)
 // Decoded images the compositor keeps, as RGBA8888. The console holds 3 MiB of
-// 16-bit texels; a browser tab can afford every scene's working set.
+// 16-bit texels; a browser tab can afford every scene's working set. A
+// smaller device's build sets its own.
+#ifndef WEB_IMAGE_BUDGET
 #define WEB_IMAGE_BUDGET (192u * 1024u * 1024u)
+#endif
 
 // The embedder's services: the page (site/app.js) or the Node probe harness.
 typedef struct {

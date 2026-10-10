@@ -26,6 +26,14 @@ needs a current desktop Chrome or Edge (WebCodecs audio/video encoding and the
 origin-private file system); see [docs/web.md](docs/web.md) for details and for
 building the site locally.
 
+## Play on Android TV
+
+`uv run --locked director64 android build --game <slug>` builds one APK per
+game, with the engine and the game converted from your own disc, for a
+Google TV or Android TV device played with a gamepad or the remote. Like a
+ROM, the APK contains the game and is for your own devices only; see
+[docs/android.md](docs/android.md).
+
 ## Supported games
 
 | Game | Director | N64 | Browser |

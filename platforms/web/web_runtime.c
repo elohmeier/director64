@@ -235,6 +235,12 @@ static bool video_frame(void *ctx, unsigned sprite, uint32_t *out, uint32_t cap,
   return host.video_frame &&
          host.video_frame(host.ctx, sprite, out, cap, width, height);
 }
+#if DG_D10
+static void capture_stage(void *ctx, uint32_t member) {
+  (void)ctx;
+  wc_capture_stage(&compositor, member);
+}
+#endif
 static bool rasterize(void *ctx, const char *text, int width, int height,
                       const wc_text_style_t *style, uint8_t *coverage) {
   (void)ctx;
@@ -385,7 +391,7 @@ EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
 #endif
 #if DG_D10
                           .play_file = play_file, .find_movie = find_movie,
-                          .read_data = read_data,
+                          .read_data = read_data, .capture_stage = capture_stage,
 #endif
                           .trace = trace, .hit = hit},
           NULL, global_names, global_count, random_seed);
@@ -586,9 +592,45 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y) {
 #endif
 }
 EMSCRIPTEN_KEEPALIVE const int *d64_text_field_rect(void) { return text_field_rect; }
+// Key fields. Mucklas (D8) takes its player name through its own keyDown
+// handlers, with their letter sounds and length limit, rather than a
+// committed edit; the console opens its on-screen keyboard over the field
+// and sends each character as a key (platforms/n64/text_input.c). The field
+// at the pointer, or with `anywhere` the one taking a name now, while it
+// does; its stage rectangle is filled in as d64_text_field's.
+EMSCRIPTEN_KEEPALIVE unsigned d64_key_field(int x, int y, int anywhere) {
+#if DG_D8
+  if (!booted || values.failed || values.depth)
+    return 0;
+  unsigned first = anywhere ? 1 : dg_mouse_hit(&director, x, y);
+  unsigned last = anywhere ? DG_SPRITES - 1 : first;
+  for (unsigned sprite = first; sprite && sprite <= last && sprite < DG_SPRITES; sprite++)
+    if (mucklas_name_target(&director, sprite)) {
+      dg_bounds(&director, sprite, &text_field_rect[0], &text_field_rect[1],
+                &text_field_rect[2], &text_field_rect[3]);
+      return sprite;
+    }
+#else
+  (void)x;
+  (void)y;
+  (void)anywhere;
+#endif
+  return 0;
+}
+// One character typed into a key field, as the console's keyboard presses
+// and releases it; 8 deletes.
+EMSCRIPTEN_KEEPALIVE void d64_type_key(unsigned character, int down) {
+#if DG_D8
+  if (booted && !values.failed && character <= 255 && director.key_count < 32)
+    dg_key(&director, mucklas_key_code(character), character, down != 0);
+#else
+  (void)character;
+  (void)down;
+#endif
+}
 // The field's text as the keyboard starts from: a lone space is empty.
 EMSCRIPTEN_KEEPALIVE const char *d64_text_value(unsigned sprite) {
-#if DG_EXTENDED
+#if DG_EXTENDED || DG_D8
   if (booted && sprite && sprite < DG_SPRITES) {
     const dg_member_t *m = dg_member(&director, director.sprites[sprite].value.member);
     if (m) {

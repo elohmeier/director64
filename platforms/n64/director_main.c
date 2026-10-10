@@ -1453,13 +1453,13 @@ static bool release_bitmap_blocks(void) {
 }
 #endif
 #if DG_D10
-// The corpus pairs every masked image with a "<name>_mask" member directly
-// after it. Mask ink over any other neighbour copies, as the original does
-// with an unsuitable mask member (the class panel's full-stage base).
+// Mask ink takes the member directly after the image as its mask when that
+// member is one by name (ink.h dg_mask_pair). Mask ink over any other
+// neighbour copies, as the original does with an unsuitable mask member
+// (the class panel's full-stage base).
 static bool mask_pair(const dg_member_t *member, const dg_member_t *mask) {
-  size_t length = strlen(member->name);
-  return !strncmp(mask->name, member->name, length) &&
-         !strcmp(mask->name + length, "_mask");
+  return dg_mask_pair(member->name, mask->name, (int)mask->width - (int)member->width,
+                      (int)mask->height - (int)member->height);
 }
 #endif
 // Renders whose images count as the scene's live working set. A sweep that
@@ -2310,7 +2310,7 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
   if (ink == 9 && !(entry.flags & DG_PACK_MASK_BAKED)) {
     // Director mask ink: the cast member after the sprite's member is its
     // mask. Dark mask pixels keep the image; light ones become transparent.
-    // The corpus pairs every masked image with a matching "<name>_mask".
+    // The member after the image is its mask (mask_pair).
     const dg_member_t *mask_member = dg_member(director, member->id + 1);
     bool masked = false;
     if (mask_member && mask_member->type == 1 && !rgba32 && !indexed &&

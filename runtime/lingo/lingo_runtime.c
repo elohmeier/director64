@@ -2418,6 +2418,9 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
       case LV_FILE: case LV_INSTANCE: case LV_SCRIPT: case LV_XTRA: kind = "object"; break;
       case LV_SOUND: kind = "sound"; break;
       case LV_MEMBER: case LV_FIELD: kind = "member"; break;
+#if DG_D10
+      case LV_IMAGE: kind = "image"; break;
+#endif
       default: break;
     }
     *result = argc == 2 ? lv_num(equal_text(kind, lv_cstr(r, args[1]))) : lv_text(r, kind, true);

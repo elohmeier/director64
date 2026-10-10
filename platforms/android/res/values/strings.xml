@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">Director64</string>
+  <string name="menu_resume">Resume</string>
+  <string name="menu_louder">Louder (volume %1$d%%)</string>
+  <string name="menu_quieter">Quieter (volume %1$d%%)</string>
+  <string name="menu_diagnostics">Show diagnostics</string>
+  <string name="menu_hide_diagnostics">Hide diagnostics</string>
+  <string name="menu_controls">Controls</string>
+  <string name="menu_quit">Quit the game</string>
+  <string name="controls_text">Left stick or D-pad: the cursor (L1 held: fine movement). ✕ or A: click. ○ or B: the second button. Options or Start: Start. Right stick: the C buttons. PS, Share, Back or Menu: this menu. Each controller moves its own cursor.\n\nConnected:</string>
+  <string name="text_title">Enter text</string>
+  <string name="text_bad_character">This character cannot be typed here.</string>
+  <string name="text_refused">The game did not accept this text.</string>
+  <string name="game_ended">The game has ended</string>
+  <string name="game_stopped">The game stopped</string>
+  <string name="saves_kept">Your saves are kept.</string>
+  <string name="close">Close</string>
+  <string name="no_printing">Printing is not available on the TV.</string>
+  <string name="save_failed">The game could not be saved.</string>
+</resources>

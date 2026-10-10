@@ -500,10 +500,14 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
     if (ln == LN_STAGERIGHT) { *out = lv_num(800); return true; }
     if (ln == LN_STAGEBOTTOM) { *out = lv_num(600); return true; }
     if (ln == LN_STAGE) {
+      // The stage's image is image 0: assigned to a member, it becomes the
+      // platform's snapshot of what the stage shows (d10_set).
       lv_t rect = lv_rect(r, 0, 0, 800, 600);
-      *out = lv_list(r, 4,
+      *out = lv_list(r, 6,
                      (lv_t[]){lv_text(r, "rect", true), rect,
-                              lv_text(r, "sourcerect", true), rect}, true);
+                              lv_text(r, "sourcerect", true), rect,
+                              lv_text(r, "image", true), lv_make(LV_IMAGE, 0)},
+                     true);
       return true;
     }
     if (ln == LN_DESKTOPRECTLIST) {
@@ -680,13 +684,16 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
     return true;
   }
   if (lv_type(owner) == LV_IMAGE) {
-    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+    const dg_member_t *m = lv_id(owner) ? dg_member(d, (uint32_t)lv_id(owner)) : NULL;
+    // Image 0 is the stage's, the authored 800x600.
+    unsigned width = lv_id(owner) ? (m ? m->width : 0) : 800;
+    unsigned height = lv_id(owner) ? (m ? m->height : 0) : 600;
     if (ln == LN_RECT) {
-      *out = lv_rect(r, 0, 0, m ? m->width : 0, m ? m->height : 0);
+      *out = lv_rect(r, 0, 0, (int)width, (int)height);
       return true;
     }
-    if (ln == LN_WIDTH) { *out = lv_num(m ? m->width : 0); return true; }
-    if (ln == LN_HEIGHT) { *out = lv_num(m ? m->height : 0); return true; }
+    if (ln == LN_WIDTH) { *out = lv_num((int32_t)width); return true; }
+    if (ln == LN_HEIGHT) { *out = lv_num((int32_t)height); return true; }
   }
   if (lv_type(owner) != LV_WINDOW) return false;
   if (ln == LN_VISIBLE) { *out = lv_num(d->window_visible); return true; }
@@ -757,7 +764,30 @@ static bool d10_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
     return true;
   }
   if (lv_type(owner) == LV_MEMBER && (ln == LN_IMAGE)) {
-    // Assigning a mutated surface back; the mutation itself was traced.
+    // Another member's image or the stage's replaces the member's; the
+    // compositor draws the member from that source from now on. Assigning a
+    // member its own (mutated) surface back keeps it; the mutation itself
+    // was traced.
+    uint32_t member = (uint32_t)lv_id(owner);
+    if (lv_type(value) != LV_IMAGE || (uint32_t)lv_id(value) == member)
+      return true;
+    uint32_t source = (uint32_t)lv_id(value);
+    unsigned slot = d->image_alias_count;
+    for (unsigned i = 0; i < d->image_alias_count; i++)
+      if (d->image_aliases[i].member == member) slot = i;
+    if (slot == DG_IMAGE_ALIASES) {
+      // The oldest replacement gives way.
+      memmove(d->image_aliases, d->image_aliases + 1,
+              (DG_IMAGE_ALIASES - 1) * sizeof(d->image_aliases[0]));
+      slot = DG_IMAGE_ALIASES - 1;
+    } else if (slot == d->image_alias_count) {
+      d->image_alias_count++;
+    }
+    d->image_aliases[slot].member = member;
+    d->image_aliases[slot].source = source;
+    if (!source && d->platform.capture_stage)
+      d->platform.capture_stage(d->context, member);
+    d->visual_revision++;
     return true;
   }
   if (lv_type(owner) == LV_TIMEOUT) {
@@ -1432,5 +1462,13 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     lv_t ignored = {0};
     if (d10_get(d, name, a[0], &ignored)) { *out = ignored; return true; }
   }
+  return false;
+}
+bool dg_image_source(const dg_runtime_t *d, uint32_t member, uint32_t *source) {
+  for (unsigned i = 0; i < d->image_alias_count; i++)
+    if (d->image_aliases[i].member == member) {
+      *source = d->image_aliases[i].source;
+      return true;
+    }
   return false;
 }

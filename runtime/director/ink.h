@@ -3,6 +3,7 @@
 #include "bitmap_tiles.h"
 #include "family.h"
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 // FDI1 stores RGBA5551; FDI2 stores RGBA8888; FDIA stores RGB555 plus A8.
@@ -133,6 +134,40 @@ static inline uint16_t dg_fdic_texel(const uint8_t *data, unsigned bits,
   }
   return dg_fdi_be16(data + 32 + index * 2);
 }
+// Mask ink takes the cast member after the sprite's as its mask (ScummVM
+// channel.cpp getMask) when that member is one. The corpus names masks after
+// their image, "<name>_mask", "<name>mask" or "<name>_Mask", which may be a
+// few pixels larger; a sibling-named mask ("highscore_pict_old" is followed
+// by "highscore_pict_mask") is one only at the image's size, since
+// neighbouring animation frames precede other sprites' masks. Any other
+// neighbour ("Stand" before "Move left") is no mask, and the image then
+// draws as it is, as the original does.
+static inline bool dg_mask_pair(const char *image, const char *mask, int width_difference,
+                                int height_difference) {
+  if (!image || !mask)
+    return false;
+  size_t length = 0;
+  while (image[length] && (image[length] | 32) == (mask[length] | 32))
+    length++;
+  const char *rest = image[length] ? NULL : mask + length;
+  if (rest && *rest == '_')
+    rest++;
+  if (rest && (rest[0] | 32) == 'm' && (rest[1] | 32) == 'a' && (rest[2] | 32) == 's' &&
+      (rest[3] | 32) == 'k' && !rest[4])
+    return true;
+  bool named = false;
+  for (const char *p = mask; *p && !named; p++)
+    named = (p[0] | 32) == 'm' && (p[1] | 32) == 'a' && (p[2] | 32) == 's' && (p[3] | 32) == 'k';
+  return named && width_difference >= -3 && width_difference <= 3 && height_difference >= -3 &&
+         height_difference <= 3;
+}
+// Inks that draw the bitmap's whole rectangle, its recovered matte unused:
+// Copy and Blend, and the bitwise and arithmetic Transparent, Not
+// Transparent and Subtract Pin, whose white or black pixels outside the
+// matte still change the stage.
+static inline bool dg_ink_whole_rect(unsigned ink) {
+  return ink == 0 || ink == 32 || ink == 1 || ink == 5 || ink == 35;
+}
 static inline uint8_t dg_bitmap_alpha16(uint16_t color, uint8_t alpha,
                                         unsigned ink) {
   return ink == 36 && (color & 65534u) == 65534u ? 0 : alpha;
@@ -141,7 +176,7 @@ static inline uint32_t dg_bitmap_ink32(uint32_t pixel, unsigned ink,
                                        bool follow_alpha) {
   if (ink == 36 && (pixel >> 8) == 0xffffffu)
     return pixel & 0xffffff00u;
-  if ((ink == 0 || ink == 32) && !follow_alpha)
+  if (dg_ink_whole_rect(ink) && !follow_alpha)
     return pixel | 255u;
   return pixel;
 }
@@ -149,7 +184,7 @@ static inline uint16_t dg_bitmap_ink16(uint16_t pixel, unsigned ink,
                                        bool follow_alpha) {
   if (ink == 36 && (pixel & 65534u) == 65534u)
     return pixel & 65534u;
-  if ((ink == 0 || ink == 32) && !follow_alpha)
+  if (dg_ink_whole_rect(ink) && !follow_alpha)
     return pixel | 1u;
   return pixel;
 }

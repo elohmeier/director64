@@ -89,6 +89,11 @@ static void evict(wc_t *c, wc_image_t *image) {
   c->evictions++;
 }
 void wc_release(wc_t *c) {
+#if DG_D10
+  free(c->stage_snapshot.pixels);
+  memset(&c->stage_snapshot, 0, sizeof(c->stage_snapshot));
+  c->snapshot_member = 0;
+#endif
   for (unsigned i = 0; i < WC_IMAGE_SLOTS; i++)
     if (c->images[i].pixels)
       evict(c, &c->images[i]);
@@ -208,13 +213,12 @@ bool wc_hit(wc_t *c, lv_runtime_t *values, const dg_member_t *m, unsigned ink,
 
 #if DG_D10
 // Director's mask ink: the cast member after the sprite's is its mask, and
-// light mask pixels make the image transparent. The corpus pairs every
-// masked image with a "<name>_mask" member; any other neighbour leaves the
-// image as it is, as the console's loader does (director_main.c mask_pair).
+// light mask pixels make the image transparent; a neighbour that is no mask
+// leaves the image as it is (ink.h dg_mask_pair), as the console's loader
+// does (director_main.c mask_pair).
 static bool mask_pair(const dg_member_t *member, const dg_member_t *mask) {
-  size_t length = strlen(member->name);
-  return !strncmp(mask->name, member->name, length) &&
-         !strcmp(mask->name + length, "_mask");
+  return dg_mask_pair(member->name, mask->name, (int)mask->width - (int)member->width,
+                      (int)mask->height - (int)member->height);
 }
 static void apply_mask(wc_t *c, const dg_member_t *mask, wc_image_t *image) {
   unsigned width, height;
@@ -270,18 +274,31 @@ static void fill(wc_t *c, int l, int t, int r, int b, uint32_t color) {
       c->pixels[y * WC_WIDTH + x] = color;
 }
 #if DG_MODERN
-// Director's Darken ink: the RGB minimum, or an ordinary blend when the sprite
-// has a blend of its own (ScummVM graphics.cpp), over the source coverage.
-static inline void darken(uint32_t *d, uint32_t s, unsigned coverage,
-                          unsigned opacity) {
+// Director's inks that combine the source with the stage per pixel, as
+// ScummVM's 32-bit path computes them (graphics.cpp): Darken picks each RGB
+// minimum; Transparent and Not Transparent are the 8-bit palette index ORs
+// that, with white at index 0 and black at 255, become ANDs of the RGB
+// (black source darkens, white leaves the stage; Not Transparent the
+// reverse); Subtract Pin subtracts and stops at black. An enabled sprite
+// blend takes precedence over the ink, and only the source's coverage is
+// drawn.
+static inline bool arithmetic_ink(unsigned ink) {
+  return ink == 1 || ink == 5 || ink == 35 || ink == 39;
+}
+static inline void arithmetic(uint32_t *d, uint32_t s, unsigned ink, unsigned coverage,
+                              unsigned opacity) {
   unsigned alpha = coverage * opacity;
   if (!alpha)
     return;
   uint32_t o = *d, result = 0xff000000u;
   for (unsigned shift = 0; shift < 24; shift += 8) {
-    unsigned sc = (s >> shift) & 255, dc = (o >> shift) & 255;
-    unsigned ink = opacity < 100 ? sc : (sc < dc ? sc : dc);
-    result |= ((ink * alpha + dc * (25500u - alpha)) / 25500u) << shift;
+    unsigned sc = (s >> shift) & 255, dc = (o >> shift) & 255, value = sc;
+    if (opacity >= 100)
+      value = ink == 39   ? (sc < dc ? sc : dc)
+              : ink == 1  ? (sc & dc)
+              : ink == 5  ? (dc & ~sc & 255u)
+                          : (dc > sc ? dc - sc : 1) - 1; // 35
+    result |= ((value * alpha + dc * (25500u - alpha)) / 25500u) << shift;
   }
   *d = result;
 }
@@ -345,8 +362,8 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
       uint32_t pixel = image->pixels[(size_t)sy * w + sx];
       unsigned coverage = pixel >> 24;
 #if DG_MODERN
-      if (ink == 39) {
-        darken(&row[x], pixel, coverage, opacity);
+      if (arithmetic_ink(ink)) {
+        arithmetic(&row[x], pixel, ink, coverage, opacity);
         continue;
       }
 #endif
@@ -610,11 +627,28 @@ static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy) {
         continue;
       }
 #endif
+#if DG_D10
+      // A member whose image a script replaced draws from its new source.
+      dg_member_t replaced;
+      uint32_t source;
+      if (m && m->type == 1 && dg_image_source(d, m->id, &source)) {
+        if (!source) {
+          if (c->stage_snapshot.pixels && c->snapshot_member == m->id)
+            draw_bitmap(c, d, s, &c->stage_snapshot, l, t, r, b, 0, opacity, ox, oy);
+          continue;
+        }
+        const dg_member_t *from = dg_member(d, source);
+        if (from && from->type == 1 && from->asset && from->asset[0]) {
+          replaced = *from;
+          m = &replaced;
+        }
+      }
+#endif
       if (m && m->type == 1) {
         unsigned ink = s->value.ink;
         if (ink != 0 && ink != 8 && ink != 36
 #if DG_MODERN
-            && ink != 32 && ink != 39
+            && ink != 32 && !arithmetic_ink(ink)
 #endif
 #if DG_D10
             && ink != 9
@@ -821,6 +855,28 @@ static void draw_cursor(wc_t *c, dg_runtime_t *d, dg_cursor_t cursor,
     }
 }
 
+#if DG_D10
+void wc_capture_stage(wc_t *c, uint32_t member) {
+  wc_image_t *snapshot = &c->stage_snapshot;
+  if (!snapshot->pixels) {
+    snapshot->pixels = malloc(sizeof(c->scene));
+    if (!snapshot->pixels)
+      return;
+    snapshot->bytes = sizeof(c->scene);
+    snapshot->width = WC_WIDTH;
+    snapshot->height = WC_HEIGHT;
+  }
+  // Before anything was composited the stage is white.
+  if (c->drawn)
+    memcpy(snapshot->pixels, c->scene, sizeof(c->scene));
+  else
+    memset(snapshot->pixels, 255, sizeof(c->scene));
+  for (size_t i = 0; i < (size_t)WC_WIDTH * WC_HEIGHT; i++)
+    snapshot->pixels[i] |= 0xff000000u;
+  c->snapshot_member = member;
+}
+#endif
+
 bool wc_render(wc_t *c, dg_runtime_t *d, int pointer_x, int pointer_y,
                bool pointer_shown, unsigned externals) {
   const wc_pointer_t pointer = {pointer_x, pointer_y, 1};
@@ -861,6 +917,9 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
   } else
 #endif
     draw_scene(c, d, 0, 0);
+#if DG_D10
+  memcpy(c->scene, c->pixels, sizeof(c->scene));
+#endif
 #if DG_D5
   if (d->ticks < d->alert_until && !d->values->failed) {
     // A recovered script alert, in the console's builtin font.

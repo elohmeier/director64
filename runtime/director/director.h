@@ -94,6 +94,7 @@ _Static_assert(DG_TIMEOUT_ROOT + DG_TIMEOUTS < LV_ROOTS,
 // scripts (a text field and its ActionScript geometry). Each slot roots one
 // property bag; the exercises address a handful per screen.
 #define DG_FLASH_OBJECTS 64
+#define DG_IMAGE_ALIASES 8
 #define DG_FLASH_ROOT (DG_TIMEOUT_ROOT + DG_TIMEOUTS)
 _Static_assert(DG_FLASH_ROOT + DG_FLASH_OBJECTS < LV_ROOTS,
                "flash object roots must fit in the Lingo root table");
@@ -315,6 +316,9 @@ typedef struct {
   // (the exercise task databases). Never a host path, and never writable:
   // mutable records live in the save archive behind read_file.
   bool (*read_data)(void *, const char *, char *, unsigned, unsigned *);
+  // Keep what the stage shows now as the member's image (`member.image =
+  // (the stage).image`); NULL leaves such members showing their own image.
+  void (*capture_stage)(void *, uint32_t member);
 #endif
 } dg_platform_t;
 typedef struct {
@@ -555,6 +559,17 @@ typedef struct {
   // its list does, which is the same funnel event_channels relies on.
   uint32_t event_quiet[3][(DG_SPRITES + 31) / 32];
 #endif
+#if DG_D10
+  // Bitmap members whose image a script replaced (`member.image = x`): drawn
+  // from another member's image, or with source 0 from the snapshot of the
+  // stage the platform took when `(the stage).image` was assigned. The
+  // authored stage covers take that snapshot before a scene changes and
+  // show it until the new scene is set up.
+  struct {
+    uint32_t member, source;
+  } image_aliases[DG_IMAGE_ALIASES];
+  unsigned image_alias_count;
+#endif
 } dg_runtime_t;
 
 void dg_init(dg_runtime_t *, lv_runtime_t *, dg_platform_t, void *,
@@ -600,6 +615,9 @@ void dg_update_stage(dg_runtime_t *);
 // property services; refreshes D8 event eligibility even if already stage-dirty.
 void dg_sprite_changed(dg_runtime_t *, unsigned);
 #if DG_D10
+// Whether a script replaced the member's image, and with what: another
+// member's id, or 0 for the platform's stage snapshot.
+bool dg_image_source(const dg_runtime_t *, uint32_t member, uint32_t *source);
 // The named field of a Flash member, matched case-insensitively against the
 // recorded instance name or bound variable; NULL when the name is not a field.
 const dg_flash_field_t *dg_flash_field_find(const dg_member_t *, const char *);
