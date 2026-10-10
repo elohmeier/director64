@@ -18,8 +18,9 @@ redistributed.
 
 **<https://elohmeier.github.io/director64/>**
 
-Choose a game, select your disc image (`.iso`), and the page converts and
-caches it in the browser, then plays it. Saves stay in browser storage. Play
+Choose a game, select your disc image (an `.iso`, or a raw `.img`/`.bin` rip
+of the same disc), and the page converts and caches it in the browser, then
+plays it. Saves stay in browser storage. Play
 with the mouse or a gamepad (a DualShock 4 works), in a window or fullscreen. It
 needs a current desktop Chrome or Edge (WebCodecs audio/video encoding and the
 origin-private file system); see [docs/web.md](docs/web.md) for details and for
@@ -37,7 +38,9 @@ building the site locally.
 | [Lernerfolg Grundschule Deutsch 1-2](games/lernerfolg-deutsch-1-2/README.md) | 10 | Experimental | Yes |
 
 Each port supports one specific edition, identified by the disc image's
-SHA-256; [docs/games.md](docs/games.md) lists the catalogued sources. The
+SHA-256. An edition may also list alternate rips of the same pressing, such as
+a raw CloneCD `.img`, each pinned by its own SHA-256;
+[docs/games.md](docs/games.md) lists the catalogued sources. The
 engine's design is in [docs/architecture.md](docs/architecture.md), the plans
 in [docs/roadmap.md](docs/roadmap.md) and [docs/web-roadmap.md](docs/web-roadmap.md),
 and the history of the ports and their optimization in
@@ -189,7 +192,8 @@ uv run --locked director64 release --game findus-workshop
 
 `--source <source-id>` selects a catalogued edition explicitly. Every game-dependent
 command requires `--game`; there is no implicit workshop build. `extract` supports
-catalogued ISO and ZIP sources independently of port support. `build --reuse-assets`
+catalogued ISO and ZIP sources independently of port support; a disc image is
+read as cooked 2048-byte sectors or as a raw 2352-byte rip. `build --reuse-assets`
 skips source conversion when working only on runtime code. It verifies the source
 hash, compiler/ABI inputs and generated-file receipt before using the cache.
 

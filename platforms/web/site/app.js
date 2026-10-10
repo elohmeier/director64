@@ -307,7 +307,8 @@ async function main() {
 
   function editions() {
     return [t("import.editions"),
-      ...profiles.map((p) => `• ${p.title}: ${p.source.file} (${megabytes(p.source.bytes)})`)].join("\n");
+      ...profiles.map((p) => `• ${p.title}: ` + [p.source, ...(p.source.alternates ?? [])]
+        .map((i) => `${i.file} (${megabytes(i.bytes)})`).join(" / "))].join("\n");
   }
 
   function importDisc(file) {

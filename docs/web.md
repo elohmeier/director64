@@ -11,7 +11,7 @@ Policy confines the page to its own origin.
 
 | Game | Family | Source | Import | Status |
 | --- | --- | --- | --- | --- |
-| Pettersson und Findus (Workshop) | D6 | `FINDUS.iso` | 6 s | plays |
+| Pettersson und Findus (Workshop) | D6 | `FINDUS.iso` or its raw rip `CD01.img` | 6 s | plays |
 | Autos bauen mit Willy Werkel | extended D6 | the edition's ZIP | 7 s | plays |
 | Findus: Christmas calendar | D7 | `FINDUS3.ISO` | 6 s | plays |
 | Findus bei den Mucklas | D8 | `Findus4.iso` | 14 s | plays |
@@ -115,8 +115,8 @@ the site lists every game with a profile and a built runtime.
 
 | Stage | What runs | Where it came from |
 | --- | --- | --- |
-| Verify | Size, then full SHA-256 of the image against the profile's pinned edition, streamed from the `File` in 8 MiB reads | `compiler/src/iso.rs` / `sha2` in `compiler/wasm` |
-| Extract | ISO 9660 inventory over bounded reads (`FileReaderSync` in the worker), every file into the in-memory file system | Rust port of `iso.py` |
+| Verify | Size, then full SHA-256 of the image against the profile's pinned edition or one of its alternate rips, streamed from the `File` in 8 MiB reads | `compiler/src/iso.rs` / `sha2` in `compiler/wasm` |
+| Extract | ISO 9660 inventory over bounded reads (`FileReaderSync` in the worker), every file into the in-memory file system; a raw 2352-byte rip (CloneCD `.img`, `.bin`) is read through its sectors' user data | Rust port of `iso.py` |
 | Parse | ProjectorRays parses each Director file once; its chunks, records and decompiled scripts become a dump | `director plan` in `compiler/src/convert/plan.rs`, then `tools/director/dump-format.mjs` |
 | Analyze, audit | Recovery of scripts, casts and score chunks; the source policy's pinned denominators | `compiler/src/convert/analyze.rs`, `audit.rs` |
 | Scores | The structural score decoder | `compiler/src/convert/score.rs` (port of `tools/projectorrays/score_recovery.cpp`) |

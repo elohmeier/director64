@@ -1,0 +1,13 @@
+schema_version = 1
+slug = "findus-circus"
+title = "Pettersson und Findus: Hühnertanz und Katerzirkus"
+status = "catalogued"
+default_source = "sha256-40d3f559158e"
+
+# A raw CloneCD image (2352-byte sectors); the importer reads its data track.
+[[sources]]
+id = "sha256-40d3f559158e"
+file = "CD01.img"
+sha256 = "40d3f559158e8f606487563c0d9ad4712cbb6cd6836587d7fc555aaa872be9a9"
+bytes = 557699184
+kind = "iso9660"

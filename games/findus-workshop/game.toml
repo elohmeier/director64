@@ -11,6 +11,13 @@ sha256 = "fc24ffe284ec90d4661f807a0c84c29a23171bf9e43b85225f414504f12fe389"
 bytes = 119457792
 kind = "iso9660"
 
+# The same pressing as a raw CloneCD image: its 58,329 cooked sectors are
+# FINDUS.iso's.
+[[sources.alternates]]
+file = "CD01.img"
+sha256 = "1584bd969d74f8b103913348fe798bb4eda0d75648018066848430e927b44e9f"
+bytes = 137900112
+
 [port]
 director_version = 600
 media_root = "POFMEDIA"

@@ -109,16 +109,19 @@ impl Source for Embedder {
         }
     }
 }
-/// The inventory as JSON [[path, offset, length], ...].
+/// The inventory as JSON {"layout": [stride, data], "files": [[path,
+/// offset, length], ...]}, offsets logical (iso::Layout).
 #[unsafe(no_mangle)]
 pub extern "C" fn d64c_iso_inventory(size: f64) -> u32 {
     if !(0.0..=9.0e15).contains(&size) {
         return finish(Err("invalid image size".into()));
     }
-    finish(iso::inventory(&mut Embedder(size as u64)).map(|entries| {
+    let mut source = Embedder(size as u64);
+    finish(iso::Layout::detect(&mut source).and_then(|layout| {
+        let entries = iso::inventory(&mut source)?;
         let rows: Vec<serde_json::Value> =
             entries.iter().map(|e| serde_json::json!([e.path, e.offset, e.length])).collect();
-        serde_json::Value::Array(rows).to_string().into_bytes()
+        Ok(serde_json::json!({"layout": [layout.stride, layout.data], "files": rows}).to_string().into_bytes())
     }))
 }
 

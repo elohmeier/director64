@@ -123,7 +123,7 @@ def capture(args: argparse.Namespace) -> int:
     replay = read_replay(replay_path)
     source = (args.source or game_spec.work / "extracted").resolve(strict=True)
     iso = (args.iso or game_spec.media).resolve(strict=True)
-    extract(iso, source, expected_sha256=game_spec.source["sha256"])
+    extract(iso, source, expected_sha256=game_spec.image["sha256"])
     for relative in ("ANNAT/PETT16.EXE", "ANNAT/DATA/FILEIO.DLL", "POFMEDIA/GINTRO.DXR"):
         if not (source / relative).is_file():
             raise ValueError(f"original source file missing: {relative}")

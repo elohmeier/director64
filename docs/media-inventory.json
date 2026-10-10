@@ -7,8 +7,8 @@
     "worktree": "clean when inspected",
     "file": "engines/director/detection_tables.h"
   },
-  "total_containers": 8,
-  "total_bytes": 3086733780,
+  "total_containers": 11,
+  "total_bytes": 4888668772,
   "sources": [
     {
       "display_title": "Pettersson und Findus",
@@ -37,7 +37,20 @@
       "refactor_verification": {
         "sha256": "passed before relocation",
         "inventory": "passed with new importer"
-      }
+      },
+      "alternates": [
+        {
+          "file": "CD01.img",
+          "bytes": 137900112,
+          "sha256": "1584bd969d74f8b103913348fe798bb4eda0d75648018066848430e927b44e9f",
+          "kind": "iso9660-raw-image",
+          "sector_layout": {
+            "stride": 2352,
+            "user_data": 16
+          },
+          "verification": "a CloneCD rip of the same pressing: its 58,329 cooked sectors equal FINDUS.iso; native extraction and the browser importer's package are byte-identical"
+        }
+      ]
     },
     {
       "display_title": "Neues von Pettersson und Findus",
@@ -298,6 +311,117 @@
       },
       "path": "media/lernerfolg-deutsch-1-2/sha256-4c87e10dcc99/Deutsch12.iso",
       "game_slug": "lernerfolg-deutsch-1-2",
+      "port_status": "catalogued"
+    },
+    {
+      "display_title": "Pettersson und Findus: Die Gespenster-Erschreckmaschine",
+      "identification_evidence": "PFSTART.EXE is a Director 8.5 projector (its font map names Director 8.5; FileIO Xtra 9.0) and README.TXT names the title. Local ScummVM lists the title only as pettson4, the Swedish Director 9 edition.",
+      "source_id": "sha256-05d7ad483501",
+      "bytes": 630538272,
+      "sha256": "05d7ad48350100e96d1deadb10f0dfd5f099dc19d7b63180647ca756239ed41b",
+      "inspection_scope": "Container metadata and selected identification files; full SHA-256 verified and current importer inventory and extraction passed. Game execution is not qualified.",
+      "container": {
+        "kind": "iso9660-raw-image",
+        "sector_layout": {
+          "stride": 2352,
+          "user_data": 16
+        },
+        "normal_file_records": 485,
+        "associated_file_records": 31,
+        "extensions_normal_files": {
+          ".aif": 414,
+          ".bmp": 5,
+          ".cxt": 6,
+          ".dat": 1,
+          ".dll": 4,
+          ".dxr": 22,
+          ".exe": 4,
+          ".ico": 3,
+          ".inf": 1,
+          ".ini": 1,
+          ".qda": 1,
+          ".reg": 1,
+          ".sfk": 3,
+          ".txt": 2,
+          ".x32": 14,
+          ".x64": 3
+        },
+        "current_importer": "inventory passed; file contents are copied from each sector's user data, including the protection decoys under ZDATA/"
+      },
+      "path": "media/findus-ghosts/sha256-05d7ad483501/CD01.img",
+      "game_slug": "findus-ghosts",
+      "port_status": "catalogued"
+    },
+    {
+      "display_title": "Pettersson und Findus: Hühnertanz und Katerzirkus",
+      "identification_evidence": "PF2/PF2.EXE is a Director MX projector (its Xtra paths name Director MX) and README.TXT names the title. Local ScummVM has no entry for this title.",
+      "source_id": "sha256-40d3f559158e",
+      "bytes": 557699184,
+      "sha256": "40d3f559158e8f606487563c0d9ad4712cbb6cd6836587d7fc555aaa872be9a9",
+      "inspection_scope": "Container metadata and selected identification files; full SHA-256 verified and current importer inventory and extraction passed. Game execution is not qualified.",
+      "container": {
+        "kind": "iso9660-raw-image",
+        "sector_layout": {
+          "stride": 2352,
+          "user_data": 16
+        },
+        "normal_file_records": 624,
+        "associated_file_records": 619,
+        "extensions_normal_files": {
+          ".aif": 515,
+          ".bmp": 2,
+          ".cxt": 38,
+          ".dll": 6,
+          ".dxr": 20,
+          ".exe": 5,
+          ".ico": 3,
+          ".inf": 1,
+          ".ini": 3,
+          ".reg": 1,
+          ".txt": 3,
+          ".wse": 1,
+          ".x32": 23,
+          ".x64": 3
+        },
+        "current_importer": "inventory passed; file contents are copied from each sector's user data, including the protection decoys under ZDATA/"
+      },
+      "path": "media/findus-circus/sha256-40d3f559158e/CD01.img",
+      "game_slug": "findus-circus",
+      "port_status": "catalogued"
+    },
+    {
+      "display_title": "Pettersson und Findus: Der Torten werfende Geburtstagskater",
+      "identification_evidence": "SPIEL/PF3.EXE is a Director projector whose font map names Director 8.5, and README.TXT names the title. Local ScummVM has no entry for this title (its Swedish counterpart Födelsedagskatten is absent too).",
+      "source_id": "sha256-dadd038fff19",
+      "bytes": 613697536,
+      "sha256": "dadd038fff195b08afeb1c97c4c8b8b943d776ff339868856805d96755f0670e",
+      "inspection_scope": "Container metadata and selected identification files; full SHA-256 verified and current importer inventory and extraction passed. Game execution is not qualified.",
+      "container": {
+        "kind": "iso9660-image",
+        "normal_file_records": 158,
+        "associated_file_records": 47,
+        "extensions_normal_files": {
+          ".bmp": 1,
+          ".cxt": 54,
+          ".dat": 2,
+          ".dll": 5,
+          ".dxr": 29,
+          ".exe": 5,
+          ".flg": 2,
+          ".ico": 3,
+          ".inf": 1,
+          ".ini": 3,
+          ".ttf": 1,
+          ".txt": 2,
+          ".x32": 23,
+          ".x64": 3,
+          ".xml": 19,
+          ".xsd": 4
+        },
+        "current_importer": "inventory passed; the volume descriptor declares 301,455 sectors for a 299,657-sector image (copy protection), so the decoy ZDATA/SOUND.X64 runs past the image and reads as zeros there"
+      },
+      "path": "media/findus-birthday/sha256-dadd038fff19/Geburtstagskater.iso",
+      "game_slug": "findus-birthday",
       "port_status": "catalogued"
     }
   ]

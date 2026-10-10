@@ -1,0 +1,13 @@
+schema_version = 1
+slug = "findus-ghosts"
+title = "Pettersson und Findus: Die Gespenster-Erschreckmaschine"
+status = "catalogued"
+default_source = "sha256-05d7ad483501"
+
+# A raw CloneCD image (2352-byte sectors); the importer reads its data track.
+[[sources]]
+id = "sha256-05d7ad483501"
+file = "CD01.img"
+sha256 = "05d7ad48350100e96d1deadb10f0dfd5f099dc19d7b63180647ca756239ed41b"
+bytes = 630538272
+kind = "iso9660"

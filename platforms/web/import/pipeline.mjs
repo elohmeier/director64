@@ -37,17 +37,48 @@ export function imageSha256(source, converter, onProgress, signal) {
   return hash.hex();
 }
 
+// An edition's pinned images: its disc image and any alternate rips of the
+// same pressing (a raw CloneCD .img or a .bin), each by size and SHA-256.
+export function editionImages(profile) {
+  return [profile.source, ...(profile.source.alternates ?? [])];
+}
+
 // The profile whose pinned edition this image is, verified by its full
 // digest; a size match only nominates candidates.
 export function identify(source, profiles, converter, onProgress, signal) {
-  const candidates = profiles.filter((p) => p.source.bytes === source.size);
+  const candidates = profiles.filter((p) => editionImages(p).some((i) => i.bytes === source.size));
   if (!candidates.length)
     throw new ImportError("This disc image is not a supported edition (no edition has its size).", "edition");
   const digest = imageSha256(source, converter, onProgress, signal);
-  const profile = candidates.find((p) => p.source.sha256 === digest);
+  const profile = candidates.find((p) => editionImages(p).some((i) => i.bytes === source.size && i.sha256 === digest));
   if (!profile)
     throw new ImportError(`This disc image is not a supported edition (SHA-256 ${digest}).`, "edition");
   return {profile, digest};
+}
+
+// A file's bytes at a logical offset of a disc image (iso.rs Layout): a
+// cooked image's directly, a raw rip's from each sector's user data as it
+// is (protected discs carry damaged sectors in decoy files; the converter
+// has checked the descriptors and directories). Past the image's end, as
+// an overstated volume's decoys run, it reads as zeros. This runs outside
+// the converter, which may be mid-stage when a file is read.
+export function readLogical(readAt, {stride, data}, offset, length) {
+  if (stride === 2048) {
+    const bytes = readAt(offset, length);
+    if (bytes.length === length) return bytes;
+    const out = new Uint8Array(length);
+    out.set(bytes);
+    return out;
+  }
+  const first = Math.floor(offset / 2048), last = Math.max(first, Math.floor((offset + length - 1) / 2048));
+  const raw = readAt(first * stride, (last - first + 1) * stride), out = new Uint8Array(length);
+  for (let sector = first, done = 0; sector <= last; sector++) {
+    const at = (sector - first) * stride + data;
+    const from = Math.max(offset, sector * 2048) - sector * 2048, to = Math.min(offset + length, (sector + 1) * 2048) - sector * 2048;
+    out.set(raw.subarray(at + from, at + to), done);
+    done += to - from;
+  }
+  return out;
 }
 
 function pack(vfs, directory, rename = (name) => name) {
@@ -142,8 +173,9 @@ export async function importGame({source, profile, tools, onProgress = () => {},
 
   await stage("verify", async (progress) => {
     if (verified) return;
-    if (source.size !== profile.source.bytes ||
-        imageSha256(source, tools.converter, progress, signal) !== profile.source.sha256)
+    const images = editionImages(profile).filter((i) => i.bytes === source.size);
+    const digest = images.length ? imageSha256(source, tools.converter, progress, signal) : null;
+    if (!images.some((i) => i.sha256 === digest))
       throw new ImportError("This disc image is not the edition this game profile supports.", "edition");
   });
 
@@ -151,8 +183,8 @@ export async function importGame({source, profile, tools, onProgress = () => {},
     const read = (offset, length) => source.readAt(offset, length);
     // An edition is catalogued as a disc image or as a ZIP of the disc's files.
     const zip = profile.source.kind === "zip";
-    const entries = zip ? tools.converter.zipInventory(source.size, read)
-      : tools.converter.isoInventory(source.size, read);
+    const disc = zip ? null : tools.converter.isoInventory(source.size, read);
+    const entries = zip ? tools.converter.zipInventory(source.size, read) : disc.files;
     vfs.mkdir("/work/extracted", true);
     let done = 0;
     for (const entry of entries) {
@@ -164,7 +196,7 @@ export async function importGame({source, profile, tools, onProgress = () => {},
       // stages reads a file, so the files stages read (Director files and
       // projectors) are inflated now; only the rest waits.
       if (!zip)
-        vfs.writeLazy(target, entry.length, () => source.readAt(entry.offset, entry.length));
+        vfs.writeLazy(target, entry.length, () => readLogical(read, disc.layout, entry.offset, entry.length));
       else if (/\.(dxr|cxt|cst|dir|exe)$/i.test(entry.path))
         vfs.write(target, tools.converter.zipFile(source.size, entry.index, read));
       else

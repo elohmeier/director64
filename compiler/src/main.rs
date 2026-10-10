@@ -402,14 +402,17 @@ impl director64_aot::iso::Source for FileSource {
     }
 }
 
-/// The image's inventory as JSON [[path, offset, length], ...].
+/// The image's inventory as JSON {"layout": [stride, data], "files":
+/// [[path, offset, length], ...]}, offsets logical (iso::Layout).
 fn iso_inventory(image: &PathBuf) -> Result<String, String> {
     let handle = std::fs::File::open(image).map_err(|e| format!("{}: {e}", image.display()))?;
     let size = handle.metadata().map_err(|e| e.to_string())?.len();
-    let entries = director64_aot::iso::inventory(&mut FileSource(handle, size))?;
+    let mut source = FileSource(handle, size);
+    let layout = director64_aot::iso::Layout::detect(&mut source)?;
+    let entries = director64_aot::iso::inventory(&mut source)?;
     let rows: Vec<serde_json::Value> =
         entries.iter().map(|e| serde_json::json!([e.path, e.offset, e.length])).collect();
-    Ok(serde_json::Value::Array(rows).to_string())
+    Ok(serde_json::json!({"layout": [layout.stride, layout.data], "files": rows}).to_string())
 }
 
 /// The image's inventory with each file's SHA-256, one JSON line per file.

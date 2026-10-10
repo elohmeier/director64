@@ -6,6 +6,9 @@
 | `findus-garden` | Neues von Pettersson und Findus | Catalogued |
 | `findus-christmas` | Findus wartet auf Weihnachten | [Experimental D7 port](../games/findus-christmas/README.md) |
 | `findus-mucklas` | Findus bei den Mucklas | [Experimental D8 port](../games/findus-mucklas/README.md) |
+| `findus-ghosts` | Pettersson und Findus: Die Gespenster-Erschreckmaschine | Catalogued |
+| `findus-circus` | Pettersson und Findus: Hühnertanz und Katerzirkus | Catalogued |
+| `findus-birthday` | Pettersson und Findus: Der Torten werfende Geburtstagskater | Catalogued |
 | `willy-werkel-cars` | Autos bauen mit Willy Werkel | [Experimental D6 port](../games/willy-werkel-cars/README.md) |
 | `fritz-fertig-1` | Fritz & Fertig | Catalogued |
 | `loewenzahn-1` | Löwenzahn 1 | [Experimental D5 port](../games/loewenzahn-1/README.md) |

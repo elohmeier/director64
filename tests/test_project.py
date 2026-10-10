@@ -32,7 +32,59 @@ def test_unknown_edition_fails_closed():
 def test_all_catalogued_sources_have_distinct_full_hashes():
     root = GameSpec.load("findus-workshop").root
     games = [GameSpec.load(p.parent.name) for p in root.glob("games/*/game.toml")]
-    assert len(games) == 8
-    assert len({g.source["sha256"] for g in games}) == 8
+    assert len(games) == 11
+    assert len({g.source["sha256"] for g in games}) == 11
     assert all(g.media.is_relative_to(root / "media" / g.slug) for g in games)
     assert all(Path(g.source["file"]).name == g.source["file"] for g in games)
+
+
+def alternate_root(tmp_path: Path, **alternate) -> Path:
+    game = tmp_path / "games/disc"
+    game.mkdir(parents=True)
+    game.joinpath("game.toml").write_text(
+        f"""schema_version = 1
+slug = "disc"
+title = "Disc"
+status = "catalogued"
+default_source = "sha256-{"a" * 12}"
+
+[[sources]]
+id = "sha256-{"a" * 12}"
+file = "DISC.iso"
+sha256 = "{"a" * 64}"
+bytes = 2048
+kind = "iso9660"
+
+[[sources.alternates]]
+"""
+        + "".join(f"{key} = {value!r}\n".replace("'", '"') for key, value in alternate.items())
+    )
+    return tmp_path
+
+
+def test_an_alternate_rip_is_found_and_keeps_the_edition(tmp_path: Path):
+    root = alternate_root(tmp_path, file="CD01.img", sha256="b" * 64, bytes=2352)
+    game = GameSpec.load("disc", root=root)
+    assert game.image["file"] == "DISC.iso"
+    directory = root / "media/disc" / game.source["id"]
+    directory.mkdir(parents=True)
+    (directory / "CD01.img").write_bytes(b"")
+    assert game.image["sha256"] == "b" * 64
+    assert game.media == directory / "CD01.img"
+    assert game.source["sha256"] == "a" * 64
+    (directory / "DISC.iso").write_bytes(b"")
+    assert game.media == directory / "DISC.iso"
+
+
+@pytest.mark.parametrize(
+    ("alternate", "message"),
+    [
+        ({"file": "../CD01.img", "sha256": "b" * 64, "bytes": 1}, "basename"),
+        ({"file": "CD01.img", "sha256": "a" * 64, "bytes": 1}, "duplicate"),
+        ({"file": "disc.ISO", "sha256": "b" * 64, "bytes": 1}, "distinct"),
+        ({"file": "CD01.img", "sha256": "b" * 63, "bytes": 1}, "SHA-256"),
+    ],
+)
+def test_alternate_rips_are_validated(tmp_path: Path, alternate, message):
+    with pytest.raises(ValueError, match=message):
+        GameSpec.load("disc", root=alternate_root(tmp_path, **alternate))

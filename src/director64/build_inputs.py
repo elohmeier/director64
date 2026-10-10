@@ -106,5 +106,5 @@ def verify(game):
         raise ValueError("source/compiler/ABI inputs changed; rebuild assets for the selected game")
     if receipt.get("generated") != generated(game):
         raise ValueError("generated inputs changed; rebuild assets for the selected game")
-    if file_sha256(game.media) != game.source["sha256"]:
+    if file_sha256(game.media) != game.image["sha256"]:
         raise ValueError("source container hash changed")

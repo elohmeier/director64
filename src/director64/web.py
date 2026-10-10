@@ -335,6 +335,10 @@ def profile_entry(game: GameSpec, web: dict) -> dict:
             "sha256": game.source["sha256"],
             "bytes": game.source["bytes"],
             "kind": game.source["kind"],
+            "alternates": [
+                {key: image[key] for key in ("file", "sha256", "bytes")}
+                for image in game.images[1:]
+            ],
         },
         "port": {
             key: port[key]

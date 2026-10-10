@@ -96,11 +96,14 @@ export async function loadConverter(bytes) {
     },
     // readAtSync(offset, length) -> Uint8Array: bounded synchronous reads
     // (FileReaderSync in a worker, a file handle in Node).
+    // A disc image's {layout: {stride, data}, files: [{path, offset,
+    // length}]}: offsets are logical, placed in the image by the layout
+    // (cooked 2048-byte sectors, or a raw 2352-byte rip; iso.rs).
     isoInventory(size, readAtSync) {
       readAt = readAtSync;
       try {
-        return JSON.parse(decoder.decode(call(x.d64c_iso_inventory(size))))
-          .map(([path, offset, length]) => ({path, offset, length}));
+        const {layout: [stride, data], files} = JSON.parse(decoder.decode(call(x.d64c_iso_inventory(size))));
+        return {layout: {stride, data}, files: files.map(([path, offset, length]) => ({path, offset, length}))};
       } finally {
         readAt = null;
       }

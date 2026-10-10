@@ -1,0 +1,14 @@
+schema_version = 1
+slug = "findus-birthday"
+title = "Pettersson und Findus: Der Torten werfende Geburtstagskater"
+status = "catalogued"
+default_source = "sha256-dadd038fff19"
+
+# The volume descriptor overstates the volume (copy protection); the decoy
+# ZDATA/SOUND.X64 runs past the image and reads as zeros there.
+[[sources]]
+id = "sha256-dadd038fff19"
+file = "Geburtstagskater.iso"
+sha256 = "dadd038fff195b08afeb1c97c4c8b8b943d776ff339868856805d96755f0670e"
+bytes = 613697536
+kind = "iso9660"

@@ -52,8 +52,18 @@ class GameSpec:
         digest = selected["sha256"]
         if not re.fullmatch(r"[0-9a-f]{64}", digest) or source != "sha256-" + digest[:12]:
             raise ValueError("source identity must match full SHA-256")
-        if Path(selected["file"]).name != selected["file"] or selected["file"] in {".", ".."}:
-            raise ValueError("source file must be a basename")
+        images = [selected, *selected.get("alternates", [])]
+        if selected.get("alternates") and selected["kind"] != "iso9660":
+            raise ValueError("only disc image sources have alternate rips")
+        for image in images:
+            if Path(image["file"]).name != image["file"] or image["file"] in {".", ".."}:
+                raise ValueError("source file must be a basename")
+            if not re.fullmatch(r"[0-9a-f]{64}", image["sha256"]) or image["bytes"] <= 0:
+                raise ValueError("source image needs a SHA-256 and a size")
+        if len({i["file"].casefold() for i in images}) != len(images):
+            raise ValueError("alternate rips need distinct file names")
+        if len({i["sha256"] for i in images}) != len(images):
+            raise ValueError("duplicate source image SHA-256")
         return cls(root, slug, data, selected)
 
     @property
@@ -65,8 +75,22 @@ class GameSpec:
         return self.root / "build" / self.slug / self.source["id"]
 
     @property
+    def images(self) -> list[dict]:
+        """The source's disc image and its alternate rips: other containers
+        (a raw CloneCD `.img`, a `.bin`) of the same pressing, each pinned by
+        its own SHA-256. The source id and `source["sha256"]` still name the
+        edition."""
+        return [self.source, *self.source.get("alternates", [])]
+
+    @property
+    def image(self) -> dict:
+        """The catalogued image present under media/, else the primary one."""
+        directory = self.root / "media" / self.slug / self.source["id"]
+        return next((i for i in self.images if (directory / i["file"]).is_file()), self.source)
+
+    @property
     def media(self) -> Path:
-        return self.root / "media" / self.slug / self.source["id"] / self.source["file"]
+        return self.root / "media" / self.slug / self.source["id"] / self.image["file"]
 
     @property
     def dist(self) -> Path:

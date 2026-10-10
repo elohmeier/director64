@@ -109,3 +109,57 @@ def test_cached_extraction_rejects_extra_files(tmp_path):
     (output / "UNMANIFESTED.DXR").write_bytes(b"extra")
     with pytest.raises(iso.IsoError, match="extra files"):
         iso.extract(path, output, expected_sha256=iso.file_sha256(path))
+
+
+def raw(cooked: bytes, mode=1):
+    """A cooked image framed as a raw 2352-byte rip (CloneCD .img, .bin)
+    with an audio track after the data."""
+    data = 16 if mode == 1 else 24
+    frames = []
+    for n in range(0, len(cooked), iso.SECTOR):
+        frame = bytearray(iso.RAW_SECTOR)
+        frame[:12] = iso.SYNC
+        frame[15] = mode
+        frame[data : data + iso.SECTOR] = cooked[n : n + iso.SECTOR]
+        frames.append(bytes(frame))
+    return b"".join(frames) + b"\x55" * 3 * iso.RAW_SECTOR
+
+
+@pytest.mark.parametrize(("mode", "data"), [(1, 16), (2, 24)])
+def test_raw_rip_extracts_like_the_iso(tmp_path: Path, mode, data):
+    path = tmp_path / "CD01.img"
+    path.write_bytes(raw(image(), mode))
+    layout, entries = iso.layout_inventory(io.BytesIO(path.read_bytes()))
+    assert layout == iso.Layout(iso.RAW_SECTOR, data)
+    assert entries == iso.inventory(io.BytesIO(image()))
+    output = tmp_path / "extracted"
+    iso.extract(path, output, expected_sha256=iso.file_sha256(path))
+    assert (output / "TEST.TXT").read_bytes() == b"test"
+    iso.extract(path, output, expected_sha256=iso.file_sha256(path))
+
+
+def test_raw_rip_copies_damaged_file_sectors(tmp_path: Path):
+    data = bytearray(raw(image(), 1))
+    data[21 * iso.RAW_SECTOR + 15] = 0x62  # a protection decoy's damaged header
+    path = tmp_path / "CD01.img"
+    path.write_bytes(data)
+    iso.extract(path, tmp_path / "out", expected_sha256=iso.file_sha256(path))
+    assert (tmp_path / "out/TEST.TXT").read_bytes() == b"test"
+    data[20 * iso.RAW_SECTOR + 15] = 0x62  # the root directory's
+    path.write_bytes(data)
+    with pytest.raises(iso.IsoError):
+        iso.extract(path, tmp_path / "out2", expected_sha256=iso.file_sha256(path))
+
+
+def test_overstated_volume_reads_past_the_image_as_zeros(tmp_path: Path):
+    data = image()
+    data[16 * iso.SECTOR + 80 : 16 * iso.SECTOR + 88] = dual(40, 4)
+    start = 20 * iso.SECTOR + 68
+    decoy = record(b"TEST.TXT;1", 23, 2 * iso.SECTOR)  # runs a sector past the end
+    data[start : start + len(decoy)] = decoy
+    data[23 * iso.SECTOR - 1 :] = b""
+    data += b"x" * (iso.SECTOR + 1)
+    path = tmp_path / "overstated.iso"
+    path.write_bytes(data)
+    iso.extract(path, tmp_path / "out", expected_sha256=iso.file_sha256(path))
+    assert (tmp_path / "out/TEST.TXT").read_bytes() == b"x" * iso.SECTOR + bytes(iso.SECTOR)
