@@ -83,6 +83,7 @@ self.onmessage = async ({data}) => {
   } catch (error) {
     pool?.close();
     post({type: "error", message: String(error?.message ?? error),
-      kind: error instanceof ImportError ? "unsupported" : error?.name ?? "error"});
+      kind: error instanceof ImportError ? "unsupported" : error?.name ?? "error",
+      reason: error instanceof ImportError ? error.reason : null});
   }
 };

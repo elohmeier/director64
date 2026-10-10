@@ -1,12 +1,15 @@
 # Roadmap: browser player and local ISO import
 
-Status, 2026-09-27: W1 to W4 are met for Workshop. W6 covers all six ports:
+Status, 2026-10-10: W1 to W4 are met for Workshop. W6 covers all six ports:
 each imports from the user's own disc image in the browser and plays, with
 loader, import and fuzzer parity against the native pipeline. Löwenzahn
-brings video (WebCodecs) and printing (the browser's print dialog). W5
-(Pages) is not started. Hosting target: GitHub Pages. Execution target:
+brings video (WebCodecs) and printing (the browser's print dialog). Since
+2026-10-05 the site deploys to <https://elohmeier.github.io/director64/>
+from `main` (`.github/workflows/pages.yml`); the W5 gates have not been
+checked against that URL yet. Controllers, fullscreen and the page's menu
+landed on 2026-10-10 (see [web.md](web.md#playing)). Execution target:
 desktop Chrome. See [web.md](web.md) for how to run it and the evidence
-behind it. No Pages deployment exists yet. The current implementation is
+behind it. The current implementation is
 described in [architecture.md](architecture.md); the shared converter work
 remains in [roadmap.md](roadmap.md).
 
@@ -127,8 +130,9 @@ filesystems can follow the first ISO milestone.
   refresh. Map pointer coordinates through stage scaling and letterboxing;
   preserve press/drag/release ownership and clear held input on focus loss.
   Pause game time and audio together when the page is hidden or suspended;
-  resume without replaying a large wall-clock backlog. Begin with mouse and
-  keyboard; controller/touch support gets separate qualification.
+  resume without replaying a large wall-clock backlog. Mouse and keyboard
+  came first. Gamepads (2026-10-10) drive the console's four ports through
+  the shared pointer service; real-pad qualification and touch remain open.
 - **Audio:** implement channel lifetime, gain, completion and playback position
   through Web Audio. Unlock audio on a user gesture before gameplay proceeds.
   Consider a mixer AudioWorklet when needed, with bounded message/buffer transfer
@@ -225,7 +229,7 @@ blocking features, not a universal percentage of Director implemented.
 
 ## Milestones and gates
 
-Status per milestone is below the table; W5 and W6 are planned. W0 can run alongside
+Status per milestone is below the table; W5 awaits its checks against the deployed URL. W0 can run alongside
 the first backend work, and W3 can begin while W1/W2 are in progress.
 
 | Milestone | Deliverable | Completion gate |

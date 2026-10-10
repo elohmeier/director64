@@ -11,6 +11,7 @@
   font: 14px/1.4 system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); }
 body { display: grid; grid-template-rows: auto 1fr auto; }
 .bar {
@@ -23,24 +24,19 @@ body { display: grid; grid-template-rows: auto 1fr auto; }
 .title { font-weight: 600; }
 .edition { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; }
 .actions { display: flex; align-items: center; gap: .5rem; }
-button, .file, summary {
+button, .file {
   font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
   border-radius: 6px; padding: .3rem .7rem; cursor: pointer;
 }
-button:hover, .file:hover, summary:hover { border-color: var(--muted); }
+button:hover, .file:hover { border-color: var(--muted); }
 button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+:focus-visible, body.pad :focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 .save-state { color: var(--muted); font-size: 12px; min-width: 10rem; text-align: right; }
 .save-state.saved { color: var(--good); }
 .save-state.failed, .save-state.unavailable { color: var(--bad); }
-.menu { position: relative; }
-.menu summary { list-style: none; }
-.menu-body {
-  position: absolute; right: 0; top: calc(100% + .4rem); z-index: 3; width: 16rem;
-  display: grid; gap: .5rem; padding: .75rem; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 8px;
-}
 .file input { display: none; }
 .hint { margin: 0; color: var(--muted); font-size: 12px; }
+.hint.warn { color: var(--accent); }
 .stage-area { display: grid; place-items: center; min-height: 0; padding: 1rem; }
 .stage {
   position: relative; width: min(100%, calc((100vh - 7rem) * 4 / 3)); aspect-ratio: 4 / 3;
@@ -48,39 +44,91 @@ button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent);
 }
 .stage:fullscreen { width: auto; height: 100%; max-width: 100%; margin: auto; box-shadow: none; }
 .stage:fullscreen::backdrop { background: #000; }
+/* The browser's own fullscreen (F11): the stage takes the whole window. */
+@media (display-mode: fullscreen) {
+  body > .bar { display: none; }
+  .stage-area { padding: 0; }
+  .stage { width: min(100vw, calc(100vh * 4 / 3)); box-shadow: none; }
+}
 canvas { display: block; width: 100%; height: 100%; object-fit: contain; cursor: none; touch-action: none; }
 .text-entry {
-  position: absolute; box-sizing: border-box; margin: 0; padding: 0 .25em;
+  position: absolute; box-sizing: border-box; margin: 0; padding: 0 .25em; z-index: 2;
   font: inherit; color: #000; background: rgb(255 255 255 / .92);
   border: 2px solid var(--accent); border-radius: 3px; outline: none;
 }
-.text-entry[hidden] { display: none; }
 .overlay {
-  position: absolute; inset: 0; display: grid; place-items: center;
+  position: absolute; inset: 0; display: grid; place-items: center; z-index: 4;
   background: rgb(10 11 13 / .82);
 }
-.overlay[hidden] { display: none; }
 .panel { width: min(32rem, 92%); text-align: center; }
 .heading { font-size: 1.25rem; font-weight: 600; margin: 0 0 .5rem; }
 .text { margin: 0 0 1rem; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .overlay.error .heading { color: var(--bad); }
 progress { width: 100%; accent-color: var(--accent); }
-progress[hidden] { display: none; }
-.buttons { display: flex; justify-content: center; gap: .5rem; margin-top: 1rem; }
+.buttons { display: flex; justify-content: center; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
 #start, .primary { font-size: 1.1rem; padding: .5rem 2rem; border-color: var(--accent); color: var(--accent); }
-.buttons { flex-wrap: wrap; }
-.buttons [hidden] { display: none; }
-.detail { margin: .5rem 0 0; color: var(--muted); font-size: 12px; min-height: 1em; }
+.detail { margin: .5rem 0 0; color: var(--muted); font-size: 12px; min-height: 1em; white-space: pre-wrap; overflow-wrap: anywhere; }
 .note a { color: var(--muted); }
 button:disabled { opacity: .5; cursor: default; }
 .diagnostics { font-family: ui-monospace, monospace; }
 
 /* The supported games on the home overlay. */
 .library { list-style: none; padding: 0; margin: 1rem 0 0; text-align: left; }
-.library[hidden] { display: none; }
 .library li { display: grid; grid-template-columns: 1fr auto; gap: .15rem .75rem; padding: .5rem 0;
   border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
 .library .game { font-weight: 600; }
 .library .status { grid-column: 1; font-size: .85em; opacity: .75; }
 .library .actions { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: .4rem; align-items: center; }
+.library .primary { font-size: inherit; padding: .3rem .9rem; }
 .print-frame { position: fixed; width: 0; height: 0; border: 0; visibility: hidden; }
+
+/* Notices over the stage, in fullscreen too. */
+.toast {
+  position: absolute; left: 50%; bottom: 1rem; transform: translateX(-50%); z-index: 6;
+  max-width: 90%; padding: .5rem .9rem; border-radius: 8px; background: rgb(20 22 25 / .92);
+  border: 1px solid var(--line); pointer-events: none;
+}
+.toast.error { color: var(--bad); border-color: var(--bad); }
+
+/* The menu: over the stage, so fullscreen keeps it. */
+.menu-panel {
+  position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
+  background: rgb(10 11 13 / .7);
+}
+.menu-body {
+  width: min(24rem, 92%); max-height: 94%; overflow: auto; display: grid; gap: .75rem;
+  padding: 1rem 1.25rem; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+}
+.menu-body h2 { margin: 0; font-size: 1.15rem; }
+.menu-body h3 { margin: 0 0 .35rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.menu-body section { display: grid; gap: .45rem; justify-items: start; }
+.menu-game { display: grid; gap: .5rem; justify-items: start; }
+.field { display: flex; align-items: center; gap: .75rem; width: 100%; }
+.field input[type="range"] { flex: 1; accent-color: var(--accent); }
+.check { display: flex; align-items: center; gap: .5rem; cursor: pointer; }
+.check input { accent-color: var(--accent); }
+.segmented { display: inline-flex; gap: .25rem; }
+.row { display: flex; flex-wrap: wrap; gap: .5rem; }
+.stage-menu {
+  position: absolute; top: .5rem; right: .5rem; z-index: 3; font-size: 1.1rem; line-height: 1;
+  padding: .4rem .55rem; background: rgb(20 22 25 / .8); opacity: .9;
+}
+
+/* The in-page dialog, in place of the browser's alert and confirm. */
+.dialog {
+  max-width: min(28rem, 92vw); padding: 1.25rem; color: var(--text); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; text-align: center;
+}
+.dialog::backdrop { background: rgb(0 0 0 / .55); }
+
+/* The controller's on-screen keyboard. */
+.osk {
+  position: absolute; left: 50%; bottom: 3%; transform: translateX(-50%); z-index: 3;
+  width: min(94%, 34rem); padding: .6rem; border-radius: 10px;
+  background: rgb(32 42 52 / .95); border: 1px solid var(--line);
+}
+.osk.top { top: 3%; bottom: auto; }
+.osk-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: .3rem; }
+.osk-grid button { padding: .35rem 0; font-size: 1rem; min-width: 0; }
+.osk-grid button.current { border-color: var(--accent); background: #50789b; color: #fff; }
+.osk-help { margin: .45rem 0 0; font-size: 12px; color: var(--muted); text-align: center; }

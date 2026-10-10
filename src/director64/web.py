@@ -61,6 +61,13 @@ EXPORTS = (
     "d64_edit_text",
     "d64_key",
     "d64_print_request",
+    "d64_pad",
+    "d64_pointer_warp",
+    "d64_pointer_x",
+    "d64_pointer_y",
+    "d64_pointer_player",
+    "d64_step_pads",
+    "d64_render_pads",
 )
 PACKAGE_EXPORTS = ("d64_load_package", "d64_package_error")
 # The asset packs a game plays from (platforms/web/site/cache.js PACKS).
@@ -75,6 +82,11 @@ SITE_FILES = (
     "audio.js",
     "saves.js",
     "video.js",
+    "gamepad.js",
+    "keyboard.js",
+    "screen.js",
+    "settings.js",
+    "strings.js",
     "style.css",
     "print.html",
     "print.css",

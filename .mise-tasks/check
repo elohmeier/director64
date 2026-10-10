@@ -13,6 +13,9 @@ node --check tools/director/dump-format.mjs
 node --check platforms/web/site/app.js
 node --check platforms/web/site/player.js
 node --check platforms/web/site/cache.js
+for module in gamepad keyboard screen settings strings ui; do
+    node --check "platforms/web/site/$module.js"
+done
 node --check platforms/web/import/worker.mjs
 node --check platforms/web/import/pipeline.mjs
 node --check platforms/web/import/jobs.mjs

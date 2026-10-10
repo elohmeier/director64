@@ -58,6 +58,15 @@ typedef struct {
   unsigned last;
 } wc_text_t;
 
+// One cursor on the stage: where it points and the ink its glyph's black
+// body takes (dg_cursor_ink; 1 keeps it black). Controllers each draw one,
+// in their player's colour, as the console does.
+typedef struct {
+  int x, y;
+  uint32_t ink; // a 16-bit ink; the full word keeps the struct unpadded
+} wc_pointer_t;
+enum { WC_POINTERS = 4 };
+
 typedef struct {
   dg_cursor_t cursor;
   dg_cursor_bitmap_t bitmap;
@@ -77,8 +86,8 @@ typedef struct {
   bool drawn;
   unsigned revision;
   dg_cursor_t cursor;
-  int cursor_x, cursor_y;
-  bool cursor_shown;
+  wc_pointer_t pointers[WC_POINTERS];
+  unsigned pointer_count;
   uint32_t background;
   // What else the composite shows that the stage revision does not track:
   // the host's decoded video frames, a D5 alert or source dialog.
@@ -101,6 +110,9 @@ bool wc_hit(wc_t *, lv_runtime_t *, const dg_member_t *, unsigned ink, int x,
 // since the last composite (the framebuffer still holds it).
 bool wc_render(wc_t *, dg_runtime_t *, int pointer_x, int pointer_y,
                bool pointer_shown, unsigned externals);
+// The same with up to WC_POINTERS cursors, drawn in order (the last on top).
+bool wc_render_pointers(wc_t *, dg_runtime_t *, const wc_pointer_t *,
+                        unsigned count, unsigned externals);
 // A member's cursor bitmap, as the native probe's native_cursor_bitmap reads
 // it (the probe state line's cursor hash); fails the runtime as it does.
 bool wc_cursor_bitmap(wc_t *, lv_runtime_t *, const dg_member_t *m,

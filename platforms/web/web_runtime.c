@@ -11,6 +11,9 @@
 #ifdef DIRECTOR64_WILLY
 #include "willy_input.h"
 #endif
+#if DG_D8
+#include "controls.h"
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -460,6 +463,90 @@ EMSCRIPTEN_KEEPALIVE int d64_step(int x, int y, int buttons) {
   update_videos();
 #endif
   return values.failed ? 1 : director.quit ? 2 : 0;
+}
+// ---- Controllers: the page's gamepads as the console's four ports ----
+// The page reports every connected gamepad as an N64 controller (input.h
+// buttons, stick in the console's range) and then runs d64_step_pads, which
+// services them exactly as platforms/n64/director_main.c does: each player
+// moves their own cursor and whoever presses or points holds Director's one
+// mouse (runtime/interaction/pointer.c).
+static input_sample_t pads;
+EMSCRIPTEN_KEEPALIVE void d64_pad(unsigned player, int connected,
+                                  unsigned buttons, int stick_x, int stick_y) {
+  if (player >= INPUT_PLAYERS)
+    return;
+  input_pad_t pad = {.connected = connected != 0,
+                     .buttons = (uint16_t)(connected ? buttons : 0),
+                     .stick_x = (int8_t)(stick_x < -128 ? -128 : stick_x > 127 ? 127 : stick_x),
+                     .stick_y = (int8_t)(stick_y < -128 ? -128 : stick_y > 127 ? 127 : stick_y)};
+  if (player) {
+    pads.pads[player - 1] = pad;
+  } else {
+    pads.connected = pad.connected;
+    pads.buttons = pad.buttons;
+    pads.stick_x = pad.stick_x;
+    pads.stick_y = pad.stick_y;
+  }
+}
+// Moves the holder's cursor to the page's mouse, so a controller picks up
+// where the mouse left the pointer.
+EMSCRIPTEN_KEEPALIVE void d64_pointer_warp(int x, int y) {
+  input_state_t *in = &pointer_active(&pointer)->input;
+  in->x = (x < 8 ? 8 : x > SCREEN_W - 10 ? SCREEN_W - 10 : x) * INPUT_ONE;
+  in->y = (y < 8 ? 8 : y > SCREEN_H - 10 ? SCREEN_H - 10 : y) * INPUT_ONE;
+}
+EMSCRIPTEN_KEEPALIVE int d64_pointer_x(void) {
+  return pointer_driver(&pointer)->input.x / INPUT_ONE;
+}
+EMSCRIPTEN_KEEPALIVE int d64_pointer_y(void) {
+  return pointer_driver(&pointer)->input.y / INPUT_ONE;
+}
+EMSCRIPTEN_KEEPALIVE unsigned d64_pointer_player(void) { return pointer.active; }
+EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y);
+// One service tick from the controllers. Returns as d64_step does, or 3 when
+// the holder pressed A on an editable field: the tick did not run, and the
+// page opens text entry there (at d64_pointer_x/y), as the console opens its
+// on-screen keyboard.
+EMSCRIPTEN_KEEPALIVE int d64_step_pads(void) {
+  if (!booted || values.failed)
+    return 1;
+  if (director.quit)
+    return 2;
+#if DG_D8
+  mucklas_pad_keys(&director, &pads);
+#endif
+  pointer_update(&pointer, &director, &pads);
+  const input_state_t *in = &pointer_driver(&pointer)->input;
+  int x = in->x / INPUT_ONE, y = in->y / INPUT_ONE;
+  if ((in->pressed & INPUT_A) && d64_text_field(x, y))
+    return 3;
+  return d64_step(x, y, in->held);
+}
+// The stage with every controller's cursor that shows (pointer_visible), each
+// in its player's colour once more than one is connected; the holder draws
+// last, so a crowded screen never hides the cursor Director follows.
+EMSCRIPTEN_KEEPALIVE uint32_t *d64_render_pads(void) {
+  if (!booted || values.failed)
+    return NULL;
+  unsigned connected = 0;
+  for (unsigned i = 0; i < POINTER_PLAYERS; i++)
+    connected += input_sample_pad(&pads, i).connected;
+  wc_pointer_t shown[WC_POINTERS];
+  unsigned count = 0;
+  for (unsigned n = 0; n < POINTER_PLAYERS && count < WC_POINTERS; n++) {
+    unsigned player = (pointer.active + 1 + n) % POINTER_PLAYERS;
+    if (!pointer_visible(&pointer, player))
+      continue;
+    const input_state_t *in = &pointer.players[player].input;
+    pointer_color_t color = pointer_player_color(player);
+    shown[count++] = (wc_pointer_t){
+        in->x / INPUT_ONE, in->y / INPUT_ONE,
+        connected > 1 ? dg_cursor_ink(color.r, color.g, color.b) : 1};
+  }
+  unsigned externals = host.video_revision ? host.video_revision(host.ctx) : 0;
+  return wc_render_pointers(&compositor, &director, shown, count, externals)
+             ? compositor.pixels
+             : NULL;
 }
 // Text entry. The console opens its on-screen keyboard when a press lands on
 // an editable field (platforms/n64/text_input.c); the page opens a text box

@@ -311,8 +311,13 @@ export class AudioEngine {
   gain(channel, value) {
     if (this.gains[channel]) this.gains[channel].gain.value = value;
   }
-  set muted(value) { this.master.gain.value = value ? 0 : 1; }
-  get muted() { return this.master.gain.value === 0; }
+  // The player's volume and mute (settings.js), over the game's own gains.
+  setVolume(volume, muted) {
+    this.volume = volume;
+    this.mutedByPlayer = muted;
+    this.master.gain.value = muted ? 0 : volume;
+  }
+  get muted() { return !!this.mutedByPlayer; }
   suspend() { return this.context.suspend(); }
   resume() { return this.context.resume(); }
   stopAll() {

@@ -177,6 +177,17 @@ static void render_contracts(void) {
   assert(wc_render(&compositor, &director, 300, 300, true, 0));
   assert(reads == before); // images came from the cache
   assert(pixel(300, 300) == rgba(0, 0, 0)); // the arrow's tip
+  // Controllers' cursors take their ink; the last one draws on top, and an
+  // unchanged set is not recomposited.
+  const wc_pointer_t players[2] = {{200, 200, dg_cursor_ink(255, 0, 0)},
+                                   {202, 202, dg_cursor_ink(0, 0, 255)}};
+  assert(wc_render_pointers(&compositor, &director, players, 2, 0));
+  assert(pixel(200, 200) == rgba(255, 0, 0) && pixel(202, 202) == rgba(0, 0, 255));
+  assert(pixel(300, 300) != rgba(0, 0, 0));
+  assert(!wc_render_pointers(&compositor, &director, players, 2, 0));
+  assert(wc_render_pointers(&compositor, &director, players, 1, 0));
+  assert(pixel(202, 202) != rgba(0, 0, 255));
+  assert(wc_render(&compositor, &director, 300, 300, true, 0));
   // Matte hits answer from coverage; other inks from the rectangle.
   assert(wc_hit(&compositor, &values, &members[0], 8, 0, 0));
   assert(!wc_hit(&compositor, &values, &members[0], 8, 3, 0));

@@ -19,7 +19,8 @@ redistributed.
 **<https://elohmeier.github.io/director64/>**
 
 Choose a game, select your disc image (`.iso`), and the page converts and
-caches it in the browser, then plays it. Saves stay in browser storage. It
+caches it in the browser, then plays it. Saves stay in browser storage. Play
+with the mouse or a gamepad (a DualShock 4 works), in a window or fullscreen. It
 needs a current desktop Chrome or Edge (WebCodecs audio/video encoding and the
 origin-private file system); see [docs/web.md](docs/web.md) for details and for
 building the site locally.

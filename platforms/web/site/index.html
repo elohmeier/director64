@@ -16,47 +16,91 @@
   <div class="identity">
     <span class="mark">Director64</span>
     <span id="title" class="title"></span>
-    <span id="edition" class="edition"></span>
+    <span id="edition" class="edition" hidden></span>
   </div>
   <div class="actions">
     <span id="save-state" class="save-state" role="status" aria-live="polite"></span>
-    <button id="mute" type="button" aria-pressed="false">Mute</button>
-    <button id="fullscreen" type="button">Fullscreen</button>
-    <details class="menu">
-      <summary>Saves</summary>
-      <div class="menu-body">
-        <button id="export" type="button" disabled>Export save…</button>
-        <label class="file">Import save…<input id="save-import" type="file" accept=".d64save,.bin,application/octet-stream" disabled></label>
-        <p class="hint">Saves stay in this browser for this site. Export keeps a copy of your own.</p>
-      </div>
-    </details>
+    <button id="menu-button" type="button" aria-haspopup="dialog" aria-controls="menu" data-text="button.menu"></button>
+    <button id="fullscreen" type="button" data-text="button.fullscreen"></button>
   </div>
 </header>
 <main class="stage-area">
   <div id="stage" class="stage">
-    <canvas id="screen" width="640" height="480" aria-label="Game screen"></canvas>
-    <input id="text-entry" class="text-entry" type="text" maxlength="20" autocomplete="off" spellcheck="false" aria-label="Text entry" hidden>
+    <canvas id="screen" width="640" height="480" data-label="aria.screen"></canvas>
+    <input id="text-entry" class="text-entry" type="text" maxlength="20" autocomplete="off" spellcheck="false" data-label="aria.textEntry" hidden>
+    <div id="osk" class="osk" role="group" data-label="aria.keyboard" hidden></div>
+    <button id="stage-menu" class="stage-menu" type="button" data-label="button.menu" hidden>☰</button>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <div id="menu" class="menu-panel" role="dialog" aria-modal="true" aria-labelledby="menu-heading" hidden>
+      <div class="menu-body">
+        <h2 id="menu-heading" data-text="menu.heading"></h2>
+        <div id="menu-game" class="menu-game" hidden>
+          <p class="hint" data-text="menu.paused"></p>
+          <button id="menu-resume" type="button" class="primary" data-text="button.resume"></button>
+        </div>
+        <section>
+          <h3 data-text="menu.sound"></h3>
+          <label class="field"><span data-text="menu.volume"></span><input id="volume" type="range" min="0" max="100" step="5"></label>
+          <label class="check"><input id="mute" type="checkbox"><span data-text="menu.mute"></span></label>
+        </section>
+        <section>
+          <h3 data-text="menu.display"></h3>
+          <button id="menu-fullscreen" type="button" data-text="button.fullscreen"></button>
+          <div class="field"><span data-text="menu.scaling"></span>
+            <span class="segmented">
+              <button id="scaling-sharp" type="button" aria-pressed="false" data-text="scaling.sharp"></button>
+              <button id="scaling-smooth" type="button" aria-pressed="false" data-text="scaling.smooth"></button>
+            </span>
+          </div>
+          <label class="check"><input id="diagnostics-toggle" type="checkbox"><span data-text="menu.diagnostics"></span></label>
+        </section>
+        <section id="menu-saves" hidden>
+          <h3 data-text="menu.saves"></h3>
+          <div class="row">
+            <button id="export" type="button" data-text="button.export"></button>
+            <label class="file" tabindex="0"><span data-text="button.import"></span><input id="save-import" type="file" accept=".d64save,.bin,application/octet-stream"></label>
+          </div>
+          <p class="hint" data-text="saves.hint"></p>
+          <p id="saves-evictable" class="hint warn" data-text="saves.evictable" hidden></p>
+        </section>
+        <section>
+          <h3 data-text="menu.controls"></h3>
+          <p class="hint" data-text="controls.mouse"></p>
+          <p class="hint" data-text="controls.pad"></p>
+        </section>
+        <button id="menu-library" type="button" data-text="button.library" hidden></button>
+      </div>
+    </div>
     <div id="overlay" class="overlay">
       <div class="panel">
-        <p id="overlay-heading" class="heading">Loading</p>
+        <p id="overlay-heading" class="heading" data-text="loading"></p>
         <p id="overlay-text" class="text"></p>
         <progress id="progress" max="1" value="0" hidden></progress>
         <p id="overlay-detail" class="detail"></p>
         <ul id="library" class="library" hidden></ul>
         <div class="buttons">
-          <button id="start" type="button" hidden>Play</button>
-          <label id="choose" class="file primary" hidden>Choose disc image…<input id="disc-input" type="file" accept=".iso,.zip,application/x-iso9660-image,application/zip,application/octet-stream"></label>
-          <button id="cancel" type="button" hidden>Cancel</button>
-          <button id="reload" type="button" hidden>Reload</button>
-          <button id="restore" type="button" hidden>Restore previous save</button>
+          <button id="start" type="button" class="primary" data-text="button.play" hidden></button>
+          <label id="choose" class="file primary" tabindex="0" hidden><span data-text="button.choose"></span><input id="disc-input" type="file" accept=".iso,.zip,application/x-iso9660-image,application/zip,application/octet-stream"></label>
+          <button id="cancel" type="button" data-text="button.cancel" hidden></button>
+          <button id="library-button" type="button" data-text="button.library" hidden></button>
+          <button id="reload" type="button" data-text="button.reload" hidden></button>
+          <button id="restore" type="button" data-text="button.restore" hidden></button>
         </div>
       </div>
     </div>
   </div>
 </main>
+<dialog id="dialog" class="dialog" aria-labelledby="dialog-title">
+  <p id="dialog-title" class="heading"></p>
+  <p id="dialog-text" class="text"></p>
+  <div class="buttons">
+    <button id="dialog-cancel" type="button"></button>
+    <button id="dialog-confirm" type="button" class="primary"></button>
+  </div>
+</dialog>
 <footer class="bar small">
-  <span id="diagnostics" class="diagnostics"></span>
-  <span class="note">Bring your own disc: it is converted in this browser and never uploaded. Not affiliated with the games' publishers. <a href="https://github.com/elohmeier/director64">Source</a> · <a href="NOTICES.txt">Notices</a></span>
+  <span id="diagnostics" class="diagnostics" hidden></span>
+  <span class="note"><span data-text="footer.note"></span> <a href="https://github.com/elohmeier/director64" data-text="footer.source"></a> · <a href="NOTICES.txt" data-text="footer.notices"></a></span>
 </footer>
 </body>
 </html>

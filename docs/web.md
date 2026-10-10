@@ -25,6 +25,63 @@ same imports took 12 s (Workshop), 26 s (Mucklas), 60 s (Lernerfolg) and
 
 A game is offered once it has a browser profile, `games/<slug>/web.toml`.
 
+## Playing
+
+The mouse points and clicks, and the right button is the game's second
+button. Games from Director 7 on also receive the keyboard. An editable
+field opens a text box over it, and the game pauses until Enter commits it.
+
+**Controllers.** Every gamepad Chrome reports with the standard mapping
+(a DualShock 4 or DualSense over USB or Bluetooth on Linux, Windows or
+macOS among them) becomes one of the console's four ports. The page passes
+each pad to the runtime as an N64 controller sample (`d64_pad`), and
+`d64_step_pads` services them with `runtime/interaction/pointer.c`, as the
+console does. Each player moves their own cursor, and whoever presses or
+points holds Director's one mouse. Once two pads are connected, each cursor
+takes its player's colour. The per-game controller layers the console has
+(Mucklas' race steering, Willy's notices and right button, Löwenzahn's
+print dismissal) run unchanged.
+
+| Pad | Console | In the page's menus |
+| --- | --- | --- |
+| Left stick, D-pad | Stick, D-pad: the cursor (L1 held: fine movement) | Move focus; left/right set the volume |
+| ✕, touchpad click | A: the click | Choose |
+| ○ | B: the second button | Back, close |
+| Options | Start | Choose |
+| Right stick | C buttons | — |
+| PS, Share | — | Open or close the menu |
+
+The stick has a radial dead zone of 0.12 and maps onto the console's ±80
+with a gentle curve (`site/gamepad.js`). Moving the mouse hands the pointer
+back to the mouse, and the next pad input picks it up from where the mouse
+left it (`d64_pointer_warp`). A pad's A on an editable field opens the
+on-screen keyboard (`site/keyboard.js`): ✕ types, ○ deletes, △ switches
+capitals, □ is a space, Options commits, PS cancels. Director 10 fields
+get Ä, Ö, Ü and ß. A real keyboard still types into the same box.
+
+Chrome counts a pad button press as a user gesture, so a pad alone can
+start a game with sound or enter fullscreen. Without any gesture yet (a
+reload straight into play), the page says sound will start on the next
+click, key or button. The page holds a screen wake lock while a game runs,
+because a desktop does not count controller input as activity.
+
+**Fullscreen and display.** The Fullscreen button puts the stage alone on
+the screen. With the keyboard lock Chrome grants there, Escape reaches the
+game, and holding it leaves fullscreen. The menu, notices, dialogs and the
+on-screen keyboard live inside the stage, so they show in fullscreen. The
+browser's own fullscreen (F11) hides the page's bars. "Sharp" scaling (the
+default) enlarges the 640×480 stage by the next whole factor without
+filtering and lets the browser shrink the rest. "Smooth" filters the
+whole way.
+
+**The menu** (header button, the corner button in fullscreen, or PS) pauses
+the game. It holds volume and mute, fullscreen, scaling, a diagnostics line
+(also `?debug`), save export and import, the controls, and the way back to
+the list of games. When the browser has not granted persistent storage, it
+warns that saves may be evicted under disk pressure. Preferences are kept in
+`localStorage`; texts come in English and German (`site/strings.js`, chosen
+by the browser's language or `?lang=`).
+
 ## Build and serve
 
 ```sh
@@ -107,7 +164,7 @@ nothing behind.
 
 | Piece | Responsibility |
 | --- | --- |
-| `platforms/web/site/` | The page: import flow and cache (`app.js`, `cache.js`), the player (`player.js`: the 60 Hz loop, input, Web Audio through `audio.js`, OPFS saves through `saves.js`) |
+| `platforms/web/site/` | The page: import flow, menu and cache (`app.js`, `cache.js`), the player (`player.js`: the 60 Hz loop, input, Web Audio through `audio.js`, OPFS saves through `saves.js`), controllers (`gamepad.js`, `keyboard.js`), presentation, fullscreen and wake lock (`screen.js`), preferences (`settings.js`) and texts (`strings.js`) |
 | `platforms/web/import/` | The importer: worker entry, pipeline, in-memory file system, the converter's JS wrapper (`convert.mjs`) and the bundle script |
 | `compiler/wasm/` | The Rust converter stages as WebAssembly: ISO inventory, SHA-256, the Director stages over the embedder's files, Lingo parser, packager |
 | `runtime/package/package.c` | Validates a game package (header, ABI digest, bounds of every string, index, table and bytecode op) and builds the engine's movie tables from it |
@@ -283,8 +340,10 @@ Runtime revision: the commit that adds this document. Source:
 | Workshop journeys from START on the Wasm runtime (`full_probe.py <mode> --executable web/director-web-probe`): routes, hubs (incl. 12 constructions), treasure, exit, garden, profiles | All 33 scenarios pass; every final state and command stream identical to the native probe's |
 | W1 journey in the browser with real mouse input: boot, choose a profile, reach the hub, complete Vemory (10 pairs), return to the hub, reload the page, reach the chest | Passed: save generation 1 written and shown saved, the reloaded page finds the save, and the chest shows the awarded feather for that profile |
 | Focus/pause: page hidden for 3 s, then shown | Ticks frozen while hidden; resumed at 60/s with no replayed backlog |
-| Compositor contracts (`tests/native/test_web_compositor.c`, also under ASan/UBSan) | Inks, tiled and FDIA decoding, blend, stretch, shapes, text, pointer, hit test, cache, missing-asset failure |
+| Compositor contracts (`tests/native/test_web_compositor.c`, also under ASan/UBSan) | Inks, tiled and FDIA decoding, blend, stretch, shapes, text, pointer and tinted player cursors, hit test, cache, missing-asset failure |
 | Page helpers (`tests/node/web-player.test.mjs`) | WAV decoding, loop bounds, save commit ordering, failed writes, import backup/restore, no-storage reporting |
+| Controls (`tests/node/web-controls.test.mjs`) | Pad-to-console mapping, dead zone and range, navigation repeat and swallowed presses, port order, keyboard layout and moves, sharp factor, settings fallback, both languages complete |
+| Controllers in headless Chrome, simulated pads (2026-10-10) | Workshop: a pad starts the game and moves the cursor; PS opens the menu, which pauses the game (no ticks), ○ closes it without the game reading the press. Lernerfolg: ✕ on the login field opens the on-screen keyboard, "Jü" typed with the pad is accepted by the game; two pads show red and blue cursors; the mouse takes over and the pad resumes from its position |
 
 Baseline performance:
 

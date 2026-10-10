@@ -12,7 +12,14 @@ import {answer, runJob} from "./jobs.mjs";
 const STAGES = ["verify", "extract", "parse", "analyze", "audit", "scores", "convert", "port", "compile", "package", "sound", "video"];
 const decoder = new TextDecoder();
 
-export class ImportError extends Error {}
+// An import that cannot succeed with this input. `reason` "edition": the
+// image is not one of the profiles' pinned editions.
+export class ImportError extends Error {
+  constructor(message, reason = "unsupported") {
+    super(message);
+    this.reason = reason;
+  }
+}
 
 function check(signal) {
   if (signal?.aborted) throw Object.assign(new Error("import cancelled"), {name: "AbortError"});
@@ -35,11 +42,11 @@ export function imageSha256(source, converter, onProgress, signal) {
 export function identify(source, profiles, converter, onProgress, signal) {
   const candidates = profiles.filter((p) => p.source.bytes === source.size);
   if (!candidates.length)
-    throw new ImportError("This disc image is not a supported edition (no edition has its size).");
+    throw new ImportError("This disc image is not a supported edition (no edition has its size).", "edition");
   const digest = imageSha256(source, converter, onProgress, signal);
   const profile = candidates.find((p) => p.source.sha256 === digest);
   if (!profile)
-    throw new ImportError(`This disc image is not a supported edition (SHA-256 ${digest}).`);
+    throw new ImportError(`This disc image is not a supported edition (SHA-256 ${digest}).`, "edition");
   return {profile, digest};
 }
 
@@ -137,7 +144,7 @@ export async function importGame({source, profile, tools, onProgress = () => {},
     if (verified) return;
     if (source.size !== profile.source.bytes ||
         imageSha256(source, tools.converter, progress, signal) !== profile.source.sha256)
-      throw new ImportError("This disc image is not the edition this game profile supports.");
+      throw new ImportError("This disc image is not the edition this game profile supports.", "edition");
   });
 
   await stage("extract", async (progress) => {

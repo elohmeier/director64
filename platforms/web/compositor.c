@@ -803,18 +803,18 @@ static const dg_cursor_bitmap_t *cursor_bitmap(wc_t *c, dg_runtime_t *d,
   slot->last = ++c->serial;
   return &slot->bitmap;
 }
-static void draw_cursor(wc_t *c, dg_runtime_t *d, dg_cursor_t cursor, int x,
-                        int y) {
+static void draw_cursor(wc_t *c, dg_runtime_t *d, dg_cursor_t cursor,
+                        wc_pointer_t at) {
   if (!cursor.image && cursor.resource == 200)
     return; // Director's hidden cursor.
   const dg_cursor_bitmap_t *bitmap = cursor_bitmap(c, d, cursor);
   if (!bitmap)
     return;
   uint16_t pixels[256];
-  dg_cursor_pixels(bitmap, pixels);
+  dg_cursor_pixels_ink(bitmap, pixels, (uint16_t)at.ink);
   for (int row = 0; row < DG_CURSOR_SIZE; row++)
     for (int column = 0; column < DG_CURSOR_SIZE; column++) {
-      int px = x - bitmap->hot_x + column, py = y - bitmap->hot_y + row;
+      int px = at.x - bitmap->hot_x + column, py = at.y - bitmap->hot_y + row;
       uint16_t pixel = pixels[row * DG_CURSOR_SIZE + column];
       if ((pixel & 1) && px >= 0 && py >= 0 && px < WC_WIDTH && py < WC_HEIGHT)
         c->pixels[py * WC_WIDTH + px] = from5551(pixel);
@@ -823,6 +823,13 @@ static void draw_cursor(wc_t *c, dg_runtime_t *d, dg_cursor_t cursor, int x,
 
 bool wc_render(wc_t *c, dg_runtime_t *d, int pointer_x, int pointer_y,
                bool pointer_shown, unsigned externals) {
+  const wc_pointer_t pointer = {pointer_x, pointer_y, 1};
+  return wc_render_pointers(c, d, &pointer, pointer_shown ? 1 : 0, externals);
+}
+bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
+                        unsigned count, unsigned externals) {
+  if (count > WC_POINTERS)
+    count = WC_POINTERS;
   dg_cursor_t cursor = dg_cursor_current(d);
   dg_update_stage(d);
   uint32_t background = 0;
@@ -834,8 +841,8 @@ bool wc_render(wc_t *c, dg_runtime_t *d, int pointer_x, int pointer_y,
   externals = externals * 31 + d->native_dialog;
 #endif
   if (c->drawn && c->revision == d->visual_revision &&
-      dg_cursor_equal(c->cursor, cursor) && c->cursor_x == pointer_x &&
-      c->cursor_y == pointer_y && c->cursor_shown == pointer_shown &&
+      dg_cursor_equal(c->cursor, cursor) && c->pointer_count == count &&
+      !memcmp(c->pointers, pointers, count * sizeof(*pointers)) &&
       c->background == background && c->externals == externals)
     return false;
   c->serial++;
@@ -861,14 +868,13 @@ bool wc_render(wc_t *c, dg_runtime_t *d, int pointer_x, int pointer_y,
     draw_text(c, d->alert_text, NULL, 0, 255, 64, 201, 574, 281);
   }
 #endif
-  if (pointer_shown && !d->values->failed)
-    draw_cursor(c, d, cursor, pointer_x, pointer_y);
+  for (unsigned i = 0; i < count && !d->values->failed; i++)
+    draw_cursor(c, d, cursor, pointers[i]);
   c->drawn = true;
   c->revision = d->visual_revision;
   c->cursor = cursor;
-  c->cursor_x = pointer_x;
-  c->cursor_y = pointer_y;
-  c->cursor_shown = pointer_shown;
+  memcpy(c->pointers, pointers, count * sizeof(*pointers));
+  c->pointer_count = count;
   c->background = background;
   c->externals = externals;
   return true;
