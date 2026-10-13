@@ -10,9 +10,9 @@ static dg_runtime_t director;
 static lv_runtime_t values;
 static const lv_movie_t code = {"CONTROLS.DXR", 0, NULL,NULL, NULL, NULL, NULL, 0};
 static const dg_member_t members[] = {
-    {.id = 0x110001, .type = 1, .width = 100, .height = 80,
+    {.id = 0x210001, .type = 1, .width = 100, .height = 80,
      .reg_x = 20, .reg_y = 10},
-    {.id = 0x110002, .type = 1, .width = 20, .height = 20,
+    {.id = 0x210002, .type = 1, .width = 20, .height = 20,
      .reg_x = 10, .reg_y = 10},
 };
 static const dg_movie_t movie = {
@@ -72,7 +72,7 @@ static void method_cache_reload(void) {
   static const lv_movie_t first_code={"FIRST.DXR",1,first_handlers,NULL,NULL,NULL,NULL,0}, second_code={"SECOND.DXR",1,second_handlers,NULL,NULL,NULL,NULL,0};
   static const dg_movie_t first={.code=&first_code,.id=1,.casts=casts,.cast_count=1}, second={.code=&second_code,.id=1,.casts=casts,.cast_count=1};
   const lv_movie_t *owner=NULL;
-  lv_t script=lv_make(LV_SCRIPT, 0x110001);
+  lv_t script=lv_make(LV_SCRIPT, 0x210001);
   dg_init(&director,&values,(dg_platform_t){0},NULL,NULL,0,42);
   assert(dg_enter(&director,&first,1,NULL,0));
   for(unsigned n=0;n<3;n++) {
@@ -88,9 +88,9 @@ static void method_cache_reload(void) {
 int main(void) {
   dg_init(&director, &values, (dg_platform_t){0}, NULL, NULL, 0, 42);
   assert(dg_enter(&director, &movie, 1, NULL, 0));
-  set(1, "member", lv_make(LV_MEMBER, 0x110001));
+  set(1, "member", lv_make(LV_MEMBER, 0x210001));
   set(1, "loc", lv_point(&values, 120, 110)); // bounds 100,100,200,180
-  set(800, "member", lv_make(LV_MEMBER, 0x110002));
+  set(800, "member", lv_make(LV_MEMBER, 0x210002));
   set(800, "constraint", lv_num(1));
   assert(lv_numeric(lv_get(&values, NULL, "constraint", sprite(800))) == 1);
   set(800, "loc", lv_point(&values, -100, 400));
@@ -104,7 +104,7 @@ int main(void) {
   set(800, "loc", lv_point(&values, -10, 500)); position(-10, 500);
   set(800, "constraint", lv_num(DG_SPRITES));
   set(800, "loc", lv_point(&values, -20, 510)); position(-20, 510);
-  set(800, "constraint", lv_make(LV_MEMBER, 0x110001));
+  set(800, "constraint", lv_make(LV_MEMBER, 0x210001));
   assert(lv_numeric(lv_get(&values, NULL, "constraint", sprite(800))) == 1);
   set(800, "loc", lv_point(&values, 180, 130));
   set(800, "moveablesprite", lv_num(1));

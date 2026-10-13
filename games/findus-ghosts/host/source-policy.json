@@ -1,0 +1,43 @@
+{
+  "director_version": 850,
+  "external_cast_aliases": {
+    "GLOBSOUND.CXT": "GLOBSOUN.CXT",
+    "GLOBLOCALIZE.CXT": "GLOBLOCA.CXT",
+    "BUDENOBJEKTE.CXT": "BUDENOBJ.CXT"
+  },
+  "directories": [
+    "DATA/ABSPANN",
+    "DATA/BAUMHOEH",
+    "DATA/DACHBODE",
+    "DATA/FINALE",
+    "DATA/GLOBAL",
+    "DATA/HOF",
+    "DATA/HUEGEL",
+    "DATA/HUEHNER",
+    "DATA/INTRO",
+    "DATA/KUECHENA",
+    "DATA/KUECHETA",
+    "DATA/LOGIN",
+    "DATA/SCHATTEN",
+    "DATA/SCHIESSB",
+    "DATA/SCHWARZE",
+    "DATA/VORSPANN"
+  ],
+  "director_files": 21,
+  "counts": {
+    "files": 21,
+    "scripts": 459,
+    "handlers": 2273,
+    "bytecode_sites": 145815,
+    "members": 8381,
+    "movie_references": 11,
+    "score_chunks": 45,
+    "bitmap_references": 6935,
+    "sound_references": 274
+  },
+  "source_sha256": "05d7ad48350100e96d1deadb10f0dfd5f099dc19d7b63180647ca756239ed41b",
+  "projector": "PFSTART.EXE",
+  "startup_movie": "START.DXR",
+  "extended_d6": true,
+  "stage_prescale": true
+}

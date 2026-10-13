@@ -64,14 +64,14 @@ static size_t build(void) {
   put16(1); put16(30);         // id, tempo
   put16(1); put32(S_CAST); put16(1); put16(1);
   put32(1);                    // one member
-  put32(1u << 20 | 1u << 16 | 1); put16(1); put16(1); put16(1); put16(8); put16(4);
+  put32(1u << 21 | 1u << 16 | 1); put16(1); put16(1); put16(1); put16(8); put16(4);
   put16(0); put16(0); put32(S_EMPTY); put32(S_ASSET); put32(S_EMPTY);
   put32(0); put32(0); put32(0); put32(0); put16(0); put16(0);
-  for (unsigned i = 0; i < 6; i++) put8(0);
+  put8(0); put8(0); put8(0); put16(0); put8(0); put8(0); // film count u16
   put32(0x12345678); put16(0); // member index
   for (unsigned i = 0; i < 256; i++) put32(i);
   put32(1); put32(0); put16(1); // one frame, one delta
-  put32(1); put16(6); put16(0x8000); put32(1u << 20 | 1u << 16 | 1); put32(0);
+  put32(1); put16(6); put16(0x8000); put32(1u << 21 | 1u << 16 | 1); put32(0);
   put16(10); put16(20); put16(8); put16(4);
   for (unsigned i = 0; i < 9; i++) put8((uint8_t)i);
   put16(1); put32(S_HANDLER); put16(1); // one label

@@ -37,6 +37,9 @@ def all_games() -> list[GameSpec]:
         game = GameSpec.load(path.parent.name)
         if game.data["status"] in {"supported", "experimental"}:
             game.require_port()
+            # The Director 8.5 ports play in the browser and on Android only.
+            if game.data["port"]["director_version"] == 850:
+                continue
             games.append(game)
     if not games:
         raise ValueError("no executable games found")

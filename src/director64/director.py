@@ -66,7 +66,7 @@ def generate(model: dict, output: Path) -> None:
         lib = movie["casts"][cast - 1]
         target = by_name[lib["file"]]
         target_cast = cast if target is movie else 1
-        return target["id"] << 20 | target_cast << 16 | member
+        return target["id"] << 21 | target_cast << 16 | member
 
     font_metrics = model.get("fontMetrics", {})
     font_aliases = {}

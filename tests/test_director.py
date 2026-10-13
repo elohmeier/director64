@@ -111,7 +111,7 @@ def test_credits_record_preserves_disabled_blend_amount_and_enable_flag(tmp_path
     record[21:23] = bytes([255, flag])
     mask, values = sprite_delta(tmp_path, record, [22])
     assert mask == 512
-    assert values[0] == 0x11004B
+    assert values[0] == 0x21004B
     assert values[6:8] == [0, 0]  # copy ink, stored opacity zero
     assert values[12] == flag
 

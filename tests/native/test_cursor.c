@@ -7,16 +7,16 @@ static lv_runtime_t v;
 static const lv_movie_t code = {"CURSORS.DXR", 0, NULL,NULL, NULL, NULL, NULL, 0};
 static const dg_cast_t casts[] = {{"Internal",1,1},{"Shared",2,1}};
 static const dg_member_t members[] = {
-  {.id=0x110001,.number=1,.cast=1,.type=1,.width=16,.height=16,.name="image"},
-  {.id=0x110002,.number=2,.cast=1,.type=1,.width=13,.height=12,.name="mask"},
-  {.id=0x110003,.number=3,.cast=1,.type=1,.width=40,.height=40,.name="target"},
+  {.id=0x210001,.number=1,.cast=1,.type=1,.width=16,.height=16,.name="image"},
+  {.id=0x210002,.number=2,.cast=1,.type=1,.width=13,.height=12,.name="mask"},
+  {.id=0x210003,.number=3,.cast=1,.type=1,.width=40,.height=40,.name="target"},
 };
 static const dg_frame_t frame = {0,0};
 static const dg_movie_t movie = {.code=&code,.id=1,.tempo=30,
   .cast_count=2,.casts=casts,.member_count=3,.members=members,
   .frame_count=1,.frames=&frame};
 static const lv_movie_t shared_code = {"SHARED.CXT",0,NULL,NULL, NULL, NULL, NULL, 0};
-static const dg_member_t shared_member = {.id=0x210001,.number=1,.cast=1,
+static const dg_member_t shared_member = {.id=0x410001,.number=1,.cast=1,
   .type=1,.width=16,.height=16,.name="external"};
 static const dg_movie_t shared = {.code=&shared_code,.id=2,.cast_count=1,
   .casts=&casts[1],.member_count=1,.members=&shared_member,.frame_count=1,.frames=&frame};
@@ -38,7 +38,7 @@ static lv_t pair(lv_t a, lv_t b) { return lv_list(&v,2,(lv_t[]){a,b},false); }
 static lv_t sprite(unsigned n) { return lv_make(LV_SPRITE, (int)n); }
 static lv_t member(unsigned n) { return lv_make(LV_MEMBER, (int)n); }
 static void target(unsigned n, int cursor) {
-  d.sprites[n].value=(dg_spec_t){.member=0x110003,.type=1,.x=100,.y=100};
+  d.sprites[n].value=(dg_spec_t){.member=0x210003,.type=1,.x=100,.y=100};
 #if DIRECTOR64_DIRECTOR_VERSION != 6 || DIRECTOR64_EXTENDED_D6
   d.sprites[n].value.loc_z=(int)n;
 #endif
@@ -46,12 +46,12 @@ static void target(unsigned n, int cursor) {
 }
 static void references(void) {
   boot();
-  lv_t source=pair(member(0x210001),member(0x110002));
+  lv_t source=pair(member(0x410001),member(0x210002));
   call("cursor",source);
-  assert(!v.failed && d.cursor.image==0x210001 && d.cursor.mask==0x110002);
+  assert(!v.failed && d.cursor.image==0x410001 && d.cursor.mask==0x210002);
   // No GC root or mutable list identity is retained by the engine.
   lv_set_at(&v,source,1,lv_num(3));
-  assert(d.cursor.image==0x210001);
+  assert(d.cursor.image==0x410001);
   lv_t result=lv_get(&v,NULL,"cursor",(lv_t){0});
   assert(lv_type(result)==LV_LIST && lv_count(&v,result)==2);
   assert(lv_integer(&v,lv_at(&v,result,1))==131073);
@@ -60,11 +60,11 @@ static void references(void) {
   assert(dg_cursor_equal(d.sprites[2].cursor,d.cursor));
   // Numeric list members use Director's multiplexing, not resource IDs.
   call("cursor",pair(lv_num(1),lv_num(2)));
-  assert(!v.failed && d.cursor.image==0x110001);
-  call("cursor",lv_list(&v,1,(lv_t[]){member(0x110001)},false));
+  assert(!v.failed && d.cursor.image==0x210001);
+  call("cursor",lv_list(&v,1,(lv_t[]){member(0x210001)},false));
   assert(d.cursor.mask==0);
   call("cursor",lv_get(&v,NULL,"cursor",(lv_t){0}));
-  assert(!v.failed && d.cursor.image==0x110001 && !d.cursor.mask);
+  assert(!v.failed && d.cursor.image==0x210001 && !d.cursor.mask);
   dg_cursor_t before=d.cursor;
   call("cursor",pair(lv_num(999),lv_num(2)));
   assert(v.failed && dg_cursor_equal(before,d.cursor));
@@ -103,7 +103,7 @@ static void selection(void) {
   assert(dg_cursor_at(&d,0,0).resource==200);
   d.mouse_x=d.mouse_y=110;
   dg_cursor_t before=dg_cursor_current(&d);
-  lv_set(&v,NULL,"cursor",sprite(1),pair(member(0x110001),member(0x110002)));
+  lv_set(&v,NULL,"cursor",sprite(1),pair(member(0x210001),member(0x210002)));
   dg_update_stage(&d);
   assert(!dg_cursor_equal(before,dg_cursor_current(&d))); // Stationary mouse.
   d.sprites[1].value.x=200;

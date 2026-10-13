@@ -1,7 +1,7 @@
 schema_version = 1
 slug = "findus-circus"
 title = "Pettersson und Findus: Hühnertanz und Katerzirkus"
-status = "catalogued"
+status = "experimental"
 default_source = "sha256-40d3f559158e"
 
 # A raw CloneCD image (2352-byte sectors); the importer reads its data track.
@@ -11,3 +11,18 @@ file = "CD01.img"
 sha256 = "40d3f559158e8f606487563c0d9ad4712cbb6cd6836587d7fc555aaa872be9a9"
 bytes = 557699184
 kind = "iso9660"
+
+[recovery]
+director_version = 850
+media_root = "PF2"
+
+[port]
+extended_d6 = true
+director_version = 850
+media_root = "PF2"
+entry_movie = "PF2"
+launcher_movie = "PF2.DXR"
+native_compatibility = true
+rom_title = "Findus Zirkus"
+rom_save_type = 80
+controller_count = 4

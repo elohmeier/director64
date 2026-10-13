@@ -152,50 +152,60 @@ fn block(nodes: &[Stmt], serial: &mut u32) -> Vec<Stmt> {
 /// `the frame` and `the lastFrame` inside a sprite tell read that sprite's
 /// timeline.
 fn retarget(value: &Expr, channel: &str) -> Expr {
+    retarget_in(value, channel, false)
+}
+
+/// As retarget; with `children`, `sprite(n)` addresses the told sprite's own
+/// channel n (`tell_child`): Director 8.5 engines drive a film loop's
+/// channels from inside its tell.
+fn retarget_in(value: &Expr, channel: &str, children: bool) -> Expr {
     let chan = || vec![Expr::Var(channel.to_string())];
     match value {
         Expr::The(name) if name == "frame" => Expr::Call("sprite_frame".into(), chan()),
         Expr::The(name) if name == "lastframe" => Expr::Call("sprite_lastframe".into(), chan()),
-        Expr::Unary(op, e) => Expr::Unary(op.clone(), Box::new(retarget(e, channel))),
+        Expr::Unary(op, e) => Expr::Unary(op.clone(), Box::new(retarget_in(e, channel, children))),
         Expr::Binary(op, a, b) => {
-            Expr::Binary(op.clone(), Box::new(retarget(a, channel)), Box::new(retarget(b, channel)))
+            Expr::Binary(op.clone(), Box::new(retarget_in(a, channel, children)), Box::new(retarget_in(b, channel, children)))
         }
-        Expr::List(items) => Expr::List(items.iter().map(|e| retarget(e, channel)).collect()),
+        Expr::List(items) => Expr::List(items.iter().map(|e| retarget_in(e, channel, children)).collect()),
         Expr::PropList(pairs) => Expr::PropList(
-            pairs.iter().map(|(k, v)| (retarget(k, channel), retarget(v, channel))).collect(),
+            pairs.iter().map(|(k, v)| (retarget_in(k, channel, children), retarget_in(v, channel, children))).collect(),
         ),
         Expr::Property { name, kind, value } => Expr::Property {
             name: name.clone(),
             kind: kind.clone(),
-            value: Box::new(retarget(value, channel)),
+            value: Box::new(retarget_in(value, channel, children)),
         },
-        Expr::Get(name, e) => Expr::Get(name.clone(), Box::new(retarget(e, channel))),
-        Expr::Index(a, b) => Expr::Index(Box::new(retarget(a, channel)), Box::new(retarget(b, channel))),
-        Expr::LastChunk(kind, e) => Expr::LastChunk(kind.clone(), Box::new(retarget(e, channel))),
+        Expr::Get(name, e) => Expr::Get(name.clone(), Box::new(retarget_in(e, channel, children))),
+        Expr::Index(a, b) => Expr::Index(Box::new(retarget_in(a, channel, children)), Box::new(retarget_in(b, channel, children))),
+        Expr::LastChunk(kind, e) => Expr::LastChunk(kind.clone(), Box::new(retarget_in(e, channel, children))),
         Expr::Method { name, receiver, args } => Expr::Method {
             name: name.clone(),
-            receiver: Box::new(retarget(receiver, channel)),
-            args: args.iter().map(|e| retarget(e, channel)).collect(),
+            receiver: Box::new(retarget_in(receiver, channel, children)),
+            args: args.iter().map(|e| retarget_in(e, channel, children)).collect(),
         },
+        Expr::Reference { kind, number, library: None } if children && kind == "sprite" => {
+            Expr::Call("tell_child".into(), vec![Expr::Var(channel.to_string()), retarget_in(number, channel, children)])
+        }
         Expr::Reference { kind, number, library } => Expr::Reference {
             kind: kind.clone(),
-            number: Box::new(retarget(number, channel)),
-            library: library.as_ref().map(|l| Box::new(retarget(l, channel))),
+            number: Box::new(retarget_in(number, channel, children)),
+            library: library.as_ref().map(|l| Box::new(retarget_in(l, channel, children))),
         },
         Expr::Chunk { kind, first, last, source } => Expr::Chunk {
             kind: kind.clone(),
-            first: Box::new(retarget(first, channel)),
-            last: Box::new(retarget(last, channel)),
-            source: Box::new(retarget(source, channel)),
+            first: Box::new(retarget_in(first, channel, children)),
+            last: Box::new(retarget_in(last, channel, children)),
+            source: Box::new(retarget_in(source, channel, children)),
         },
-        Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|e| retarget(e, channel)).collect()),
+        Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|e| retarget_in(e, channel, children)).collect()),
         other => other.clone(),
     }
 }
 
 /// Handler sends inside a sprite tell go to the sprite's behaviors.
 fn resprite(statements: &[Stmt], channel: &str) -> Vec<Stmt> {
-    let rt = |e: &Expr| retarget(e, channel);
+    let rt = |e: &Expr| retarget_in(e, channel, true);
     statements
         .iter()
         .map(|inner| {
@@ -217,6 +227,9 @@ fn resprite(statements: &[Stmt], channel: &str) -> Vec<Stmt> {
                 },
                 StmtKind::Return(value) => StmtKind::Return(value.as_ref().map(rt)),
                 StmtKind::Call(value) => match rt(value) {
+                    // A told film loop's own channels: flattened loops have none
+                    // to puppet (Findus 8.5's puppetAllSprites sweep).
+                    Expr::Call(name, _) if name == "puppetsprite" => StmtKind::Call(Expr::Call("nothing".into(), vec![])),
                     Expr::Call(name, args) if name == "go" && args.len() == 1 => StmtKind::Call(Expr::Call(
                         "sprite_go".into(),
                         vec![Expr::Var(channel.to_string()), args[0].clone()],

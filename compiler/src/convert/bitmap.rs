@@ -117,10 +117,10 @@ pub fn bitmap_metadata(cast: &[u8], version: i64) -> Result<Meta, String> {
     let height = bei16(b, 6)? - top;
     let depth = if color { if b[23] == 0 { 1 } else { b[23] as i64 } } else { 1 };
     let palette = if color { bei16(b, 26)? } else { 0 };
-    if width < 0 || height < 0 || (width == 0) != (height == 0) || width > 2048 || height > 2048
-        || ![1, 2, 4, 8, 16, 32].contains(&depth)
+    if width < 0 || height < 0 || (width == 0) != (height == 0) || width > 4096 || height > 4096
+        || ![1, 2, 4, 8, 16, 24, 32].contains(&depth)
     {
-        return Err("unsupported bitmap dimensions/depth".into());
+        return Err(format!("unsupported bitmap dimensions/depth {width}x{height}x{depth}"));
     }
     let use_alpha = version >= 700 && depth == 32 && b[22] & 0x10 != 0;
     Ok(Meta {
@@ -152,6 +152,206 @@ pub fn bitmap_source_alpha(meta: &Meta, bitd: &[u8]) -> Result<Vec<u8>, String> 
         }
     }
     Ok(alpha)
+}
+
+/// Decodes a JPEG split over table and image parts, as Flash and Shockwave
+/// store them: stray SOI/EOI markers before the scan are dropped, so a
+/// leading `FFD9 FFD8` header or separate tables join into one stream.
+pub fn decode_jpeg(parts: &[&[u8]]) -> Result<(usize, usize, Vec<[u8; 3]>), String> {
+    let mut stream = vec![0xFF, 0xD8];
+    'parts: for data in parts {
+        let mut p = 0;
+        while p + 1 < data.len() {
+            if data[p] != 0xFF {
+                continue 'parts;
+            }
+            match data[p + 1] {
+                0xD8 | 0xD9 => p += 2,
+                0xFF => p += 1,
+                0xDA => {
+                    stream.extend_from_slice(&data[p..]);
+                    break 'parts;
+                }
+                _ => {
+                    let len = u16::from_be_bytes([data[p + 2], *data.get(p + 3).ok_or("truncated JPEG segment")?]) as usize;
+                    let end = (p + 2 + len).min(data.len());
+                    stream.extend_from_slice(&data[p..end]);
+                    p = end;
+                }
+            }
+        }
+    }
+    let mut decoder = jpeg_decoder::Decoder::new(stream.as_slice());
+    let pixels = decoder.decode().map_err(|e| e.to_string())?;
+    let info = decoder.info().ok_or("JPEG without a frame")?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let rgb = (0..w * h)
+        .map(|i| match info.pixel_format {
+            jpeg_decoder::PixelFormat::L8 => [pixels[i]; 3],
+            jpeg_decoder::PixelFormat::L16 => [pixels[i * 2]; 3],
+            jpeg_decoder::PixelFormat::RGB24 => [pixels[i * 3], pixels[i * 3 + 1], pixels[i * 3 + 2]],
+            jpeg_decoder::PixelFormat::CMYK32 => {
+                let k = 255 - pixels[i * 4 + 3] as u32;
+                let c = |v: u8| ((255 - v as u32) * k / 255) as u8;
+                [c(pixels[i * 4]), c(pixels[i * 4 + 1]), c(pixels[i * 4 + 2])]
+            }
+        })
+        .collect();
+    Ok((w, h, rgb))
+}
+
+/// A Shockwave bitmap stored as JPEG (`ediM`) beside an optional packed
+/// alpha plane (`ALFA`): the member's 32-bit metadata and an uncompressed
+/// ARGB BITD the ordinary path decodes.
+pub fn jpeg_bitd(meta: &Meta, jpeg: &[u8], alfa: Option<&[u8]>) -> Result<(Meta, Vec<u8>), String> {
+    // Imported PNGs keep their file in ediM too.
+    let png = jpeg.starts_with(b"\x89PNG\r\n\x1a\n");
+    let (w, h, rgba) = if png {
+        decode_png(jpeg).map_err(|e| format!("ediM PNG: {e}"))?
+    } else {
+        let (w, h, rgb) = decode_jpeg(&[jpeg]).map_err(|e| format!("ediM JPEG: {e}"))?;
+        (w, h, rgb.into_iter().map(|[r, g, b]| [r, g, b, 255]).collect())
+    };
+    // The image's own size wins: some imported PNGs keep a stale member rect.
+    if w > 4096 || h > 4096 {
+        return Err("unsupported ediM image dimensions".into());
+    }
+    let alpha = match alfa {
+        Some(plane) => Some(decode_packbits(plane, ((w + 1) & !1) * h)?.pixels),
+        None => None,
+    };
+    let mut out = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let [r, g, b, a] = rgba[i];
+            out[i * 4] = alpha.as_ref().map_or(a, |plane| plane[y * ((w + 1) & !1) + x]);
+            out[i * 4 + 1..i * 4 + 4].copy_from_slice(&[r, g, b]);
+        }
+    }
+    let mut argb = meta.clone();
+    argb.depth = 32;
+    argb.pitch = (w * 4) as i64;
+    (argb.width, argb.height) = (w as i64, h as i64);
+    if png && rgba.iter().any(|p| p[3] != 255) {
+        argb.use_alpha = true;
+    }
+    Ok((argb, out))
+}
+
+/// A non-interlaced PNG of any standard color type and depth, as RGBA.
+pub fn decode_png(b: &[u8]) -> Result<(usize, usize, Vec<[u8; 4]>), String> {
+    let be32 = |at: usize| -> Result<usize, String> {
+        Ok(u32::from_be_bytes(b.get(at..at + 4).ok_or("truncated PNG")?.try_into().unwrap()) as usize)
+    };
+    let (mut p, mut header, mut palette, mut trns, mut idat) = (8, None, Vec::new(), Vec::new(), Vec::new());
+    while p + 8 <= b.len() {
+        let length = be32(p)?;
+        let kind = &b[p + 4..p + 8];
+        let body = b.get(p + 8..p + 8 + length).ok_or("truncated PNG chunk")?;
+        match kind {
+            b"IHDR" => header = Some((be32(p + 8)?, be32(p + 12)?, body[8] as usize, body[9], body[12])),
+            b"PLTE" => palette = body.chunks(3).map(|c| [c[0], c[1], c[2]]).collect(),
+            b"tRNS" => trns = body.to_vec(),
+            b"IDAT" => idat.extend_from_slice(body),
+            b"IEND" => break,
+            _ => {}
+        }
+        p += 12 + length;
+    }
+    let (w, h, depth, color, interlace) = header.ok_or("PNG without IHDR")?;
+    if interlace != 0 {
+        return Err("interlaced PNG".into());
+    }
+    let channels = match color {
+        0 | 3 => 1,
+        2 => 3,
+        4 => 2,
+        6 => 4,
+        _ => return Err(format!("PNG color type {color}")),
+    };
+    if w == 0 || h == 0 || w > 4096 || h > 4096 || ![1, 2, 4, 8, 16].contains(&depth) {
+        return Err("unsupported PNG dimensions/depth".into());
+    }
+    let bits = channels * depth;
+    let stride = (w * bits + 7) / 8;
+    let bpp = bits.div_ceil(8);
+    let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&idat, (stride + 1) * h)
+        .map_err(|_| "corrupt PNG data")?;
+    if raw.len() < (stride + 1) * h {
+        return Err("truncated PNG data".into());
+    }
+    let mut rows = vec![0u8; stride * h];
+    for y in 0..h {
+        let filter = raw[y * (stride + 1)];
+        for x in 0..stride {
+            let v = raw[y * (stride + 1) + 1 + x];
+            let a = if x >= bpp { rows[y * stride + x - bpp] } else { 0 } as i32;
+            let up = if y > 0 { rows[(y - 1) * stride + x] } else { 0 } as i32;
+            let c = if x >= bpp && y > 0 { rows[(y - 1) * stride + x - bpp] } else { 0 } as i32;
+            let predicted = match filter {
+                0 => 0,
+                1 => a,
+                2 => up,
+                3 => (a + up) / 2,
+                4 => {
+                    let base = a + up - c;
+                    let (pa, pb, pc) = ((base - a).abs(), (base - up).abs(), (base - c).abs());
+                    if pa <= pb && pa <= pc { a } else if pb <= pc { up } else { c }
+                }
+                _ => return Err(format!("PNG filter {filter}")),
+            };
+            rows[y * stride + x] = (v as i32 + predicted) as u8;
+        }
+    }
+    let sample = |row: &[u8], index: usize| -> u16 {
+        match depth {
+            16 => u16::from_be_bytes([row[index * 2], row[index * 2 + 1]]),
+            8 => row[index] as u16,
+            _ => {
+                let per = 8 / depth;
+                ((row[index / per] >> (8 - depth * (index % per + 1))) & ((1 << depth) - 1) as u8) as u16
+            }
+        }
+    };
+    let scale = |v: u16| -> u8 {
+        match depth {
+            16 => (v >> 8) as u8,
+            8 => v as u8,
+            _ => (v as u32 * 255 / ((1u32 << depth) - 1)) as u8,
+        }
+    };
+    let key = |at: usize| trns.get(at..at + 2).map(|k| u16::from_be_bytes([k[0], k[1]]));
+    let mut out = Vec::with_capacity(w * h);
+    for y in 0..h {
+        let row = &rows[y * stride..(y + 1) * stride];
+        for x in 0..w {
+            let s = |c: usize| sample(row, x * channels + c);
+            out.push(match color {
+                0 => {
+                    let v = s(0);
+                    let g = scale(v);
+                    [g, g, g, if key(0) == Some(v) { 0 } else { 255 }]
+                }
+                2 => {
+                    let (r, g, bl) = (s(0), s(1), s(2));
+                    let clear = key(0) == Some(r) && key(2) == Some(g) && key(4) == Some(bl);
+                    [scale(r), scale(g), scale(bl), if clear { 0 } else { 255 }]
+                }
+                3 => {
+                    let i = s(0) as usize;
+                    let [r, g, bl] = *palette.get(i).ok_or("PNG palette index out of range")?;
+                    [r, g, bl, trns.get(i).copied().unwrap_or(255)]
+                }
+                4 => {
+                    let g = scale(s(0));
+                    [g, g, g, scale(s(1))]
+                }
+                _ => [scale(s(0)), scale(s(1)), scale(s(2)), scale(s(3))],
+            });
+        }
+    }
+    Ok((w, h, out))
 }
 
 /// D10 ALFA planes must agree with the bitmap's own alpha.

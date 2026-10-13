@@ -184,11 +184,23 @@ fn score(r: &mut Recovery, version: u32) -> Result<(), String> {
         let base = index + slots * 4;
         require(max_data as u64 <= wide(size, base), "VWSC data capacity outside chunk")?;
         let mut offsets: Vec<u32> = Vec::new();
+        let mut repaired = 0u32;
         for i in 0..=entries {
-            let offset = r.u32((index + i * 4) as usize)?;
+            let mut offset = r.u32((index + i * 4) as usize)?;
+            // One entry past the data whose neighbours agree is a damaged
+            // empty entry (a flipped bit in a Director 8.5 room's index):
+            // it takes its predecessor's offset.
+            if offset > max_data && i > 0 && i < entries {
+                let (previous, next) = (*offsets.last().unwrap(), r.u32((index + (i + 1) * 4) as usize)?);
+                if next <= max_data && next >= previous {
+                    offset = previous;
+                    repaired += 1;
+                }
+            }
             require(offset <= max_data && offsets.last().is_none_or(|&last| offset >= last), "VWSC invalid active offset")?;
             offsets.push(offset);
         }
+        require(repaired <= 1, "VWSC invalid active offset")?;
         for i in 0..entries as usize {
             r.records.push(Range { offset: base + offsets[i], length: offsets[i + 1] - offsets[i] });
         }
@@ -198,6 +210,9 @@ fn score(r: &mut Recovery, version: u32) -> Result<(), String> {
             ("data_capacity", max_data), ("unindexed_tail_offset", base + last),
             ("unindexed_tail_length", size.wrapping_sub(base).wrapping_sub(last)),
         ]);
+        if repaired > 0 {
+            r.fields.insert("repaired_index_entries", repaired);
+        }
     }
     let header = r.records[0];
     r.range(header.offset as usize, 20)?;
@@ -380,9 +395,10 @@ fn fields_json<T: std::fmt::Display>(out: &mut String, fields: &BTreeMap<&'stati
 }
 
 /// Decodes one score chunk (`VWSC`, `VWLB` or `VWFI`) of a Director file of
-/// the given version (500..1000) to the probe's JSON.
+/// the given version (500..1000; 850 shares the D7-and-later layout) to the
+/// probe's JSON.
 pub fn decode(fourcc: &str, bytes: &[u8], version: u32) -> Result<String, String> {
-    require(matches!(version, 500 | 600 | 700 | 800 | 1000), "score recovery supports Director 5, 6, 7, 8 and 10 only")?;
+    require(matches!(version, 500 | 600 | 700 | 800 | 850 | 1000), "score recovery supports Director 5, 6, 7, 8, 8.5 and 10 only")?;
     require(!bytes.is_empty() && bytes.len() <= 64 * 1024 * 1024, "invalid score chunk size")?;
     let mut r = Recovery {
         fourcc,

@@ -1,0 +1,26 @@
+schema_version = 1
+slug = "loewenzahn-8"
+title = "Löwenzahn 8"
+status = "experimental"
+default_source = "sha256-ebdb5a53bb24"
+
+[[sources]]
+id = "sha256-ebdb5a53bb24"
+file = "Löwenzahn 8.iso"
+sha256 = "ebdb5a53bb2488e0f255ff7c91f6b7f3ae51064538773ef0a193ab1bdabc62d3"
+bytes = 701024256
+kind = "iso9660"
+
+[recovery]
+director_version = 850
+media_root = "DATA"
+
+[port]
+extended_d6 = true
+director_version = 850
+media_root = "DATA"
+entry_movie = "START"
+native_compatibility = true
+rom_title = "Loewenzahn 8"
+rom_save_type = 80
+controller_count = 4

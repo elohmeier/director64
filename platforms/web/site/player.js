@@ -11,7 +11,8 @@ import {t} from "./strings.js";
 import {$, ask, hideOverlay, notify, overlay, toast} from "./ui.js";
 import {VideoPlayers} from "./video.js";
 
-const WIDTH = 640, HEIGHT = 480;
+// The stage the runtime draws; an 800x600 game reports its own (d64_stage_width).
+let WIDTH = 640, HEIGHT = 480;
 // Macintosh virtual key codes (Events.h kVK_*) by KeyboardEvent.code.
 const MAC_KEYS = {
   KeyA: 0, KeyS: 1, KeyD: 2, KeyF: 3, KeyH: 4, KeyG: 5, KeyZ: 6, KeyX: 7, KeyC: 8, KeyV: 9,
@@ -94,7 +95,29 @@ async function textRasterizer(fonts) {
     }
     return out;
   }
-  return (text, width, height, style) => {
+  // The same lines with where each starts in the text, for layout().
+  function placedLines(text, width) {
+    const out = [];
+    const paragraphs = /\r\n|\r|\n/g;
+    let start = 0;
+    for (;;) {
+      const separator = paragraphs.exec(text);
+      const end = separator ? separator.index : text.length;
+      let line = "", lineStart = start, at = start;
+      for (const word of text.slice(start, end).split(/(?<= )/)) {
+        if (line && scratch.measureText(line + word.trimEnd()).width > width) {
+          out.push({line, start: lineStart});
+          line = word;
+          lineStart = at;
+        } else line += word;
+        at += word.length;
+      }
+      out.push({line, start: lineStart});
+      if (!separator) return out;
+      start = separator.index + separator[0].length;
+    }
+  }
+  const rasterize = (text, width, height, style) => {
     const surface = scratch.canvas;
     surface.width = width;
     surface.height = height;
@@ -124,6 +147,38 @@ async function textRasterizer(fonts) {
     }
     return coverage;
   };
+  // Each character's box as rasterize set it: x, y, width, height.
+  rasterize.layout = (text, width, height, style) => {
+    const boxes = new Int16Array(text.length * 4);
+    const family = style && families.get(style.font);
+    const place = (rows, x0, ascentTop, step) => rows.forEach(({line, start}, row) => {
+      const shown = line.trimEnd();
+      const offset = x0(scratch.measureText(shown).width);
+      for (let k = 0; k < line.length; k++) {
+        const left = offset + scratch.measureText(line.slice(0, k)).width;
+        const right = offset + scratch.measureText(line.slice(0, k + 1)).width;
+        boxes.set([Math.round(left), Math.round(ascentTop + row * step), Math.max(1, Math.round(right - left)),
+                   Math.round(step)], (start + k) * 4);
+      }
+    });
+    if (!style || !family) {
+      scratch.font = monogram;
+      const rows = [];
+      let at = 0;
+      for (const line of text.split(/(\r\n|\r|\n)/)) {
+        if (!/^(\r\n|\r|\n)$/.test(line)) rows.push({line, start: at});
+        at += line.length;
+      }
+      place(rows, () => 0, 0, 13);
+    } else {
+      scratch.font = `${style.size}px "${family}"`;
+      const lineHeight = style.lineHeight > 0 ? style.lineHeight : Math.round(style.size * 1.2);
+      place(placedLines(text, width),
+            (w) => (style.align === 1 ? (width - w) / 2 : style.align === 2 ? width - w : 0), 0, lineHeight);
+    }
+    return boxes;
+  };
+  return rasterize;
 }
 
 function saveStatus(state) {
@@ -188,6 +243,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     director64Host: {
       asset: images,
       text,
+      layout: text.layout,
       sound: (channel, name, looping, start, end) => audio.play(channel, name, looping, start, end),
       gain: (channel, gain) => audio.gain(channel, gain),
       // playFile: plays the stream and answers its length in milliseconds.
@@ -210,6 +266,11 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     },
   });
   if (module._d64_flash_bytes() !== FLASH_BYTES) throw new Error("runtime save device size");
+  if (module._d64_stage_width) {
+    WIDTH = module._d64_stage_width();
+    HEIGHT = module._d64_stage_height();
+    presenter.setSize(WIDTH, HEIGHT);
+  }
   const pointer = module._malloc(game.package.length);
   module.HEAPU8.set(game.package, pointer);
   const loaded = module._d64_load_package(pointer, game.package.length);

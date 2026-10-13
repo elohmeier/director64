@@ -31,13 +31,13 @@ static const lv_handler_t handlers[]={
 static const lv_movie_t code={"LOOP.DXR",4,handlers,NULL, NULL, NULL, NULL, 0};
 static const dg_cast_t casts[]={{"Internal",1,1}};
 static const dg_member_t members[]={
- {.id=0x110001,.number=1,.cast=1,.type=11,.name="loop behavior"},
- {.id=0x110002,.number=2,.cast=1,.type=1,.width=10,.height=10,.name="Plane"}};
-static const dg_behavior_t behaviors[]={{0x110001,""}};
+ {.id=0x210001,.number=1,.cast=1,.type=11,.name="loop behavior"},
+ {.id=0x210002,.number=2,.cast=1,.type=1,.width=10,.height=10,.name="Plane"}};
+static const dg_behavior_t behaviors[]={{0x210001,""}};
 static const dg_delta_t deltas[]={
- {.channel=0,.mask=DG_ALL,.value={.script=0x110003}},
- {.channel=6,.mask=DG_ALL,.value={.type=16,.member=0x110002,.behaviors=behaviors,.behavior_count=1}},
- {.channel=7,.mask=DG_ALL,.value={.type=16,.member=0x110002,.behaviors=behaviors,.behavior_count=1}}};
+ {.channel=0,.mask=DG_ALL,.value={.script=0x210003}},
+ {.channel=6,.mask=DG_ALL,.value={.type=16,.member=0x210002,.behaviors=behaviors,.behavior_count=1}},
+ {.channel=7,.mask=DG_ALL,.value={.type=16,.member=0x210002,.behaviors=behaviors,.behavior_count=1}}};
 static const dg_frame_t frames[]={{0,3}};
 static const dg_movie_t movie={.code=&code,.id=1,.tempo=30,.casts=casts,.cast_count=1,
  .members=members,.member_count=2,.deltas=deltas,.frames=frames,.frame_count=1};
@@ -51,13 +51,13 @@ int main(void) {
  assert(loops>=10 && idle_calls>=10 && idle_calls<=120 && !r.failed);
  // Animated cursor behavior above a mouse receiver must not steal its input.
  d.sprites[2].visible=false;
- lv_set(&r,NULL,"member",lv_make(LV_SPRITE, 3),lv_make(LV_MEMBER, 0x110002));
- lv_t cursor=lv_instance(&r,lv_make(LV_SCRIPT, 0x110001));
+ lv_set(&r,NULL,"member",lv_make(LV_SPRITE, 3),lv_make(LV_MEMBER, 0x210002));
+ lv_t cursor=lv_instance(&r,lv_make(LV_SCRIPT, 0x210001));
  lv_set(&r,NULL,"scriptinstancelist",lv_make(LV_SPRITE, 3),lv_list(&r,1,&cursor,false));
- lv_t button=lv_instance(&r,lv_make(LV_SCRIPT, 0x110004));
+ lv_t button=lv_instance(&r,lv_make(LV_SCRIPT, 0x210004));
  lv_set(&r,NULL,"scriptinstancelist",lv_make(LV_SPRITE, 1),lv_list(&r,1,&button,false));
  assert(dg_hit(&d,5,5)==3 && dg_mouse_hit(&d,5,5)==1);
- lv_set(&r,NULL,"member",lv_make(LV_SPRITE, 4),lv_make(LV_MEMBER, 0x110002));
+ lv_set(&r,NULL,"member",lv_make(LV_SPRITE, 4),lv_make(LV_MEMBER, 0x210002));
  assert(dg_hit(&d,5,5)==4 && dg_mouse_hit(&d,5,5)==1 && !r.failed);
  puts("D6 looping frame scripts preserve yielding sprite frame events");
 }

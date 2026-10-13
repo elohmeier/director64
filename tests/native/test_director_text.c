@@ -11,7 +11,7 @@ static const dg_text_style_t initial = {.font_name = "Pettson *", .font_id = 1,
     .size = 12, .ascent = 11, .descent = 6, .line_height = 17};
 static const dg_text_style_t insertion = {.font_name = "Pettson *", .font_id = 1,
     .size = 15, .ascent = 14, .descent = 7, .line_height = 21, .align = 1};
-static const dg_member_t members[] = {{.id = 0x110001, .number = 1, .cast = 1,
+static const dg_member_t members[] = {{.id = 0x210001, .number = 1, .cast = 1,
     .type = 3, .name = "namn", .text = "Findus", .text_style = &initial,
     .text_insert_style = &insertion}};
 static const dg_frame_t frames[] = {{0, 0}};
@@ -22,9 +22,9 @@ static const dg_movie_t movie = {.code = &code, .id = 1, .tempo = 30,
 int main(void) {
   dg_init(&director, &values, (dg_platform_t){0}, NULL, NULL, 0, 1);
   assert(dg_enter(&director, &movie, 1, NULL, 0));
-  assert(lv_numeric(lv_get(&values,NULL,"membernum",lv_make(LV_MEMBER, 0x110001))) == 1);
+  assert(lv_numeric(lv_get(&values,NULL,"membernum",lv_make(LV_MEMBER, 0x210001))) == 1);
   unsigned revision = director.visual_revision;
-  lv_t member = lv_make(LV_MEMBER, 0x110001);
+  lv_t member = lv_make(LV_MEMBER, 0x210001);
   assert(!strcmp(lv_cstr(&values, lv_get(&values, NULL, "font", member)),
                  "Pettson *"));
   assert(director.field_count == 1 && !director.field_text_changed[0]);

@@ -35,10 +35,10 @@ def test_intro_validation_requires_both_full_source_durations(first_stop):
             }
         ]
     }
-    log = "VIDEO_OPEN sprite=2 member=8454148\nVIDEO_OPEN sprite=2 member=8454151\n"
+    log = "VIDEO_OPEN sprite=2 member=16842756\nVIDEO_OPEN sprite=2 member=16842759\n"
     if first_stop is not None:
-        log += f"VIDEO_STOP member=8454148 time={first_stop} duration=16661\n"
-    log += "VIDEO_STOP member=8454151 time=14960 duration=14960\n"
+        log += f"VIDEO_STOP member=16842756 time={first_stop} duration=16661\n"
+    log += "VIDEO_STOP member=16842759 time=14960 duration=14960\n"
     validate = boot_module().validate_intro_stops
     if first_stop == 16661:
         assert len(validate(log, model)) == 2

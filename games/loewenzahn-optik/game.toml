@@ -1,0 +1,26 @@
+schema_version = 1
+slug = "loewenzahn-optik"
+title = "25 Jahre Löwenzahn: Laser, Linsen, Flaschenzüge"
+status = "experimental"
+default_source = "sha256-221da0586845"
+
+[[sources]]
+id = "sha256-221da0586845"
+file = "Optik-Mechanik.iso"
+sha256 = "221da0586845f23095c92c5c899f35a5d1f2f35a0932b996d18588559cbb6297"
+bytes = 701138944
+kind = "iso9660"
+
+[recovery]
+director_version = 850
+media_root = "DATA"
+
+[port]
+extended_d6 = true
+director_version = 850
+media_root = "DATA"
+entry_movie = "START"
+native_compatibility = true
+rom_title = "Loewenzahn Optik"
+rom_save_type = 80
+controller_count = 4

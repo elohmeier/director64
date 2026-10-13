@@ -20,7 +20,8 @@ bool is_wav(const uint8_t *data, size_t length);
 // A PCM RIFF WAVE file, 8 or 16 bits, mono or stereo, as the converter
 // writes them (platforms/web/site/audio.js decodeWav). NULL when malformed.
 sound_t *decode_wav(const uint8_t *data, size_t length);
-// A WAVE file's length in seconds without decoding it; 0 when malformed.
+// A WAVE (or Ogg Opus) file's length in seconds without decoding it; 0 when
+// malformed.
 double wav_duration(const uint8_t *data, size_t length);
 // Anything else the platform decodes (MP3 playFile streams), from `length`
 // bytes at `offset` in an open file. Blocks while it decodes.

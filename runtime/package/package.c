@@ -407,6 +407,11 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
   movie->casts = cast;
   unsigned members = count(r, 56, UINT16_MAX, "member");
   dg_member_t *member = allocate(l, members, sizeof(*member));
+#if DG_D10 && defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // Held while the members load; the movie keeps an exact copy.
+  static dg_text_extra_t extras[256];
+  unsigned extra_count = 0;
+#endif
   for (unsigned i = 0; member && i < members && !r->failed; i++) {
     dg_member_t *m = &member[i];
     m->id = u32(r);
@@ -429,7 +434,7 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
     m->filled = u8(r);
     m->line_width = u8(r);
     m->looping = u8(r);
-    m->film_count = u8(r);
+    m->film_count = u16(r);
     m->film_loop = u8(r);
     m->line_direction = u8(r);
     if (m->film_count)
@@ -477,6 +482,8 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
 #endif
 #if DG_D10
     m->source_xtra = u8(r);
+    m->video_audio = string(l);
+    m->video_flags = u32(r);
     m->flash_label_count = u8(r);
     m->flash_field_count = u8(r);
     if (m->flash_label_count) {
@@ -513,10 +520,46 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
       }
       m->flash_fields = fields;
     }
+    // Text colour runs and hyperlinks: kept by the Director 8.5 runtime,
+    // which renders and hit-tests them; the console's D10 skips them.
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    bool keep = true;
+#else
+    bool keep = false;
+#endif
+    unsigned runs = u16(r);
+    if (!need(r, (size_t)runs * 8))
+      return false;
+    dg_text_run_t *run = keep && runs ? allocate(l, runs, sizeof(*run)) : NULL;
+    for (unsigned k = 0; k < runs; k++) {
+      uint32_t offset = u32(r), rgb = u32(r);
+      if (run) run[k] = (dg_text_run_t){offset, rgb};
+    }
+    unsigned links = u16(r);
+    if (!need(r, (size_t)links * 12))
+      return false;
+    dg_link_t *link = keep && links ? allocate(l, links, sizeof(*link)) : NULL;
+    for (unsigned k = 0; k < links; k++) {
+      uint32_t first = u32(r), last = u32(r);
+      const char *data = string(l);
+      if (link) link[k] = (dg_link_t){first, last, data};
+    }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    if ((runs || links) && extra_count < sizeof(extras) / sizeof(extras[0]))
+      extras[extra_count++] = (dg_text_extra_t){m->id, (uint16_t)runs, (uint16_t)links, run, link};
+#endif
 #endif
   }
   movie->member_count = (uint16_t)members;
   movie->members = member;
+#if DG_D10 && defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  movie->text_extra_count = (uint16_t)extra_count;
+  if (extra_count) {
+    dg_text_extra_t *kept = allocate(l, extra_count, sizeof(*kept));
+    if (kept) memcpy(kept, extras, extra_count * sizeof(*kept));
+    movie->text_extras = kept;
+  }
+#endif
   if (!need(r, (size_t)members * 6))
     return false;
   dg_member_index_t *index = allocate(l, members, sizeof(*index));
@@ -739,7 +782,7 @@ bool dg_package_load(dg_package_t *p, const uint8_t *data, size_t length,
   for (unsigned i = 0; i < p->movie_count; i++) {
     const dg_movie_t *m = p->registry[i];
     for (unsigned k = 0; k < m->member_count; k++)
-      if ((m->members[k].id >> 20) != m->id && (m->members[k].id >> 20) > p->movie_count) {
+      if (DG_ID_FILE(m->members[k].id) != m->id && DG_ID_FILE(m->members[k].id) > p->movie_count) {
         dg_package_free(p);
         return fail(&header, "member reference outside the package");
       }

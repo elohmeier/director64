@@ -19,6 +19,11 @@ never commit, upload or share it.
 | Findus bei den Mucklas | D8 | 297 MB | boots |
 | Löwenzahn 1 | D5 | 524 MB | boots, intro video plays |
 | Lernerfolg Deutsch 1/2 | D10 | 486 MB | boots to the login, MP3 and WAV streams play |
+| Löwenzahn 6 | D8.5 | 1.9 GB | boots to the login |
+| Löwenzahn 7 | D8.5 | 1.3 GB | boots to the login |
+| Löwenzahn 8 | D8.5 | 1.5 GB | plays: login, intro video |
+| 25 Jahre Löwenzahn: Optik + Mechanik | D8.5 | 1.5 GB | boots to the Bauwagen |
+| Löwenzahn Adventskalender | D8.5 | 252 MB | boots to the December countdown |
 
 These checks ran on an Android 14 emulator (x86_64). On the EF-62N all six
 install, and Mucklas, Christmas and Lernerfolg run; its userland is 32-bit
@@ -34,7 +39,8 @@ second, redraws and dropped time.
 
 Requirements are the browser player's (Node with the locked dev
 dependencies, Rust, Docker for the importer's tools) plus FFmpeg with libvpx
-(Löwenzahn's video) and the Android toolchain image:
+(Löwenzahn's video; MPEG-1 decoding for Löwenzahn 6–8, Optik and the
+Adventskalender) and the Android toolchain image:
 
 ```sh
 docker build --target sdk -t director64-android:local docker/android
@@ -52,8 +58,24 @@ A build:
 
 1. **Converts the disc** with the browser importer's pipeline under Node
    (`platforms/android/export/export.mjs`), the same stages the page runs,
-   into `build/android/<game>/<source>/game/`. Sounds stay PCM WAV; FFmpeg
-   encodes Löwenzahn's video as VP8 in the page's video container. A
+   into `build/android/<game>/<source>/game/`. Three encodings keep the
+   APK small:
+   - **Video:** FFmpeg encodes Löwenzahn's video as VP9 (CRF 30, at most
+     600 kbit/s) in the page's video container. Löwenzahn 1's Cinepak frames
+     go in as the converter decodes them, the 8.5 titles' MPEG-1 files whole
+     (`platforms/android/export/video.mjs`).
+   - **Sound:** a sound of 8 seconds or more (the movies' soundtracks, long
+     speech) becomes Ogg Opus, 96 kbit/s stereo or 64 kbit/s mono. Shorter
+     ones stay PCM WAV, so they start at once.
+   - **Images:** each image is stored as lossless WebP (`D64W`,
+     `platforms/web/webp_image.h`, the vendored libwebp in
+     `third_party/libwebp`) where that is smaller than deflate. The importer's
+     `webp` tool keeps one only after its decoder gives back the exact stored
+     bytes, and the runtime decodes it when the image loads.
+
+   Löwenzahn 6 went from 1.9 GB to under 0.6 GB.
+
+   A
    conversion by the same importer revision and runtime ABI is reused;
    `--reconvert` forces a new one. The importer's tools are built first when
    `build/web/tools` is missing.
@@ -120,10 +142,10 @@ on the console.
 
 | Piece | Responsibility |
 | --- | --- |
-| `jni/main.c` | JNI bridge and game thread: the page's 60 Hz service clock and catch-up rule, holds (paused, menu, text entry), pads and mouse, text entry, printing, saves, presenting the 640×480 stage to the surface |
-| `jni/packs.c` | Asset packs from the APK's uncompressed assets: indexes parsed by `jni/json.c`, blobs mapped in place, images inflated (D64Z) with zlib |
-| `jni/mixer.c`, `jni/decode.c` | The sound channels through AAudio, with the page's loop rule and gains; WAV decoded directly, MP3 streams through MediaCodec on a decoder thread, started as late as they decoded |
-| `jni/video.c` | D5 digital video through MediaCodec into an image reader, the frame the runtime's time asks for converted for the compositor, its sound in step |
+| `jni/main.c` | JNI bridge and game thread: the page's 60 Hz service clock and catch-up rule, holds (paused, menu, text entry), pads and mouse, text entry, printing, saves, presenting the stage (640×480, or an 800×600 game unscaled) to the surface |
+| `jni/packs.c` | Asset packs from the APK's uncompressed assets: indexes parsed by `jni/json.c`, blobs mapped in place, images inflated (D64Z) with zlib; WebP images (D64W) pass through to the runtime's decoder |
+| `jni/mixer.c`, `jni/decode.c` | The sound channels through AAudio, with the page's loop rule and gains; WAV decoded directly, Ogg Opus sounds and MP3 streams through MediaExtractor and MediaCodec on a decoder thread, started as far in as they took to decode |
+| `jni/video.c` | D5 digital video and D8.5 DirectMedia video through MediaCodec into an image reader, the frame the runtime's time asks for converted for the compositor, its sound in step |
 | `java/.../GameActivity.java` | The 4:3 surface, controllers, mouse and keys, the menu and dialogs |
 | `java/.../Text.java` | Text boxes set with Android's text renderer, as the page sets them on a canvas |
 | `src/director64/android.py` | Conversion, the make file per game and ABI, packaging and signing |

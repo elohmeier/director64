@@ -50,7 +50,7 @@ static lv_flow_t delayed(lv_runtime_t *r, lv_frame_t *f) {
   return LV_RETURN;
 }
 static const dg_cast_t cast = {"Internal", 1, 1};
-static const dg_delta_t script = {.channel=0, .value={.script=0x110001}};
+static const dg_delta_t script = {.channel=0, .value={.script=0x210001}};
 static const dg_frame_t plain[] = {{0,0},{0,0}};
 static const dg_frame_t scripted[] = {{0,1},{1,0}};
 static lv_handler_t handler;
@@ -105,10 +105,10 @@ int main(void) {
   // record, then reuses them without a blend delta. Every activation must draw.
   static const dg_delta_t appearance[] = {{
       .channel=43,.mask=DG_MEMBER|DG_POSITION|DG_SIZE|DG_FLAGS,
-      .value={.member=0x110053,.x=460,.y=272,.width=17,.height=43,
+      .value={.member=0x210053,.x=460,.y=272,.width=17,.height=43,
               .type=16,.blend=100}}, {
       .channel=44,.mask=DG_MEMBER|DG_FLAGS|DG_BLEND|DG_THICKNESS,
-      .value={.member=0x110053,.type=16,.blend=0,.thickness=DG_HAS_BLEND}}};
+      .value={.member=0x210053,.type=16,.blend=0,.thickness=DG_HAS_BLEND}}};
   boot(3,NULL,"exitframe");
   movie.frames=(const dg_frame_t[]){{0,0},{0,2}};
   movie.deltas=appearance;

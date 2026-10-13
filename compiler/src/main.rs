@@ -236,6 +236,8 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                     .map_err(|e| format!("{dir}: {e}"))?
                     .filter_map(|e| e.ok())
                     .filter(|e| e.path().is_file())
+                    // Sound Forge's peak files ship beside some sounds.
+                    .filter(|e| !e.file_name().to_string_lossy().to_lowercase().ends_with(".sfk"))
                     .collect();
                 names.sort_by_key(|e| e.file_name());
                 for entry in names {
@@ -246,11 +248,18 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             }
             files.sort_by(|a, b| a.0.cmp(&b.0));
             let (mut blob, mut index) = (Vec::new(), serde_json::Map::new());
+            let mut previous: Vec<u8> = Vec::new();
             for (name, path) in files {
+                let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                // Folders merged into one namespace may carry the same file
+                // twice; sorted, a name's copies are neighbours.
                 if index.contains_key(&name) {
+                    if previous == bytes {
+                        continue;
+                    }
                     return Err(format!("two sound files are both {name}"));
                 }
-                let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                previous = bytes.clone();
                 let (stream, ms) = director64_aot::convert::stream::browser_stream(&bytes)
                     .map_err(|e| format!("{}: {e}", path.display()))?;
                 index.insert(name, serde_json::json!([blob.len(), stream.len(), ms]));

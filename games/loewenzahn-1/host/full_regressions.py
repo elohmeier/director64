@@ -19,7 +19,7 @@ def sprite(replay, channel):
 
 def member(movie, name):
     value = next(m for m in movie["members"] if m["name"].casefold() == name.casefold())
-    return movie["id"] << 20 | value["cast"] << 16 | value["number"]
+    return movie["id"] << 21 | value["cast"] << 16 | value["number"]
 
 
 def mark(replay, **checks):

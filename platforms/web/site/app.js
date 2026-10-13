@@ -17,7 +17,7 @@ const STAGE_TEXT = {
   extract: "stage.convert", parse: "stage.convert", analyze: "stage.convert", audit: "stage.convert",
   scores: "stage.convert", port: "stage.convert", compile: "stage.convert", package: "stage.convert",
   convert: "stage.media",
-  sound: "stage.encode", video: "stage.encode",
+  sound: "stage.encode", image: "stage.encode", video: "stage.encode",
 };
 
 async function json(url) {

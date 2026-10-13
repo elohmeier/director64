@@ -118,12 +118,12 @@ static void decode_contracts(void) {
 
 static const lv_movie_t code = {"SYNTHETIC.DXR", 0, NULL, NULL, NULL, NULL, NULL, 0};
 static const dg_member_t members[] = {
-    {.id = 0x110001, .number = 1, .cast = 1, .type = 1, .width = 4, .height = 2,
+    {.id = 0x210001, .number = 1, .cast = 1, .type = 1, .width = 4, .height = 2,
      .asset = "fixture.fdi"},
-    {.id = 0x110002, .number = 2, .cast = 1, .type = 8,
+    {.id = 0x210002, .number = 2, .cast = 1, .type = 8,
      .shape = 1, .filled = 1},
-    {.id = 0x110003, .number = 3, .cast = 1, .type = 3, .text = "Hi"},
-    {.id = 0x110004, .number = 4, .cast = 1, .type = 1, .width = 4, .height = 2,
+    {.id = 0x210003, .number = 3, .cast = 1, .type = 3, .text = "Hi"},
+    {.id = 0x210004, .number = 4, .cast = 1, .type = 1, .width = 4, .height = 2,
      .asset = "missing.fdi"}};
 static const dg_frame_t frames[] = {{0, 0}};
 static uint32_t palette[256];
@@ -149,12 +149,12 @@ static void render_contracts(void) {
   dg_init(&director, &values, (dg_platform_t){0}, NULL, names, 1, 1);
   assert(dg_enter(&director, &movie, 1, NULL, 0));
   // Channel order is draw order: the shape under three bitmaps.
-  place(1, 0x110002, 0, 0, 40, 20, 0, 100);
-  place(2, 0x110001, 0, 0, 4, 2, 0, 100);   // copy
-  place(3, 0x110001, 8, 0, 4, 2, 8, 100);   // matte
-  place(4, 0x110001, 16, 0, 8, 4, 36, 100); // background transparent, doubled
-  place(5, 0x110001, 30, 0, 4, 2, 0, 50);   // blended copy
-  place(6, 0x110003, 50, 50, 20, 10, 0, 100);
+  place(1, 0x210002, 0, 0, 40, 20, 0, 100);
+  place(2, 0x210001, 0, 0, 4, 2, 0, 100);   // copy
+  place(3, 0x210001, 8, 0, 4, 2, 8, 100);   // matte
+  place(4, 0x210001, 16, 0, 8, 4, 36, 100); // background transparent, doubled
+  place(5, 0x210001, 30, 0, 4, 2, 0, 50);   // blended copy
+  place(6, 0x210003, 50, 50, 20, 10, 0, 100);
   assert(wc_render(&compositor, &director, 600, 400, false, 0));
   assert(!values.failed);
   // The D6 stage is white; the shape fills its rectangle with its palette colour.
@@ -196,7 +196,7 @@ static void render_contracts(void) {
   // Over budget, the least recently used image goes, never the frame's own.
   assert(compositor.image_bytes <= 1024);
   // A missing asset fails the runtime as the console does.
-  place(7, 0x110004, 100, 100, 4, 2, 0, 100);
+  place(7, 0x210004, 100, 100, 4, 2, 0, 100);
   assert(!wc_render(&compositor, &director, 300, 300, true, 0) || values.failed);
   assert(values.failed && strstr(values.error, "missing native image file"));
   wc_release(&compositor);

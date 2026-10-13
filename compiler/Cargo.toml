@@ -17,6 +17,8 @@ path = "src/main.rs"
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+# Shockwave bitmaps stored as JPEG (ediM).
+jpeg-decoder = { version = "0.3", default-features = false }
 
 [profile.release]
 opt-level = 3

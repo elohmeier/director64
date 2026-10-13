@@ -1,0 +1,12 @@
+schema_version = 1
+slug = "loewenzahn-3"
+title = "Löwenzahn 3"
+status = "catalogued"
+default_source = "sha256-6ba4732f45f5"
+
+[[sources]]
+id = "sha256-6ba4732f45f5"
+file = "Loewenzahn_3.iso"
+sha256 = "6ba4732f45f503b561f68bc681d4c76610a599b497bf367a98ebee0aff83350e"
+bytes = 702892032
+kind = "iso9660"

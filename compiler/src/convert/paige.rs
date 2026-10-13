@@ -162,8 +162,9 @@ pub fn paige_styles(records: &Records, text_length: usize) -> Result<Value, Stri
                 face.insert(name.to_string(), json!(raw[39 + j]));
             }
         }
+        // A negative size is a Windows LOGFONT em height.
         styles.push(json!({
-            "fontIndex": font_index, "font": fonts[font_index as usize]["name"], "pointSize": num(raw[18] as f64 / 65536.0),
+            "fontIndex": font_index, "font": fonts[font_index as usize]["name"], "pointSize": num((raw[18] as f64 / 65536.0).abs()),
             "ascent": raw[3], "descent": raw[4], "leading": raw[5], "foreground": ints(&raw[9..13]),
             "background": ints(&raw[13..17]), "characterWidth": raw[17], "leftOverhang": raw[19],
             "rightOverhang": raw[20], "topExtra": raw[21], "bottomExtra": raw[22], "spaceExtra": raw[23],
@@ -221,4 +222,32 @@ pub fn paige_styles(records: &Records, text_length: usize) -> Result<Value, Stri
         "version": 0x40001, "insertStyle": insert_style, "fonts": fonts, "styles": styles, "paragraphs": paragraphs,
         "styleRuns": style_runs, "paragraphRuns": paragraph_runs,
     }))
+}
+
+/// The text's hyperlinks (record 296): per link eleven numbers -- start and
+/// end character offsets, eight fixed fields and the data length -- then the
+/// link data as a byte value. A closing record past the text has no data.
+/// Each comes out as [first, last, data]: 1-based and inclusive, as Lingo's
+/// `the hyperlinks` reads them.
+pub fn paige_hyperlinks(records: &Records, text: &str) -> Result<Vec<Value>, String> {
+    let Some((bytes, count)) = records.get(&296) else { return Ok(Vec::new()) };
+    if *count > 4096 {
+        return Err("excessive Paige hyperlink count".into());
+    }
+    let length = text.chars().count() as i64;
+    let mut reader = Reader::new(bytes);
+    let mut links = Vec::new();
+    for _ in 0..*count {
+        let raw = reader.numbers(11)?;
+        let (start, end, data_length) = (raw[0], raw[1], raw[10]);
+        let data = if data_length > 0 { mac_roman(reader.bytes_value()?) } else { String::new() };
+        if start < 0 || end < start {
+            return Err("invalid Paige hyperlink range".into());
+        }
+        if start < length && end > start {
+            links.push(json!([start + 1, end.min(length), data]));
+        }
+    }
+    reader.end()?;
+    Ok(links)
 }

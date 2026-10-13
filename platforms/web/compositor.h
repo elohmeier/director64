@@ -10,7 +10,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE
+// The authored 800x600 stage, unscaled (ink.h).
+enum { WC_WIDTH = 800, WC_HEIGHT = 600 };
+#else
 enum { WC_WIDTH = 640, WC_HEIGHT = 480 };
+#endif
 
 // Everything the compositor needs from its host. Assets are converted images
 // named as the cast records them ("<hash>.fdi"); the host never hands out a
@@ -30,6 +35,12 @@ typedef struct {
   uint32_t (*read)(void *ctx, const char *name, uint8_t *out, uint32_t cap);
   bool (*text)(void *ctx, const char *utf8, int width, int height,
                const wc_text_style_t *style, uint8_t *coverage);
+  // Where `text` set each character of the same box: x, y, width, height
+  // per character (one per Unicode character of the UTF-8), at most
+  // max_chars of them. Returns how many it placed, 0 without a layout.
+  // Optional; text colour runs and hit tests need it.
+  int (*layout)(void *ctx, const char *utf8, int width, int height,
+                const wc_text_style_t *style, int16_t *boxes, int max_chars);
   void *ctx;
   // The digital video frame a sprite shows now (D5), as RGBA8888 in `out`
   // (at most `cap` pixels); returns false while none is decoded. Optional.
@@ -47,15 +58,29 @@ typedef struct {
   uint32_t *pixels;
   size_t bytes;
   unsigned last;
+  // The stored registration point: a trimmed film-loop pose places itself by
+  // it (draw_sprite).
+  int reg_x, reg_y;
+  // The rectangle holding any coverage: draws skip what lies outside it.
+  unsigned cover_l, cover_t, cover_r, cover_b;
 } wc_image_t;
 
 enum { WC_IMAGE_SLOTS = 512, WC_TEXT_SLOTS = 32, WC_CURSOR_SLOTS = 16 };
+
+// A colour run of a text box: from character `offset` on, colour `rgb`
+// (the compositor's pixel colour).
+typedef struct {
+  uint32_t offset, rgb;
+} wc_text_run_t;
 
 typedef struct {
   uint32_t key;
   int width, height;
   uint8_t *coverage;
   unsigned last;
+  // Per pixel, which colour run set it (0: the box's own colour), built
+  // when the text has runs.
+  uint8_t *runs;
 } wc_text_t;
 
 // One cursor on the stage: where it points and the ink its glyph's black
@@ -107,6 +132,7 @@ void wc_init(wc_t *, wc_host_t, size_t image_budget);
 void wc_release(wc_t *);
 // Decodes (or finds) a member's image under an ink. NULL with the runtime
 // failed on an invalid or missing asset, as the console fails.
+// width and height 0 take the stored image's own size (trimmed poses).
 const wc_image_t *wc_image(wc_t *, lv_runtime_t *, const char *asset,
                            unsigned width, unsigned height, unsigned ink);
 // The platform hit test: matte ink answers from the image's coverage, every
@@ -118,6 +144,11 @@ bool wc_hit(wc_t *, lv_runtime_t *, const dg_member_t *, unsigned ink, int x,
 #if DG_D10
 // Keeps what the stage shows now (without cursors) as the member's image.
 void wc_capture_stage(wc_t *, uint32_t member);
+// Which character of a text member's `text`, set in a width x height box,
+// lies at (x, y): 0-based in Unicode characters, -1 for none (the host's
+// layout callback places them).
+int wc_text_char_at(wc_t *, const dg_member_t *, const char *text, int width, int height, int x,
+                    int y);
 #endif
 bool wc_render(wc_t *, dg_runtime_t *, int pointer_x, int pointer_y,
                bool pointer_shown, unsigned externals);

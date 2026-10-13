@@ -5,6 +5,7 @@
 // Only the game's entry movie can start: direct-activity fixtures are a
 // feature of the native probe, not of the browser runtime.
 import {existsSync, readFileSync} from "node:fs";
+import {inflateRawSync} from "node:zlib";
 import {createInterface} from "node:readline";
 import {join} from "node:path";
 import {pathToFileURL} from "node:url";
@@ -25,7 +26,13 @@ function pack(kind) {
   const blob = readFileSync(join(site, "assets", `${kind}.bin`));
   return (name) => {
     const entry = index[name];
-    return entry ? blob.subarray(entry[0], entry[0] + entry[1]) : null;
+    if (!entry) return null;
+    const bytes = blob.subarray(entry[0], entry[0] + entry[1]);
+    // "D64Z" + raw length + raw deflate, as the player inflates on load
+    // (platforms/web/site/player.js); WebP images ("D64W") go to the runtime.
+    if (bytes.length >= 8 && bytes[0] === 0x44 && bytes[1] === 0x36 && bytes[2] === 0x34 && bytes[3] === 0x5a)
+      return new Uint8Array(inflateRawSync(bytes.subarray(8)));
+    return bytes;
   };
 }
 const images = pack("images");
@@ -37,6 +44,35 @@ const module = await createDirector64({
     data,
     // The native probe holds a playFile stream's channel for a nominal second.
     stream: (channel, name) => (name ? 1000 : 0),
+    // No fonts here: text lays out on a nominal fixed advance, wrapped as the
+    // page wraps it, so text hit tests (pointToWord, hyperlinks) can be driven.
+    layout: (text, width, height, style) => {
+      const advance = style ? Math.max(1, Math.round(style.size * 0.55)) : 7;
+      const step = style ? (style.lineHeight > 0 ? style.lineHeight : Math.round(style.size * 1.2)) : 13;
+      const boxes = new Int16Array(text.length * 4);
+      let x = 0, y = 0;
+      for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (c === "\r" || c === "\n") {
+          if (c === "\r" && text[i + 1] === "\n") i++;
+          x = 0;
+          y += step;
+          continue;
+        }
+        if (c !== " " && x > 0 && style) {
+          // Wrap a word that would cross the box edge.
+          let end = i;
+          while (end < text.length && !" \r\n".includes(text[end])) end++;
+          if ((i === 0 || text[i - 1] === " ") && x + (end - i) * advance > width) {
+            x = 0;
+            y += step;
+          }
+        }
+        boxes.set([x, y, advance, step], i * 4);
+        x += advance;
+      }
+      return boxes;
+    },
     trace: (text) => process.stderr.write(`NATIVE_TRACE ${text}\n`),
   },
   print: (text) => process.stderr.write(text + "\n"),

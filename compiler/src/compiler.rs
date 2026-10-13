@@ -428,6 +428,8 @@ impl<'a> Compiler<'a> {
                     "tab" => Some(("text", "\t")),
                     "quote" => Some(("text", "\"")),
                     "backspace" => Some(("text", "\u{8}")),
+                    "space" => Some(("text", " ")),
+                    "enter" => Some(("text", "\u{3}")),
                     _ => None,
                 };
                 let shadowed = self.assigned.contains(name)
@@ -501,6 +503,24 @@ impl<'a> Compiler<'a> {
                     self.expr(source)?;
                     let index = self.name(&inner[..inner.len() - 1]);
                     return self.emit(op("chunk_count", vec![index]), 0);
+                }
+                // A text chunk's reference and colour read the member, not
+                // the chunk's text: `the ref of line 1 to n of member m` is
+                // the member (whose text a put into its chars rewrites), and
+                // `the foreColor of word n of member m` its run colour.
+                if let Expr::Chunk { kind, first, last, source } = &**value {
+                    if name == "ref" {
+                        return self.expr(source);
+                    }
+                    if name == "forecolor" {
+                        self.expr(source)?;
+                        self.expr(&Expr::Str(kind.clone()))?;
+                        self.expr(first)?;
+                        self.expr(last)?;
+                        self.builtin_call("chunkforecolor");
+                        let index = self.name("chunkforecolor");
+                        return self.emit(op("call_builtin_expr", vec![index, 4]), -3);
+                    }
                 }
                 self.expr(value)?;
                 let index = self.name(name);

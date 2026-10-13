@@ -137,6 +137,21 @@ struct Gradient {
 enum Fill {
     Color([f64; 4]),
     Gradient(Gradient),
+    Bitmap(BitmapFill),
+}
+
+/// A decoded SWF bitmap character, straight (not premultiplied) RGBA.
+struct Bitmap {
+    width: usize,
+    height: usize,
+    rgba: Vec<[u8; 4]>,
+}
+
+#[derive(Clone)]
+struct BitmapFill {
+    bitmap: Option<std::rc::Rc<Bitmap>>,
+    matrix: Matrix,
+    clipped: bool,
 }
 
 #[derive(Clone)]
@@ -163,10 +178,11 @@ struct Shape {
     edges: Vec<Edge>,
 }
 
-struct Styles {
+struct Styles<'a> {
     p: usize,
     fills: Vec<Fill>,
     lines: Vec<Line>,
+    bitmaps: &'a HashMap<usize, std::rc::Rc<Bitmap>>,
 }
 
 fn color(b: &[u8], p: usize, alpha: bool) -> R<[f64; 4]> {
@@ -227,8 +243,19 @@ fn style_tables(b: &[u8], state: &mut Styles, version: u32) -> R<(usize, usize)>
             let fill = gradient_style(b, state, version, kind != 0x10, kind == 0x13)?;
             state.fills.push(fill);
             p = state.p;
+        } else if (0x40..=0x43).contains(&kind) {
+            let id = u16le(b, p)?;
+            let mut bits = Bits::new(b, p + 2);
+            let matrix = bits.matrix()?;
+            p = bits.align();
+            let bitmap = match state.bitmaps.get(&id) {
+                Some(found) => Some(found.clone()),
+                None if id == 0xFFFF => None,
+                None => return Err("SWF bitmap fill references absent bitmap".into()),
+            };
+            state.fills.push(Fill::Bitmap(BitmapFill { bitmap, matrix, clipped: kind & 1 != 0 }));
         } else {
-            return Err("SWF bitmap fill needs explicit conversion".into());
+            return Err(format!("unsupported SWF fill style {kind:#x}"));
         }
     }
     let line_count = read_count(&mut p)?;
@@ -378,7 +405,7 @@ fn shape_records(
     Ok(())
 }
 
-fn parse_shape(b: &[u8], version: u32) -> R<(usize, Shape)> {
+fn parse_shape(b: &[u8], version: u32, bitmaps: &HashMap<usize, std::rc::Rc<Bitmap>>) -> R<(usize, Shape)> {
     if b.len() < 4 {
         return Err("truncated SWF shape".into());
     }
@@ -391,7 +418,7 @@ fn parse_shape(b: &[u8], version: u32) -> R<(usize, Shape)> {
             return Err("SWF shape4 winding/reserved flags need explicit conversion".into());
         }
     }
-    let mut state = Styles { p: bits.align(), fills: Vec::new(), lines: Vec::new() };
+    let mut state = Styles { p: bits.align(), fills: Vec::new(), lines: Vec::new(), bitmaps };
     let mut collector = Collector::new();
     let (fb, lb) = style_tables(b, &mut state, version)?;
     collector.fill_base = fb;
@@ -949,11 +976,12 @@ struct Dictionary {
     fonts: HashMap<usize, Font>,
     texts: HashMap<usize, Text>,
     fields: HashMap<usize, Field>,
+    bitmaps: HashMap<usize, std::rc::Rc<Bitmap>>,
 }
 
 impl Dictionary {
     fn has(&self, id: usize) -> bool {
-        self.shapes.contains_key(&id) || self.sprites.contains_key(&id) || self.fonts.contains_key(&id)
+        self.bitmaps.contains_key(&id) || self.shapes.contains_key(&id) || self.sprites.contains_key(&id) || self.fonts.contains_key(&id)
             || self.texts.contains_key(&id) || self.fields.contains_key(&id)
     }
 }
@@ -999,6 +1027,115 @@ fn parse_sprite(payload: &[u8], dictionary: &Dictionary, effects: &mut Effects) 
         return Err("SWF sprite frame count disagrees".into());
     }
     Ok((id, Sprite { frames, hold, evidence }))
+}
+
+fn parse_bitmap(tag: usize, payload: &[u8], tables: Option<&[u8]>) -> R<Bitmap> {
+    if tag == 20 || tag == 36 {
+        let format = byte(payload, 2)?;
+        let (width, height) = (u16le(payload, 3)?, u16le(payload, 5)?);
+        let (colors, start) = if format == 3 { (byte(payload, 7)? as usize + 1, 8) } else { (0, 7) };
+        let alpha = tag == 36;
+        let entry = if alpha { 4 } else { 3 };
+        let (pixel, stride) = match format {
+            3 => (1, (width + 3) & !3),
+            4 => (2, (width * 2 + 3) & !3),
+            5 => (4, width * 4),
+            _ => return Err(format!("unsupported SWF lossless format {format}")),
+        };
+        let data = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&payload[start..], colors * entry + stride * height)
+            .map_err(|_| "corrupt SWF lossless bitmap")?;
+        if data.len() < colors * entry + stride * height {
+            return Err("truncated SWF lossless bitmap".into());
+        }
+        let (table, pixels) = data.split_at(colors * entry);
+        // Lossless2 colors are premultiplied by their alpha.
+        let straight = |r: u8, g: u8, b: u8, a: u8| -> [u8; 4] {
+            if !alpha || a == 255 {
+                [r, g, b, a]
+            } else if a == 0 {
+                [0, 0, 0, 0]
+            } else {
+                let un = |v: u8| ((v as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8;
+                [un(r), un(g), un(b), a]
+            }
+        };
+        let mut rgba = Vec::with_capacity(width * height);
+        for y in 0..height {
+            for x in 0..width {
+                let at = y * stride + x * pixel;
+                rgba.push(match format {
+                    3 => {
+                        let i = pixels[at] as usize;
+                        if i >= colors {
+                            [0, 0, 0, 0]
+                        } else {
+                            let c = &table[i * entry..];
+                            straight(c[0], c[1], c[2], if alpha { c[3] } else { 255 })
+                        }
+                    }
+                    4 => {
+                        let v = u16::from_be_bytes([pixels[at], pixels[at + 1]]);
+                        let five = |s: u16| (((v >> s) & 31) * 255 / 31) as u8;
+                        [five(10), five(5), five(0), 255]
+                    }
+                    _ => straight(pixels[at + 1], pixels[at + 2], pixels[at + 3], if alpha { pixels[at] } else { 255 }),
+                });
+            }
+        }
+        return Ok(Bitmap { width, height, rgba });
+    }
+    let (jpeg, alpha) = if tag == 35 {
+        let offset = u32le(payload, 2)?;
+        let jpeg = payload.get(6..6 + offset).ok_or("truncated SWF JPEG3")?;
+        (jpeg, Some(&payload[6 + offset..]))
+    } else {
+        (&payload[2..], None)
+    };
+    let parts: Vec<&[u8]> = match (tag, tables) {
+        (6, Some(tables)) => vec![tables, jpeg],
+        (6, None) => return Err("SWF DefineBits without JPEGTables".into()),
+        _ => vec![jpeg],
+    };
+    let (width, height, rgb) = super::bitmap::decode_jpeg(&parts).map_err(|e| format!("SWF JPEG: {e}"))?;
+    let plane = match alpha {
+        Some(z) if !z.is_empty() => {
+            let plane = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(z, width * height)
+                .map_err(|_| "corrupt SWF JPEG3 alpha")?;
+            if plane.len() != width * height {
+                return Err("SWF JPEG3 alpha size differs".into());
+            }
+            Some(plane)
+        }
+        _ => None,
+    };
+    let rgba = rgb
+        .iter()
+        .enumerate()
+        .map(|(i, c)| [c[0], c[1], c[2], plane.as_ref().map_or(255, |a| a[i])])
+        .collect();
+    Ok(Bitmap { width, height, rgba })
+}
+
+/// Nearest-neighbour sample of a bitmap fill; clipped fills repeat their
+/// edge pixels, the others tile.
+fn bitmap_color(f: &BitmapFill, sx: f64, sy: f64) -> R<[f64; 4]> {
+    let Some(bitmap) = f.bitmap.as_ref().filter(|b| b.width > 0 && b.height > 0) else { return Ok([0.0; 4]) };
+    let m = &f.matrix;
+    let det = m.a * m.d - m.b * m.c;
+    if det == 0.0 {
+        return Err("degenerate SWF bitmap matrix".into());
+    }
+    let (px, py) = (sx - m.tx, sy - m.ty);
+    let u = ((m.d * px - m.c * py) / det).floor();
+    let v = ((m.a * py - m.b * px) / det).floor();
+    let (w, h) = (bitmap.width as f64, bitmap.height as f64);
+    let (u, v) = if f.clipped {
+        (u.max(0.0).min(w - 1.0), v.max(0.0).min(h - 1.0))
+    } else {
+        (u.rem_euclid(w), v.rem_euclid(h))
+    };
+    let c = bitmap.rgba[v as usize * bitmap.width + u as usize];
+    Ok([c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64])
 }
 
 fn gradient_color(g: &Gradient, sx: f64, sy: f64) -> R<[f64; 4]> {
@@ -1089,8 +1226,16 @@ fn paint_shape(rgba: &mut [u8], canvas: &Canvas, shape: &Shape, m: &Matrix, cxfo
     let x1 = ((max_x + margin - canvas.origin_x) / 20.0).ceil().min(w - 1.0);
     let y0 = ((min_y - margin - canvas.origin_y) / 20.0).floor().max(0.0);
     let y1 = ((max_y + margin - canvas.origin_y) / 20.0).ceil().min(h - 1.0);
+    // Axis-aligned placements keep sy constant along a row: each row's edge
+    // crossings are tabulated once, with the per-pixel test's arithmetic.
+    let aligned = m.b == 0.0 && m.c == 0.0;
     let mut y = y0;
     while y <= y1 {
+        let row = aligned.then(|| {
+            let px = canvas.origin_x + (x0 + 0.5) * 20.0 - m.tx;
+            let py = canvas.origin_y + (y + 0.5) * 20.0 - m.ty;
+            RowTable::new(shape, (m.a * py - m.b * px) / det)
+        });
         let mut x = x0;
         while x <= x1 {
             let px = canvas.origin_x + (x + 0.5) * 20.0 - m.tx;
@@ -1099,23 +1244,14 @@ fn paint_shape(rgba: &mut [u8], canvas: &Canvas, shape: &Shape, m: &Matrix, cxfo
             let sy = (m.a * py - m.b * px) / det;
             let mut paint: Option<[f64; 4]> = None;
             for s in 1..=shape.fills.len() {
-                let mut winding = 0i64;
-                for e in &shape.edges {
-                    if e.f1 != s && e.f0 != s {
-                        continue;
-                    }
-                    let down = e.f1 == s;
-                    let (ax, ay, bx, by) = if down { (e.x0, e.y0, e.x1, e.y1) } else { (e.x1, e.y1, e.x0, e.y0) };
-                    if (ay > sy) != (by > sy) {
-                        let crossing = ax + (sy - ay) * (bx - ax) / (by - ay);
-                        if sx < crossing {
-                            winding += if by > ay { 1 } else { -1 };
-                        }
-                    }
-                }
+                let winding = match &row {
+                    Some(table) => table.winding(s, sx),
+                    None => edge_winding(shape, s, sx, sy),
+                };
                 if winding != 0 {
                     paint = Some(match &shape.fills[s - 1] {
                         Fill::Gradient(g) => gradient_color(g, sx, sy)?,
+                        Fill::Bitmap(f) => bitmap_color(f, sx, sy)?,
                         Fill::Color(c) => *c,
                     });
                 }
@@ -1123,11 +1259,7 @@ fn paint_shape(rgba: &mut [u8], canvas: &Canvas, shape: &Shape, m: &Matrix, cxfo
             for s in 1..=shape.lines.len() {
                 let radius = shape.lines[s - 1].width.max(20.0) / 2.0;
                 let limit = radius * radius;
-                let mut hit = false;
-                for e in &shape.edges {
-                    if e.ln != s {
-                        continue;
-                    }
+                let near = |e: &Edge| {
                     let (dx, dy) = (e.x1 - e.x0, e.y1 - e.y0);
                     let length_sq = dx * dx + dy * dy;
                     let t = if length_sq != 0.0 {
@@ -1137,11 +1269,12 @@ fn paint_shape(rgba: &mut [u8], canvas: &Canvas, shape: &Shape, m: &Matrix, cxfo
                     };
                     let qx = e.x0 + t * dx - sx;
                     let qy = e.y0 + t * dy - sy;
-                    if qx * qx + qy * qy <= limit {
-                        hit = true;
-                        break;
-                    }
-                }
+                    qx * qx + qy * qy <= limit
+                };
+                let hit = match &row {
+                    Some(table) => table.lines[s - 1].iter().any(|&i| near(&shape.edges[i])),
+                    None => shape.edges.iter().any(|e| e.ln == s && near(e)),
+                };
                 if hit {
                     paint = Some(shape.lines[s - 1].color);
                 }
@@ -1157,6 +1290,80 @@ fn paint_shape(rgba: &mut [u8], canvas: &Canvas, shape: &Shape, m: &Matrix, cxfo
         y += 1.0;
     }
     Ok(())
+}
+
+fn crossing(e: &Edge, s: usize, sy: f64) -> Option<(f64, i64)> {
+    let down = e.f1 == s;
+    let (ax, ay, bx, by) = if down { (e.x0, e.y0, e.x1, e.y1) } else { (e.x1, e.y1, e.x0, e.y0) };
+    ((ay > sy) != (by > sy)).then(|| (ax + (sy - ay) * (bx - ax) / (by - ay), if by > ay { 1 } else { -1 }))
+}
+
+fn edge_winding(shape: &Shape, s: usize, sx: f64, sy: f64) -> i64 {
+    shape
+        .edges
+        .iter()
+        .filter(|e| e.f1 == s || e.f0 == s)
+        .filter_map(|e| crossing(e, s, sy))
+        .filter(|&(at, _)| sx < at)
+        .map(|(_, sign)| sign)
+        .sum()
+}
+
+/// One scanline's crossings per fill (sorted, with suffix winding sums) and
+/// the stroke edges whose padded y-range reaches it.
+struct RowTable {
+    fills: Vec<(Vec<f64>, Vec<i64>)>,
+    lines: Vec<Vec<usize>>,
+}
+
+impl RowTable {
+    fn new(shape: &Shape, sy: f64) -> Self {
+        // One pass over the edges: an edge counts for each fill it bounds,
+        // once only when both sides name the same fill.
+        let mut hits: Vec<Vec<(f64, i64)>> = vec![Vec::new(); shape.fills.len() + 1];
+        let mut lines: Vec<Vec<usize>> = vec![Vec::new(); shape.lines.len() + 1];
+        for (i, e) in shape.edges.iter().enumerate() {
+            let (lo, hi) = (e.y0.min(e.y1), e.y0.max(e.y1));
+            if e.ln != 0 {
+                let radius = shape.lines[e.ln - 1].width.max(20.0) / 2.0;
+                let pad = radius + 1e-6 * (lo.abs() + hi.abs() + radius) + 1e-6;
+                if sy >= lo - pad && sy <= hi + pad {
+                    lines[e.ln].push(i);
+                }
+            }
+            if sy < lo || sy > hi {
+                continue;
+            }
+            for s in [e.f1, e.f0] {
+                if s != 0 {
+                    if let Some(hit) = crossing(e, s, sy) {
+                        hits[s].push(hit);
+                    }
+                }
+                if e.f0 == e.f1 {
+                    break;
+                }
+            }
+        }
+        let fills = hits
+            .into_iter()
+            .skip(1)
+            .map(|mut hits| {
+                hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut suffix = vec![0i64; hits.len() + 1];
+                for i in (0..hits.len()).rev() {
+                    suffix[i] = suffix[i + 1] + hits[i].1;
+                }
+                (hits.into_iter().map(|h| h.0).collect(), suffix)
+            })
+            .collect();
+        RowTable { fills, lines: lines.into_iter().skip(1).collect() }
+    }
+
+    fn winding(&self, s: usize, sx: f64) -> i64 {
+        let (at, suffix) = &self.fills[s - 1];
+        suffix[at.partition_point(|&c| c <= sx)]
+    }
 }
 
 fn glyph_for(font: &Font, code: usize) -> Option<usize> {
@@ -1408,15 +1615,23 @@ fn timeline(b: &[u8]) -> R<Timeline> {
     let mut field_placements: Vec<(usize, usize, Matrix, Option<String>, usize)> = Vec::new();
     let mut named: Vec<Value> = Vec::new();
     let mut effects = Effects::default();
+    let mut jpeg_tables: Option<&[u8]> = None;
     let define = |dictionary: &Dictionary, id: usize| -> R<()> {
         if dictionary.has(id) { Err("duplicate SWF character".into()) } else { Ok(()) }
     };
     for Tag { tag, payload } in &tags {
         let (tag, payload) = (*tag, *payload);
         if let Some(version) = shape_version(tag) {
-            let (id, shape) = parse_shape(payload, version)?;
+            let (id, shape) = parse_shape(payload, version, &dictionary.bitmaps)?;
             define(&dictionary, id)?;
             dictionary.shapes.insert(id, shape);
+        } else if tag == 8 {
+            jpeg_tables = Some(payload);
+        } else if matches!(tag, 6 | 21 | 35 | 20 | 36) {
+            let id = u16le(payload, 0)?;
+            define(&dictionary, id)?;
+            let bitmap = parse_bitmap(tag, payload, jpeg_tables)?;
+            dictionary.bitmaps.insert(id, std::rc::Rc::new(bitmap));
         } else if tag == 39 {
             let (id, sprite) = parse_sprite(payload, &dictionary, &mut effects)?;
             define(&dictionary, id)?;

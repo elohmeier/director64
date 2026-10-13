@@ -35,7 +35,7 @@ def validate_intro_stops(log, model):
     completed = []
     for name in ("INTRO_1.MOV", "INTRO_2.MOV"):
         member = next(m for m in movie["members"] if m["name"] == name)
-        identity = movie["id"] << 20 | member["cast"] << 16 | member["number"]
+        identity = movie["id"] << 21 | member["cast"] << 16 | member["number"]
         stop = next((s for s in stops if s["member"] == identity), None)
         if not stop or stop["time"] != member["frames"] or stop["duration"] != member["frames"]:
             raise CaptureError(f"intro clip did not reach its full duration: {name}")

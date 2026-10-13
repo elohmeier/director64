@@ -1393,7 +1393,7 @@ static bool enter(const char *name, unsigned frame) {
       const dg_delta_t *delta = &movie->deltas[movie->frames[f].first + n];
       if (delta->channel < 6) continue;
       uint32_t member_id = delta->value.member;
-      if (member_id >> 20 != movie->id) continue;
+      if (DG_ID_FILE(member_id) != movie->id) continue;
       for (unsigned k = 0; k < movie->member_count; k++) {
         const dg_member_t *m = &movie->members[k];
         if (m->id != member_id) continue;

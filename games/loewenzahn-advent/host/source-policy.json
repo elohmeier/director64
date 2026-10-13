@@ -1,0 +1,165 @@
+{
+  "director_version": 850,
+  "external_cast_aliases": {
+    "U000BIDEO0.CXT": "VIDEO0.CXT"
+  },
+  "directories": [
+    ".",
+    "PAINTBOX",
+    "TAG1",
+    "TAG2",
+    "TAG3",
+    "TAG4",
+    "TAG5",
+    "TAG6",
+    "TAG7",
+    "TAG8",
+    "TAG9",
+    "TAG10",
+    "TAG11",
+    "TAG12",
+    "TAG13",
+    "TAG14",
+    "TAG15",
+    "TAG16",
+    "TAG17",
+    "TAG18",
+    "TAG19",
+    "TAG20",
+    "TAG21",
+    "TAG22",
+    "TAG23",
+    "TAG24",
+    "WISSENSB"
+  ],
+  "director_files": 51,
+  "counts": {
+    "files": 51,
+    "scripts": 889,
+    "handlers": 2404,
+    "bytecode_sites": 65208,
+    "members": 3569,
+    "movie_references": 62,
+    "score_chunks": 126,
+    "bitmap_references": 2067,
+    "sound_references": 86
+  },
+  "projector": "../SETUP/WINROOT/TERZIO/LOEWENZA/LZADVENT.EXE",
+  "source_sha256": "00ae07ac7e3cfba27bcc76e76c62cec73b3ab33c614652b9786795c3b1b5a980",
+  "extended_d6": true,
+  "stage_prescale": true,
+  "deferred_conversions": [
+    {
+      "movie": "BASTBUCH.DXR",
+      "cast": 1,
+      "member": 27,
+      "error": "unsupported builtin palette 0/4",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "BSCHONER.DXR",
+      "cast": 1,
+      "member": 8,
+      "error": "SWF frame count exceeds conversion bounds",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "BW_VORN.DXR",
+      "cast": 1,
+      "member": 101,
+      "error": "truncated snd resource",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "PAINTBOX.DXR",
+      "cast": 1,
+      "member": 9,
+      "error": "unsupported shape geometry/pattern",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "PAINTBOX.DXR",
+      "cast": 1,
+      "member": 15,
+      "error": "unsupported shape geometry/pattern",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "PAINTBOX.DXR",
+      "cast": 1,
+      "member": 29,
+      "error": "unsupported shape geometry/pattern",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "PAINTBOX.DXR",
+      "cast": 1,
+      "member": 67,
+      "error": "unsupported shape geometry/pattern",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "REZEPT1.DXR",
+      "cast": 1,
+      "member": 28,
+      "error": "unsupported builtin palette 0/4",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "VIDEOM.CXT",
+      "cast": 1,
+      "member": 1,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "VIDEOM.CXT",
+      "cast": 1,
+      "member": 2,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "BACKGAME.DXR",
+      "cast": 1,
+      "member": 60,
+      "error": "film-loop main-channel action",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "BACKGAME.DXR",
+      "cast": 1,
+      "member": 97,
+      "error": "film-loop main-channel action",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "BW_VORN.DXR",
+      "cast": 1,
+      "member": 140,
+      "error": "film-loop main-channel action",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "SCHORNST.DXR",
+      "cast": 1,
+      "member": 97,
+      "error": "film-loop bounds",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "SCHORNST.DXR",
+      "cast": 1,
+      "member": 212,
+      "error": "film-loop bounds",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "SCHORNST.DXR",
+      "cast": 1,
+      "member": 214,
+      "error": "film-loop bounds",
+      "disposition": "conversion pending; the member draws nothing"
+    }
+  ]
+}

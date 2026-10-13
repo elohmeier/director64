@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define DG_PACKAGE_FORMAT 2
+#define DG_PACKAGE_FORMAT 5
 #define DG_PACKAGE_ABI_BYTES 16
 
 typedef struct {

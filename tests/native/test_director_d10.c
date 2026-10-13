@@ -66,21 +66,21 @@ static const dg_flash_field_t card_fields[]={
  {.name="my_txt",.variable="text1",.text="",.x=4,.y=6,.width=104,.height=40,
   .align=1,.word_wrap=1,.multiline=1,.style=&card_style}};
 static const dg_member_t members[]={
- {.id=0x12000a,.number=10,.cast=2,.type=1,.width=16,.height=16,.name="first"},
+ {.id=0x22000a,.number=10,.cast=2,.type=1,.width=16,.height=16,.name="first"},
  // A converted Flash member answers its authored type to scripts.
- {.id=0x12000b,.number=11,.cast=2,.type=1,.width=16,.height=16,.name="second",.source_xtra=1,
+ {.id=0x22000b,.number=11,.cast=2,.type=1,.width=16,.height=16,.name="second",.source_xtra=1,
   .flash_label_count=3,.flash_labels=card_labels,
   .flash_field_count=1,.flash_fields=card_fields},
  // An editable name field for the on-screen keyboard contract.
- {.id=0x12000c,.number=12,.cast=2,.type=3,.name="entry",.text="",.editable=true},
+ {.id=0x22000c,.number=12,.cast=2,.type=3,.name="entry",.text="",.editable=true},
  // A two-second speech member: room ambience sizes its waits from endTime.
- {.id=0x12000d,.number=13,.cast=2,.type=6,.name="speech",.samples=44100,.rate=22050},
+ {.id=0x22000d,.number=13,.cast=2,.type=6,.name="speech",.samples=44100,.rate=22050},
 };
 static const dg_delta_t deltas[]={
- {.channel=0,.mask=DG_ALL,.value={.script=0x110001}},
- {.channel=3,.mask=DG_ALL,.value={.member=0x11007c}},
+ {.channel=0,.mask=DG_ALL,.value={.script=0x210001}},
+ {.channel=3,.mask=DG_ALL,.value={.member=0x21007c}},
  // The last authorable channel: sprite 1000, beyond every earlier profile.
- {.channel=1005,.mask=DG_ALL,.value={.member=0x12000a,.type=1}},
+ {.channel=1005,.mask=DG_ALL,.value={.member=0x22000a,.type=1}},
 };
 static const dg_frame_t frames[]={{0,3}};
 static const dg_movie_t movie={.code=&code,.id=1,.tempo=1,.cast_count=2,.casts=casts,.members=members,.member_count=4,
@@ -100,7 +100,7 @@ static const dg_movie_t check={.code=&check_code,.id=3,.tempo=1,
 // An alternate cast archive: castLib fileName swaps rebind the "Extra"
 // library onto this file's External cast.
 static const dg_member_t extra2_members[]={
- {.id=0x41000a,.number=10,.cast=1,.type=1,.width=8,.height=8,.name="alt"},
+ {.id=0x81000a,.number=10,.cast=1,.type=1,.width=8,.height=8,.name="alt"},
 };
 static const dg_cast_t extra2_casts[]={{"External",4,1}};
 static const lv_movie_t extra2_code={"EXTRA2.CXT",0,NULL,NULL, NULL, NULL, NULL, 0};
@@ -138,8 +138,8 @@ int main(void) {
  for(unsigned i=0;i<4;i++)assert(dg_tick(&d,320,240,false,1000));
  assert(clicked==1 && !global_calls && !sounds && empty_sounds==1);
  // The channel-0 frame-behavior span delivered its beginSprite.
- assert(d.frame_script_member==0x110001 && !d.frame_script_begin_pending);
- assert(d.sprites[1000].value.member==0x12000a);
+ assert(d.frame_script_member==0x210001 && !d.frame_script_begin_pending);
+ assert(d.sprites[1000].value.member==0x22000a);
  for(unsigned i=0;i<2;i++) {
   lv_t file=call("fileio",3,(lv_t[]){lv_text(&r,"mnew",true),lv_text(&r,"append",false),lv_text(&r,"Lernwort.txt",false)});
   assert(lv_type(file)==LV_FILE);
@@ -150,7 +150,7 @@ int main(void) {
  // The on-screen keyboard commits through dg_edit_text: windows-1252
  // German letters type into names and spelling answers; other non-ASCII
  // and quote characters stay rejected.
- lv_set(&r,NULL,"member",lv_make(LV_SPRITE, 5),lv_make(LV_MEMBER, 0x12000c));
+ lv_set(&r,NULL,"member",lv_make(LV_SPRITE, 5),lv_make(LV_MEMBER, 0x22000c));
  assert(!dg_edit_text(&d,5,"B\"R"));
  assert(!dg_edit_text(&d,5,"B\x9FR"));
  assert(dg_edit_text(&d,5,"B\xC4R"));
@@ -160,14 +160,14 @@ int main(void) {
  assert(!r.failed && d.transition_type==9 && d.transition_duration==15);
  lv_t sprite=lv_make(LV_SPRITE, 1);
  lv_set(&r,NULL,"membernum",sprite,lv_num(10));
- assert(!r.failed && d.sprites[1].value.member==0x11000a);
- lv_set(&r,NULL,"member",sprite,lv_make(LV_MEMBER, 0x12000a));
+ assert(!r.failed && d.sprites[1].value.member==0x21000a);
+ lv_set(&r,NULL,"member",sprite,lv_make(LV_MEMBER, 0x22000a));
  assert(lv_numeric(lv_get(&r,NULL,"membernum",sprite))==10);
  assert(lv_numeric(lv_get(&r,NULL,"castnum",sprite))==131082);
  lv_set(&r,NULL,"membernum",sprite,lv_num(11));
- assert(d.sprites[1].value.member==0x12000b);
+ assert(d.sprites[1].value.member==0x22000b);
  lv_set(&r,NULL,"castnum",sprite,lv_num(131082));
- assert(d.sprites[1].value.member==0x12000a);
+ assert(d.sprites[1].value.member==0x22000a);
  lv_set(&r,NULL,"puppet",sprite,lv_num(1));
  assert(lv_numeric(lv_get(&r,NULL,"puppet",sprite))==1);
  call("cursor",1,(lv_t[]){lv_list(&r,2,(lv_t[]){lv_num(2000),lv_num(2001)},false)});
@@ -212,7 +212,7 @@ int main(void) {
  // matching a recorded edit field seeds from its descriptor; writes read
  // back, setText decodes the authored percent-escapes and lays the text
  // out, and the sprite answers its own timeline root.
- lv_set(&r,NULL,"member",top,lv_make(LV_MEMBER, 0x12000b));
+ lv_set(&r,NULL,"member",top,lv_make(LV_MEMBER, 0x22000b));
  lv_t root=lv_get(&r,NULL,"_root",top);
  assert(lv_type(root)==LV_SPRITE && lv_id(root)==lv_id(top));
  lv_t field=lv_get(&r,NULL,"my_txt",top);
@@ -262,12 +262,12 @@ int main(void) {
  assert(!strcmp(lv_cstr(&r,call("js_int2hex",1,(lv_t[]){lv_num(10)})),"a"));
  call("js_cleargarbage",0,NULL);
  assert(!r.failed);
- lv_set(&r,NULL,"member",top,lv_make(LV_MEMBER, 0x12000a));
+ lv_set(&r,NULL,"member",top,lv_make(LV_MEMBER, 0x22000a));
  // Flash playback settings on a converted member are accepted and ignored.
- lv_set(&r,NULL,"static",lv_make(LV_MEMBER, 0x12000b),lv_num(1));
+ lv_set(&r,NULL,"static",lv_make(LV_MEMBER, 0x22000b),lv_num(1));
  assert(!r.failed);
  // A playing channel answers the member's length in milliseconds.
- call("puppetsound",2,(lv_t[]){lv_num(1),lv_make(LV_MEMBER, 0x12000d)});
+ call("puppetsound",2,(lv_t[]){lv_num(1),lv_make(LV_MEMBER, 0x22000d)});
  assert(!r.failed);
  assert(lv_numeric(lv_get(&r,NULL,"endtime",lv_make(LV_SOUND, 1)))==2000);
  call("unload",2,(lv_t[]){lv_num(1),lv_num(9)});
@@ -321,7 +321,7 @@ int main(void) {
  call("flushinputevents",0,NULL);
  assert(!r.failed);
  assert(lv_numeric(call("isbusy",1,(lv_t[]){lv_make(LV_SOUND, 1)}))==0);
- assert(!strcmp(lv_cstr(&r,lv_get(&r,NULL,"type",lv_make(LV_MEMBER, 0x12000b))),"flash"));
+ assert(!strcmp(lv_cstr(&r,lv_get(&r,NULL,"type",lv_make(LV_MEMBER, 0x22000b))),"flash"));
  // Buddy API INI persistence: default when absent, roundtrip after writes,
  // and section preservation across a second key.
  lv_t ini_args[]={lv_text(&r,"Debug",false),lv_text(&r,"CheckCD",false),
@@ -342,7 +342,7 @@ int main(void) {
  lv_t first_name=call("getpropat",2,(lv_t[]){view,lv_num(1)});
  assert(lv_type(first_name)==LV_SYMBOL && !strcmp(lv_cstr(&r,first_name),"gone"));
  // call(#handler, receiver) skips a receiver without the handler.
- lv_t inst=lv_instance(&r,lv_make(LV_SCRIPT, 0x110001));
+ lv_t inst=lv_instance(&r,lv_make(LV_SCRIPT, 0x210001));
  assert(lv_invoke(&r,&caller,"call",2,(lv_t[]){lv_text(&r,"nosuch",true),inst})==LV_CONTINUE);
  assert(!r.failed);
  // castLib fileName rebinds the named library onto another cast archive:
@@ -353,7 +353,7 @@ int main(void) {
  lv_set(&r,NULL,"filename",lib,lv_text(&r,"C:\\data\\extra2.cst",false));
  assert(!r.failed && d.cast_swap_count==1 && d.cast_swaps[0].target==&extra2);
  lv_t swapped=lv_reference(&r,"member",lv_num(10),lv_text(&r,"Extra",false));
- assert(lv_type(swapped)==LV_MEMBER && (uint32_t)lv_id(swapped)==0x41000au);
+ assert(lv_type(swapped)==LV_MEMBER && (uint32_t)lv_id(swapped)==0x81000au);
  assert(!strcmp(lv_cstr(&r,lv_get(&r,NULL,"name",swapped)),"alt"));
  assert(!strcmp(lv_cstr(&r,lv_get(&r,NULL,"filename",lib)),"extra2"));
  // Emergency in-place collection: when one step outgrows the free

@@ -1,0 +1,26 @@
+schema_version = 1
+slug = "loewenzahn-6"
+title = "Löwenzahn 6"
+status = "experimental"
+default_source = "sha256-930556e23657"
+
+[[sources]]
+id = "sha256-930556e23657"
+file = "Loewe6.iso"
+sha256 = "930556e23657cfff9e8d264a6699319a0ed318e5445a0a64300d95114f1a9105"
+bytes = 667678720
+kind = "iso9660"
+
+[recovery]
+director_version = 850
+media_root = "DATA"
+
+[port]
+extended_d6 = true
+director_version = 850
+media_root = "DATA"
+entry_movie = "START"
+native_compatibility = true
+rom_title = "Loewenzahn 6"
+rom_save_type = 80
+controller_count = 4

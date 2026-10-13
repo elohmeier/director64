@@ -31,7 +31,7 @@ static lv_flow_t drag(lv_runtime_t *r, lv_frame_t *f) {
   // The new foreground channel must not receive the release that ended this
   // drag. The original channel's mouseUp should still dispatch normally.
   lv_set(&values, NULL, "member", lv_make(LV_SPRITE, 2),
-         lv_make(LV_MEMBER, 0x110003));
+         lv_make(LV_MEMBER, 0x210003));
   director.sprites[2].value.x = director.sprites[2].value.y = 0;
   return LV_RETURN;
 }
@@ -51,16 +51,16 @@ static const lv_handler_t handlers[] = {
 };
 static const lv_movie_t code = {"D5.DXR", 3, handlers,NULL, NULL, NULL, NULL, 0};
 static const dg_cast_t casts[] = {{"Internal", 1, 1}, {"Shared", 2, 1}};
-static const uint32_t film_sounds[] = {0x110007, 0, 0x110007, 0, 0, 0};
+static const uint32_t film_sounds[] = {0x210007, 0, 0x210007, 0, 0, 0};
 static const dg_member_t members[] = {
-    {.id = 0x110003,
+    {.id = 0x210003,
      .number = 3,
      .cast = 1,
      .type = 1,
      .width = 100,
      .height = 100,
      .name = "door"},
-    {.id = 0x110004,
+    {.id = 0x210004,
      .number = 4,
      .cast = 1,
      .type = 10,
@@ -70,7 +70,7 @@ static const dg_member_t members[] = {
      .samples = 600,
      .rate = 600,
      .video_flags = 256},
-    {.id = 0x110005,
+    {.id = 0x210005,
      .number = 5,
      .cast = 1,
      .type = 10,
@@ -79,7 +79,7 @@ static const dg_member_t members[] = {
      .name = "second video",
      .samples = 1200,
      .rate = 600},
-    {.id = 0x110006,
+    {.id = 0x210006,
      .number = 6,
      .cast = 1,
      .type = 2,
@@ -87,14 +87,14 @@ static const dg_member_t members[] = {
      .film_count = 3,
      .film_loop = 1,
      .film_sounds = film_sounds},
-    {.id = 0x110007, .number = 7, .cast = 1, .type = 6, .name = "film sound"},
-    {.id = 0x110008, .number = 8, .cast = 1, .type = 6, .name = "Radio.AIF"},
-    {.id = 0x110009, .number = 9, .cast = 1, .type = 6, .name = "Radio.WAV"},
-    {.id = 0x11000a, .number = 10, .cast = 1, .type = 6, .name = "Exact.dir"},
-    {.id = 0x11000b, .number = 11, .cast = 1, .type = 6, .name = "Exact.AIF"},
-    {.id = 0x11000c, .number = 12, .cast = 1, .type = 6, .name = "Wave.WAV"},
-    {.id = 0x11000d, .number = 13, .cast = 1, .type = 1, .name = "Radio.dir"},
-    {.id = 0x11000e, .number = 14, .cast = 1, .type = 3,
+    {.id = 0x210007, .number = 7, .cast = 1, .type = 6, .name = "film sound"},
+    {.id = 0x210008, .number = 8, .cast = 1, .type = 6, .name = "Radio.AIF"},
+    {.id = 0x210009, .number = 9, .cast = 1, .type = 6, .name = "Radio.WAV"},
+    {.id = 0x21000a, .number = 10, .cast = 1, .type = 6, .name = "Exact.dir"},
+    {.id = 0x21000b, .number = 11, .cast = 1, .type = 6, .name = "Exact.AIF"},
+    {.id = 0x21000c, .number = 12, .cast = 1, .type = 6, .name = "Wave.WAV"},
+    {.id = 0x21000d, .number = 13, .cast = 1, .type = 1, .name = "Radio.dir"},
+    {.id = 0x21000e, .number = 14, .cast = 1, .type = 3,
      .name = "Speedanzeige", .text = "1"},
 };
 static dg_delta_t deltas[] = {
@@ -102,8 +102,8 @@ static dg_delta_t deltas[] = {
     {.channel = 6,
      .mask = DG_ALL,
      .value = {.type = 16,
-               .member = 0x110003,
-               .script = 0x110002,
+               .member = 0x210003,
+               .script = 0x210002,
                .x = 0,
                .y = 0,
                .width = 100,
@@ -128,7 +128,7 @@ static const dg_movie_t movie = {.code = &code,
 static const lv_movie_t shared_code = {"SHARED.CXT", 0, NULL,NULL, NULL, NULL, NULL, 0};
 static const dg_cast_t shared_cast = {"Shared", 2, 1};
 static const dg_member_t shared_member = {
-    .id = 0x210005, .number = 5, .cast = 1, .type = 1, .name = "shared"};
+    .id = 0x410005, .number = 5, .cast = 1, .type = 1, .name = "shared"};
 static const dg_movie_t shared_movie = {.code = &shared_code,
                                         .id = 2,
                                         .cast_count = 1,
@@ -172,7 +172,7 @@ static int constrain(const char *name, int channel, int coordinate) {
 }
 int main(void) {
   boot();
-  lv_t speed_field = lv_make(LV_FIELD, 0x11000e);
+  lv_t speed_field = lv_make(LV_FIELD, 0x21000e);
   lv_set(&values, NULL, "text", speed_field, lv_num(24));
   lv_t speed_text = lv_get(&values, NULL, "text", speed_field);
   assert(lv_type(speed_text) == LV_STRING && !strcmp(lv_cstr(&values, speed_text), "24"));
@@ -193,7 +193,7 @@ int main(void) {
   reveal_after_drag = false;
 
   boot();
-  director.sprites[3].value = (dg_spec_t){.type = 16, .member = 0x110003,
+  director.sprites[3].value = (dg_spec_t){.type = 16, .member = 0x210003,
       .x = 140, .y = 130, .width = 100, .height = 100};
   assert(constrain("constrainh", 3, -10) == 140);
   assert(constrain("constrainh", 3, 190) == 190);
@@ -206,11 +206,11 @@ int main(void) {
   assert(constrain("constrainh", DG_SPRITES, 140) == 0);
 
   boot();
-  play_file("C:\\AUDIO\\radio.dir", 0x110008); // Skip bitmap; .AIF before .WAV.
-  play_file("AUDIO:RADIO", 0x110008);            // Extensionless Mac path.
-  play_file("AUDIO/radio.wav", 0x110009);       // Exact extension takes priority.
-  play_file("exact.DIR", 0x11000a);             // Preserve an unusual exact name.
-  play_file("Wave.dir", 0x11000c);              // Fall back to .WAV if no .AIF.
+  play_file("C:\\AUDIO\\radio.dir", 0x210008); // Skip bitmap; .AIF before .WAV.
+  play_file("AUDIO:RADIO", 0x210008);            // Extensionless Mac path.
+  play_file("AUDIO/radio.wav", 0x210009);       // Exact extension takes priority.
+  play_file("exact.DIR", 0x21000a);             // Preserve an unusual exact name.
+  play_file("Wave.dir", 0x21000c);              // Fall back to .WAV if no .AIF.
   lv_t missing[] = {lv_num(3), lv_text(&values, "Absent.dir", false)}, out = {0};
   bool yield = false;
   unsigned sounds_before = director.sounds[2];
@@ -249,14 +249,14 @@ int main(void) {
            (int)i * 50);
   }
   lv_t shared = lv_reference(&values, "member", lv_num(131077), (lv_t){0});
-  assert(lv_id(shared) == 0x210005);
+  assert(lv_id(shared) == 0x410005);
   assert(lv_integer(&values, lv_get(&values, NULL, "number", shared)) ==
          131077);
   lv_set(&values, NULL, "member", sprite,
-         lv_make(LV_MEMBER, 0x110004));
+         lv_make(LV_MEMBER, 0x210004));
   director.sprites[2].value.type = 16;
   assert(lv_integer(&values, lv_get(&values, NULL, "duration",
-                 lv_make(LV_MEMBER, 0x110004))) == 60);
+                 lv_make(LV_MEMBER, 0x210004))) == 60);
   lv_set(&values, NULL, "starttime", sprite, lv_num(3));
   assert(lv_integer(&values, lv_get(&values, NULL, "starttime", sprite)) == 3);
   lv_set(&values, NULL, "movietime", sprite, lv_num(20));
@@ -291,21 +291,21 @@ int main(void) {
 
   // The renderer observes a replaced video before the next service tick.
   lv_set(&values, NULL, "member", sprite,
-         lv_make(LV_MEMBER, 0x110005));
+         lv_make(LV_MEMBER, 0x210005));
   assert(director.sprites[2].video_time == 0);
   assert(director.sprites[2].video_stop == 0);
   assert(director.sprites[2].video_rate == 1);
   director.sprites[1].video_time = 900;
-  deltas[1].value.member = 0x110004;
+  deltas[1].value.member = 0x210004;
   assert(dg_seek(&director, 1));
   assert(director.sprites[1].video_time == 0);
   assert(director.sprites[1].video_rate == 0);
   lv_set(&values, NULL, "member", sprite,
-         lv_make(LV_MEMBER, 0x110006));
+         lv_make(LV_MEMBER, 0x210006));
   director.sprites[2].puppet=true;
   director.sprites[2].value.type=16;
   assert(dg_seek(&director,director.frame==1?2:1));
-  assert(director.sounds[0] == 0x110007);
+  assert(director.sounds[0] == 0x210007);
   unsigned serial = director.sound_serial[0];
   director.sprites[2].film_frame = 1;
   assert(dg_seek(&director,director.frame==1?2:1));
@@ -317,12 +317,12 @@ int main(void) {
          0); // Blank sound pose releases the previous sound.
   director.sprites[2].film_frame = 3;
   assert(dg_seek(&director,director.frame==1?2:1));
-  assert(director.sounds[0] == 0x110007); // Loop reentry starts it again.
+  assert(director.sounds[0] == 0x210007); // Loop reentry starts it again.
   director.sound_puppet[0] = true;
   director.sprites[2].film_frame = 2;
   assert(dg_seek(&director,director.frame==1?2:1));
   assert(director.sounds[0] ==
-         0x110007); // Source puppet sound takes precedence.
+         0x210007); // Source puppet sound takes precedence.
 
   // A "go <marker>" primary event script navigates like the go command.
   boot();

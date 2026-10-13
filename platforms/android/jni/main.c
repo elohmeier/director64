@@ -3,6 +3,7 @@
 // the console's 60 Hz service clock, as the page's player drives it
 // (platforms/web/site/player.js). The activity (GameActivity.java) owns the
 // surface, the controllers and the dialogs; this owns the engine.
+#include "compositor.h"
 #include "decode.h"
 #include "mixer.h"
 #include "packs.h"
@@ -52,7 +53,8 @@ unsigned d64_frame(void);
 unsigned d64_script_errors(void);
 unsigned d64_image_bytes(void);
 
-enum { WIDTH = 640, HEIGHT = 480, PORTS = 4 };
+// The stage the runtime draws: 640x480, or an 800x600 game unscaled.
+enum { WIDTH = WC_WIDTH, HEIGHT = WC_HEIGHT, PORTS = 4 };
 // The console's catch-up rule (platforms/n64/director_main.c): at most four
 // ticks per pass and twelve ticks of backlog; time beyond that is dropped
 // rather than rushed through.
@@ -69,7 +71,7 @@ typedef struct {
 
 static JavaVM *vm;
 static jobject activity;
-static jmethodID on_text, on_entry, on_entry_closed, on_stopped, on_print, on_saved;
+static jmethodID on_text, on_layout, on_entry, on_entry_closed, on_stopped, on_print, on_saved;
 static pthread_t thread;
 static bool thread_running;
 static pthread_mutex_t engine = PTHREAD_MUTEX_INITIALIZER;
@@ -151,6 +153,34 @@ static bool host_text(void *ctx, const char *utf8, int width, int height,
   if (plane)
     (*env)->DeleteLocalRef(env, plane);
   return ok;
+}
+
+// Where the activity set each character of a text box (Text.layout).
+static int host_layout(void *ctx, const char *utf8, int width, int height,
+                       const wc_text_style_t *style, int16_t *boxes, int max_chars) {
+  (void)ctx;
+  JNIEnv *env = env_of_thread();
+  if (!env || width <= 0 || height <= 0)
+    return 0;
+  jbyteArray text = bytes_of(env, utf8);
+  jshortArray placed = (*env)->CallObjectMethod(
+      env, activity, on_layout, text, width, height, style ? (jint)style->font : 0,
+      style ? (jint)style->size : 0, style ? (jint)style->align : 0,
+      style ? style->ascent : 0, style ? style->line_height : 0);
+  (*env)->DeleteLocalRef(env, text);
+  if ((*env)->ExceptionCheck(env)) {
+    (*env)->ExceptionDescribe(env);
+    (*env)->ExceptionClear(env);
+    return 0;
+  }
+  if (!placed)
+    return 0;
+  int count = (*env)->GetArrayLength(env, placed) / 4;
+  if (count > max_chars)
+    count = max_chars;
+  (*env)->GetShortArrayRegion(env, placed, 0, count * 4, (jshort *)boxes);
+  (*env)->DeleteLocalRef(env, placed);
+  return count;
 }
 
 static void host_sound(void *ctx, unsigned channel, const char *asset, bool looping,
@@ -284,8 +314,10 @@ static void show_entry(unsigned sprite, bool keys) {
   key_entry = keys;
   JNIEnv *env = env_of_thread();
   jbyteArray value = bytes_of(env, d64_text_value(sprite));
-  (*env)->CallVoidMethod(env, activity, on_entry, (jint)sprite, value, rect[0], rect[1],
-                         rect[2], rect[3], (jboolean)keys);
+  // The activity places it in the 640x480 units its mouse speaks.
+  (*env)->CallVoidMethod(env, activity, on_entry, (jint)sprite, value, rect[0] * 640 / WIDTH,
+                         rect[1] * 480 / HEIGHT, rect[2] * 640 / WIDTH, rect[3] * 480 / HEIGHT,
+                         (jboolean)keys);
   (*env)->DeleteLocalRef(env, value);
 }
 
@@ -331,7 +363,8 @@ static void *game(void *arg) {
     stopped(1, error);
     goto done;
   }
-  web_runtime_host((web_host_t){.asset = host_asset, .text = host_text, .sound = host_sound,
+  web_runtime_host((web_host_t){.asset = host_asset, .text = host_text, .layout = host_layout,
+                                .sound = host_sound,
                                 .gain = host_gain, .save_commit = host_save_commit,
                                 .trace = host_trace, .stream = host_stream, .data = host_data,
                                 .video = host_video, .video_frame = host_video_frame,
@@ -551,6 +584,7 @@ JNIEXPORT void NATIVE(start)(JNIEnv *env, jclass cls, jobject owner, jobject ass
   activity = (*env)->NewGlobalRef(env, owner);
   jclass type = (*env)->GetObjectClass(env, owner);
   on_text = (*env)->GetMethodID(env, type, "rasterize", "([BIIIIIII)[B");
+  on_layout = (*env)->GetMethodID(env, type, "layout", "([BIIIIIII)[S");
   on_entry = (*env)->GetMethodID(env, type, "openTextEntry", "(I[BIIIIZ)V");
   on_entry_closed = (*env)->GetMethodID(env, type, "closeTextEntry", "()V");
   on_stopped = (*env)->GetMethodID(env, type, "gameStopped", "(I[B)V");
@@ -629,11 +663,14 @@ JNIEXPORT void NATIVE(pad)(JNIEnv *env, jclass cls, jint port, jboolean connecte
   pthread_mutex_unlock(&state);
 }
 
-// The mouse in stage pixels; `buttons` are input.h bits (left A, right B).
+// The mouse in 640x480 units (GameActivity), mapped to stage pixels;
+// `buttons` are input.h bits (left A, right B).
 JNIEXPORT void NATIVE(mouse)(JNIEnv *env, jclass cls, jint x, jint y, jint buttons,
                              jboolean inside) {
   (void)env;
   (void)cls;
+  x = x * WIDTH / 640;
+  y = y * HEIGHT / 480;
   pthread_mutex_lock(&state);
   mouse.moved |= x != mouse.x || y != mouse.y || (unsigned)buttons != mouse.buttons;
   mouse.x = x < 0 ? 0 : x >= WIDTH ? WIDTH - 1 : x;

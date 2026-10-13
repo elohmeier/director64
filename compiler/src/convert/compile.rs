@@ -10,7 +10,7 @@ use serde_json::{json, Map, Value};
 
 use super::fdi::prescale_image;
 use super::files::{self, Files};
-use super::film::compose_film_frame;
+use super::film::{compose_film_frame, NESTED_PENDING};
 use super::js;
 use super::movie::{convert_movie, image_asset_name, write_asset, Converted, MovieJob, Sources};
 use super::source::sha256;
@@ -270,8 +270,63 @@ pub fn compile_merge(fs: &mut dyn Files, options: &Options, converted: Vec<Conve
         }
     }
     flatten_films(fs, output, &mut movies, &mut problems, &mut limits)?;
+    if truthy(&policy["native_stage"]) {
+        trim_film_poses(fs, output, &mut movies, &mut limits)?;
+    }
     let prescale = if truthy(&policy["stage_prescale"]) { prescale_queue(&movies) } else { Vec::new() };
     Ok(Pending { movies, problems, limits, fonts, prescale })
+}
+
+/// The browser and Android TV keep a flattened film-loop pose only where it
+/// covers the stage (fdi::trim_image); the runtime places a pose smaller
+/// than its loop by the two registration points. Trimmed after every loop
+/// is flattened, so nested loops compose from full poses.
+fn trim_film_poses(fs: &mut dyn Files, output: &str, movies: &mut [Value], limits: &mut Vec<Value>) -> R<()> {
+    let mut trimmed: HashMap<String, String> = HashMap::new();
+    let (mut before, mut after) = (0usize, 0usize);
+    for movie in movies.iter_mut() {
+        for m in movie["members"].as_array_mut().unwrap() {
+            let Some(assets) = m.get_mut("filmAssets").and_then(Value::as_array_mut) else { continue };
+            for asset in assets.iter_mut() {
+                let Some(name) = asset.as_str().map(str::to_string) else { continue };
+                if !trimmed.contains_key(&name) {
+                    let data = fs.read(&files::join(output, &format!("images/{name}")))?;
+                    let out = match crate::convert::fdi::trim_image(&data)? {
+                        Some(cut) => {
+                            before += data.len();
+                            after += cut.len();
+                            let cut_name = image_asset_name(&cut);
+                            write_asset(fs, &files::join(output, &format!("images/{cut_name}")), &cut)?;
+                            cut_name
+                        }
+                        None => name.clone(),
+                    };
+                    trimmed.insert(name.clone(), out);
+                }
+                *asset = json!(trimmed[&name]);
+            }
+        }
+    }
+    // A full pose no member shows any more is not shipped.
+    let mut shown: BTreeSet<String> = BTreeSet::new();
+    for movie in movies.iter() {
+        for m in movie["members"].as_array().unwrap() {
+            if let Some(asset) = m["asset"].as_str() {
+                shown.insert(asset.to_string());
+            }
+            for asset in m["filmAssets"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                shown.insert(asset.to_string());
+            }
+        }
+    }
+    for (name, out) in &trimmed {
+        if name != out && !shown.contains(name) {
+            fs.remove(&files::join(output, &format!("images/{name}")))?;
+        }
+    }
+    limits.push(json!({"kind": "film-pose-trim", "poses": trimmed.len(), "storedBytesBefore": before,
+        "storedBytesAfter": after, "implemented": true, "original_projector_verified": false}));
+    Ok(())
 }
 
 /// The rest of the stage, given each prescaled image's new name.
@@ -405,87 +460,165 @@ fn sort_variants(font: &mut Value) {
     }
 }
 
-/// Flattens the bitmap-only source film loops to native frame sequences.
+/// Flattens the source film loops to native frame sequences. A loop nesting
+/// another waits for it: passes repeat while one finishes a waiting loop.
 fn flatten_films(fs: &mut dyn Files, output: &str, movies: &mut [Value], problems: &mut Vec<Value>, limits: &mut Vec<Value>) -> R<()> {
-    let snapshot: Vec<Value> = movies.to_vec();
-    for (index, movie) in snapshot.iter().enumerate() {
-        let loops: Vec<&Value> =
-            movie["members"].as_array().unwrap().iter().filter(|m| m.get("filmScore").is_some_and(truthy)).collect();
-        for loop_member in loops {
-            let (cast, number) = (loop_member["cast"].clone(), loop_member["number"].clone());
-            let mut loop_limits = Vec::new();
-            let mut film_assets: Option<Vec<Value>> = None;
-            let mut film_sounds: Option<Vec<Value>> = None;
-            let mut use_alpha = false;
-            let (width, height) = (int(&loop_member["width"]), int(&loop_member["height"]));
-            let frames = loop_member["filmScore"]["frames"].as_array().cloned().unwrap_or_default();
-            let target = movies[index]["members"]
-                .as_array_mut()
-                .unwrap()
-                .iter_mut()
-                .find(|m| m["cast"] == cast && m["number"] == number)
-                .unwrap();
-            if width == 0 && height == 0 && frames.is_empty() {
-                let target = target.as_object_mut().unwrap();
-                target.insert("empty".into(), json!(true));
-                target.insert("filmAssets".into(), json!([]));
-                continue;
-            }
-            let result = (|| -> R<()> {
-                if width < 1 || height < 1 || width > 1024 || height > 1024 {
-                    return Err("film-loop bounds".into());
-                }
-                let mut states: Vec<(i64, Value)> = Vec::new();
-                film_assets = Some(Vec::new());
-                film_sounds = Some(Vec::new());
-                use_alpha = true;
-                for frame in &frames {
-                    for c in frame["channels"].as_array().into_iter().flatten() {
-                        let channel = int(&c["channel"]);
-                        match states.iter_mut().find(|s| s.0 == channel) {
-                            Some(slot) => slot.1 = c.clone(),
-                            None => states.push((channel, c.clone())),
-                        }
-                    }
-                    let composed = {
-                        let fs_ref: &dyn Files = fs;
-                        let mut load = |asset: &str| fs_ref.read(&files::join(output, &format!("images/{asset}")));
-                        compose_film_frame(movie, loop_member, &states, &mut load, &snapshot, &mut loop_limits)?
-                    };
-                    let asset = image_asset_name(&composed.data);
-                    write_asset(fs, &files::join(output, &format!("images/{asset}")), &composed.data)?;
-                    film_assets.as_mut().unwrap().push(json!(asset));
-                    film_sounds.as_mut().unwrap().push(composed.sounds);
-                }
-                Ok(())
-            })();
-            let target = target.as_object_mut().unwrap();
-            if let Some(assets) = &film_assets {
-                target.insert("filmAssets".into(), json!(assets));
-            }
-            if let Some(sounds) = &film_sounds {
-                target.insert("filmSounds".into(), json!(sounds));
-            }
-            if use_alpha {
-                target.insert("useAlpha".into(), json!(true));
-            }
-            limits.extend(loop_limits);
-            if let Err(error) = result {
-                problems.push(json!({"movie": movie["name"], "cast": cast, "member": number, "error": error}));
-                continue;
-            }
-            let sounds = film_sounds.unwrap_or_default();
-            if int(&loop_member["filmScore"]["version"]) != 7
-                && sounds.iter().any(|f| f.as_array().is_some_and(|pair| pair.iter().any(truthy)))
-            {
-                limits.push(json!({"kind": "film-loop-sounds-pending-native", "movie": movie["name"],
-                    "cast": cast, "member": number, "implemented": false}));
-            }
-            let first = film_assets.unwrap_or_default().first().cloned().unwrap_or(Value::Null);
-            target.insert("asset".into(), first);
+    let mut pending: Vec<(usize, Value, Value)> = Vec::new();
+    for (index, movie) in movies.iter().enumerate() {
+        for m in movie["members"].as_array().unwrap().iter().filter(|m| m.get("filmScore").is_some_and(truthy)) {
+            pending.push((index, m["cast"].clone(), m["number"].clone()));
         }
     }
-    Ok(())
+    // What compose_film_frame reads: kept current with each flattened loop
+    // instead of copied per loop.
+    let mut snapshot: Vec<Value> = movies.to_vec();
+    // Loops that nest each other (stale castlib numbers) wait forever; once no
+    // loop makes progress, the next pass skips their pending children.
+    let mut break_cycles = false;
+    loop {
+        let before = pending.len();
+        let mut waiting = Vec::new();
+        for (index, cast, number) in std::mem::take(&mut pending) {
+            if flatten_film(fs, output, movies, &mut snapshot, index, &cast, &number, break_cycles, problems, limits)? {
+                waiting.push((index, cast, number));
+            }
+        }
+        if waiting.is_empty() {
+            return Ok(());
+        }
+        if waiting.len() == before {
+            if break_cycles {
+                for (index, cast, number) in waiting {
+                    problems.push(json!({"movie": movies[index]["name"], "cast": cast, "member": number, "error": "film-loop nested cycle"}));
+                }
+                return Ok(());
+            }
+            break_cycles = true;
+        }
+        pending = waiting;
+    }
+}
+
+/// Flattens one loop; true when it waits for a nested loop.
+#[allow(clippy::too_many_arguments)]
+fn flatten_film(
+    fs: &mut dyn Files,
+    output: &str,
+    movies: &mut [Value],
+    snapshot: &mut [Value],
+    index: usize,
+    cast: &Value,
+    number: &Value,
+    break_cycles: bool,
+    problems: &mut Vec<Value>,
+    limits: &mut Vec<Value>,
+) -> R<bool> {
+    let waiting = flatten_film_into(fs, output, movies, snapshot, index, cast, number, break_cycles, problems, limits)?;
+    if !waiting {
+        let updated = movies[index]["members"].as_array().unwrap().iter().find(|m| m["cast"] == *cast && m["number"] == *number).cloned();
+        if let Some(slot) = snapshot[index]["members"].as_array_mut().unwrap().iter_mut().find(|m| m["cast"] == *cast && m["number"] == *number) {
+            *slot = updated.unwrap();
+        }
+    }
+    Ok(waiting)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flatten_film_into(
+    fs: &mut dyn Files,
+    output: &str,
+    movies: &mut [Value],
+    snapshot: &[Value],
+    index: usize,
+    cast: &Value,
+    number: &Value,
+    break_cycles: bool,
+    problems: &mut Vec<Value>,
+    limits: &mut Vec<Value>,
+) -> R<bool> {
+    let movie = &snapshot[index];
+    let loop_member =
+        movie["members"].as_array().unwrap().iter().find(|m| m["cast"] == *cast && m["number"] == *number).unwrap();
+    let mut loop_limits = Vec::new();
+    let mut film_assets: Option<Vec<Value>> = None;
+    let mut film_sounds: Option<Vec<Value>> = None;
+    let mut use_alpha = false;
+    let (width, height) = (int(&loop_member["width"]), int(&loop_member["height"]));
+    let frames = loop_member["filmScore"]["frames"].as_array().cloned().unwrap_or_default();
+    let target = movies[index]["members"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|m| m["cast"] == *cast && m["number"] == *number)
+        .unwrap();
+    if width == 0 && height == 0 && frames.is_empty() {
+        let target = target.as_object_mut().unwrap();
+        target.insert("empty".into(), json!(true));
+        target.insert("filmAssets".into(), json!([]));
+        return Ok(false);
+    }
+    let result = (|| -> R<()> {
+        // Bitmaps' ceiling: the runtime tiles textures past 1024 pixels.
+        if width < 1 || height < 1 || width > 4096 || height > 4096 {
+            return Err("film-loop bounds".into());
+        }
+        let mut states: Vec<(i64, Value)> = Vec::new();
+        film_assets = Some(Vec::new());
+        film_sounds = Some(Vec::new());
+        use_alpha = true;
+        for (frame_index, frame) in frames.iter().enumerate() {
+            for c in frame["channels"].as_array().into_iter().flatten() {
+                let channel = int(&c["channel"]);
+                match states.iter_mut().find(|s| s.0 == channel) {
+                    Some(slot) => slot.1 = c.clone(),
+                    None => states.push((channel, c.clone())),
+                }
+            }
+            let composed = {
+                let fs_ref: &dyn Files = fs;
+                let mut load = |asset: &str| {
+                    if asset.is_empty() {
+                        return Err("film-loop child without a converted image".to_string());
+                    }
+                    fs_ref.read(&files::join(output, &format!("images/{asset}")))
+                };
+                compose_film_frame(movie, loop_member, frame_index, break_cycles, &states, &mut load, snapshot, &mut loop_limits)?
+            };
+            let asset = image_asset_name(&composed.data);
+            write_asset(fs, &files::join(output, &format!("images/{asset}")), &composed.data)?;
+            film_assets.as_mut().unwrap().push(json!(asset));
+            film_sounds.as_mut().unwrap().push(composed.sounds);
+        }
+        Ok(())
+    })();
+    if result.as_ref().is_err_and(|e| e == NESTED_PENDING) {
+        return Ok(true);
+    }
+    let target = target.as_object_mut().unwrap();
+    if let Some(assets) = &film_assets {
+        target.insert("filmAssets".into(), json!(assets));
+    }
+    if let Some(sounds) = &film_sounds {
+        target.insert("filmSounds".into(), json!(sounds));
+    }
+    if use_alpha {
+        target.insert("useAlpha".into(), json!(true));
+    }
+    limits.extend(loop_limits);
+    if let Err(error) = result {
+        problems.push(json!({"movie": movie["name"], "cast": cast, "member": number, "error": error}));
+        return Ok(false);
+    }
+    let sounds = film_sounds.unwrap_or_default();
+    if int(&loop_member["filmScore"]["version"]) != 7
+        && sounds.iter().any(|f| f.as_array().is_some_and(|pair| pair.iter().any(truthy)))
+    {
+        limits.push(json!({"kind": "film-loop-sounds-pending-native", "movie": movie["name"],
+            "cast": cast, "member": number, "implemented": false}));
+    }
+    let first = film_assets.unwrap_or_default().first().cloned().unwrap_or(Value::Null);
+    target.insert("asset".into(), first);
+    Ok(false)
 }
 
 /// The finished image assets the 4/5 prescale of an 800x600 stage

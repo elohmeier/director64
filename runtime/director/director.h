@@ -33,6 +33,9 @@
 #define DG_MAX_TEMPO 120
 #endif
 #define DG_SCORE_CHANNELS (DG_SPRITES + 5)
+// The longest sound playlist a channel keeps (Löwenzahn Optik queues
+// spoken sentences a few words at a time).
+#define DG_SOUND_QUEUE 16
 #if DG_D10
 // The exercises' initStamps rewrites a per-letter stamp member set; the
 // mutable field table holds every one of them beside the ordinary fields.
@@ -53,6 +56,31 @@
 // loops leave VR4300 time for input, audio and drawing at the 60 Hz service
 // rate.
 #define DG_SERVICE_BUDGET 288
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+// A film loop channel a script drives inside `tell sprite(n)`: Director 8.5
+// engines (Birthday's, Ghosts' psAnimation) animate whole scenes by setting
+// the member, position, ink, blend and size of a placeholder loop's own
+// channels each frame. The loop then draws these instead of its recorded
+// frames; positions are in the loop's space (its top-left at 0,0).
+typedef struct {
+  uint16_t parent;
+  uint8_t channel, ink, blend, sized;
+  uint32_t member;
+  int16_t x, y, width, height;
+} dg_film_child_t;
+#define DG_FILM_CHILDREN 256
+// A sprite reference to one: flag, parent channel << 8, loop channel.
+#define DG_CHILD_SPRITE 0x40000000
+#endif
+// A member id packs its file, its cast within that file and its number:
+// file << 21 | cast << 16 | number. Five cast bits hold the 17 cast
+// libraries a Findus 8.5 movie keeps in one file.
+#define DG_ID_FILE_SHIFT 21
+#define DG_ID_CAST_MASK 31u
+#define DG_ID(file, cast, number) \
+  ((uint32_t)(file) << DG_ID_FILE_SHIFT | (uint32_t)(cast) << 16 | (uint32_t)(number))
+#define DG_ID_FILE(id) ((uint32_t)(id) >> DG_ID_FILE_SHIFT)
+#define DG_ID_CAST(id) (((uint32_t)(id) >> 16) & DG_ID_CAST_MASK)
 #define DG_MEMBER 1u
 #define DG_POSITION 2u
 #define DG_WIDTH 4u
@@ -98,6 +126,13 @@ _Static_assert(DG_TIMEOUT_ROOT + DG_TIMEOUTS < LV_ROOTS,
 #define DG_FLASH_ROOT (DG_TIMEOUT_ROOT + DG_TIMEOUTS)
 _Static_assert(DG_FLASH_ROOT + DG_FLASH_OBJECTS < LV_ROOTS,
                "flash object roots must fit in the Lingo root table");
+// The Amplitude Xtra's loudness curve (ampSetCurve), one per runtime.
+#define DG_AMP_ROOT (DG_FLASH_ROOT + DG_FLASH_OBJECTS)
+_Static_assert(DG_AMP_ROOT < LV_ROOTS, "the amplitude root must fit in the Lingo root table");
+// The result a suspended handler is about to read, held across the begin
+// fan-out that runs before it resumes.
+#define DG_HELD_RESULT_ROOT (DG_AMP_ROOT + 1)
+_Static_assert(DG_HELD_RESULT_ROOT < LV_ROOTS, "the held result root must fit in the Lingo root table");
 #endif
 // Every sprite's behavior root plus the actor-list slot must stay inside
 // the Lingo root table; the D10 bring-up overran this silently on host.
@@ -158,7 +193,8 @@ typedef struct {
   uint32_t samples, rate, loop_start, loop_end;
   uint16_t shape, pattern;
   uint8_t filled, line_width;
-  uint8_t looping, film_count, film_loop;
+  uint8_t looping, film_loop;
+  uint16_t film_count;
   const char *const *film_assets;
   uint8_t line_direction;
 #if DG_EXTENDED
@@ -170,13 +206,18 @@ typedef struct {
 #if DG_MODERN
   const dg_text_style_t *text_style, *text_insert_style;
 #endif
-#if DG_D5
+#if DG_D5 || DG_D10
+  // A digital video (D5) or DirectMedia video (D10, source Xtra 3): its
+  // sound's asset and the authored flags (8 sound, 16 loop, 256 paused,
+  // 512 no picture).
   const char *video_audio;
   uint32_t video_flags;
+#endif
+#if DG_D5
   const uint32_t *film_sounds;
 #endif
 #if DG_D10
-  uint8_t source_xtra; // 0 native, 1 Flash, 2 vectorShape — authored type checks.
+  uint8_t source_xtra; // 0 native, 1 Flash, 2 vectorShape, 3 DirectMedia video.
   // The recorded dynamic Flash surface: authored frame labels over the
   // flattened film timeline, and the named edit-text fields whose prompts
   // render as text overlays.
@@ -232,6 +273,25 @@ typedef struct {
 // The order member_index is built in. src/director64/director.py mirrors this
 // exactly; tests/test_director.py compares the two implementations.
 uint32_t dg_member_name_hash(const char *);
+#if DG_D10
+// A text member's colour runs (first character, 0xRRGGBB) and hyperlinks
+// (1-based first and last character, data): Optik's lexicons colour their
+// link words and its Walk of Fame links by range. Only members that have
+// any are listed, in a small per-movie table.
+typedef struct {
+  uint32_t offset, rgb;
+} dg_text_run_t;
+typedef struct {
+  uint32_t first, last;
+  const char *data;
+} dg_link_t;
+typedef struct {
+  uint32_t member;
+  uint16_t run_count, link_count;
+  const dg_text_run_t *runs;
+  const dg_link_t *links;
+} dg_text_extra_t;
+#endif
 typedef struct {
   const lv_movie_t *code;
   uint16_t id, tempo, cast_count, member_count, frame_count, label_count;
@@ -244,6 +304,10 @@ typedef struct {
   const uint32_t *palette;
 #if DG_MODERN
   uint32_t stage_color;
+#endif
+#if DG_D10
+  uint16_t text_extra_count;
+  const dg_text_extra_t *text_extras;
 #endif
 } dg_movie_t;
 typedef struct {
@@ -266,7 +330,7 @@ typedef struct {
 #if DG_CAP_CONSTRAINTS
   int32_t constraint;
 #endif
-#if DG_D5
+#if DG_D5 || DG_D10
   double video_time, video_rate;
   unsigned video_start, video_stop, video_serial, video_volume;
   uint32_t media_member;
@@ -284,7 +348,12 @@ typedef struct {
   int status;
 #endif
   unsigned file, position, length;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // Birthday's room descriptions run to 18 KB of XML.
+  char data[32768];
+#else
   char data[16384];
+#endif
 } dg_file_t;
 typedef struct {
   // Read/write an explicitly named virtual save file; never a host path.
@@ -296,6 +365,13 @@ typedef struct {
   void (*trace)(void *, const char *);
   bool (*hit)(void *, const dg_member_t *, unsigned, int, int);
   const char *(*long_date)(void *);
+#if DG_D10
+  // The folder `the moviePath` answers; NULL answers the drive root.
+  const char *(*movie_path)(void *);
+  // The shipped data folder ("SPIEL/XML") FileIO falls back to for a file
+  // the save archive does not hold; NULL for none.
+  const char *(*data_folder)(void *);
+#endif
 #if DG_EXTENDED
   // How far into the sound on this channel playback has reached, in
   // milliseconds. Authored cue points fire off the mixer's own position
@@ -319,6 +395,13 @@ typedef struct {
   // Keep what the stage shows now as the member's image (`member.image =
   // (the stage).image`); NULL leaves such members showing their own image.
   void (*capture_stage)(void *, uint32_t member);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // Which character of a text member's box lies at (x, y) in that box, as
+  // the host set it: 0-based in Unicode characters, -1 for none. `sprite`
+  // names the channel showing it (its rectangle is the box), 0 for the
+  // member's own size. NULL where no host lays text out.
+  int (*text_char_at)(void *, uint32_t member, unsigned sprite, int x, int y);
+#endif
 #endif
 } dg_platform_t;
 typedef struct {
@@ -336,6 +419,12 @@ typedef struct {
   uint16_t stage_channels[DG_SPRITES];
   // seek_now's change masks, resident rather than a 3 KB stack array.
   uint16_t seek_changed[DG_SPRITES];
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // The frame each channel's live sprite span began on, and seek_now's
+  // record of the last span start it replayed: a backward go that stays
+  // inside a span keeps the span's behavior instances.
+  uint16_t span_start[DG_SPRITES], seek_span[DG_SPRITES];
+#endif
   // The draw order, kept from one dg_draw_order call to the next while no
   // sprite changed: the hit test and the renderer each asked for it every
   // tick, and each walk read the type and depth of every active channel.
@@ -429,6 +518,24 @@ typedef struct {
       await_release, quit, transitioned;
   uint32_t sound_serial[DG_SOUND_CHANNELS], sounds[DG_SOUND_CHANNELS];
   bool sound_puppet[DG_SOUND_CHANNELS];
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // Each sound object's playlist (queue/setPlaylist): members still to
+  // play, and whether the channel moves on to the next one by itself.
+  uint32_t sound_queue[DG_SOUND_CHANNELS][DG_SOUND_QUEUE];
+  uint8_t sound_queue_count[DG_SOUND_CHANNELS];
+  bool sound_chain[DG_SOUND_CHANNELS];
+  // Each channel's stereo pan (-100..100), kept for scripts that read it
+  // back; the mixer plays every channel centred.
+  int8_t channel_pan[DG_SOUND_CHANNELS];
+  // The legacy idle timeout: the handler named by the timeoutScript runs
+  // once no input arrived for timeoutLength ticks.
+  uint32_t timeout_length, last_input_tick;
+  // The Amplitude Xtra: curve samples per second and the channel it follows.
+  uint16_t amp_resolution, amp_channel;
+  // Whether the edited field's own keyDown handlers passed the typed key.
+  bool text_passed;
+  char timeout_script[32];
+#endif
 #if DG_EXTENDED
   // Cue-point delivery per sound channel. The serial is the one the channel
   // held when this state was taken, so replacing what a channel plays starts
@@ -512,7 +619,32 @@ typedef struct {
   int field_scroll[DG_FIELDS];
   bool begin_pending[DG_SPRITES];
 #endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // Folder-qualified movie names run long (LEXIKON_TEIL1__LEXIKON_M_TRAEGHEIT.DXR).
+  char next_movie[64], mouse_up_script[64];
+#else
   char next_movie[32], mouse_up_script[64];
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // A click since the frame began: the tempo channel's wait for one.
+  bool tempo_clicked;
+  // The path `go to movie` named ("@::lexikon:moor"): ports whose files
+  // are folder-qualified resolve its folder (web_runtime.c find_path).
+  char next_movie_path[96];
+  // `play movie` returns: the calling movie and frame `play done` resumes.
+  char play_return[4][64];
+  unsigned play_return_frame[4], play_depth;
+  // Film loop channels scripts drive through `tell sprite(n)`; see
+  // dg_film_child_t.
+  dg_film_child_t film_children[DG_FILM_CHILDREN];
+  unsigned film_child_count;
+#endif
+#if DG_D10
+  // The name `the movieName` answers when the platform entered the movie
+  // by an authored long name its 8.3 file truncates ("Baumhoehle.dxr");
+  // empty answers the file's own name.
+  char movie_alias[40];
+#endif
 #if DG_EXTENDED
   char mouse_down_script[64], key_down_script[64];
   bool mouse_down_dispatch;
@@ -597,7 +729,22 @@ bool dg_service(dg_runtime_t *, unsigned);
 bool dg_clock_advance(uint64_t *, uint64_t, unsigned *);
 bool dg_seek(dg_runtime_t *, unsigned);
 const dg_member_t *dg_member(dg_runtime_t *, uint32_t);
+#if DG_D5 || DG_D10
+// A member the platform plays as video: D5's digital video, D10's
+// DirectMedia Xtra.
+static inline bool dg_is_video(const dg_member_t *m) {
+#if DG_D5
+  return m && m->type == 10;
+#else
+  return m && m->type == 15 && m->source_xtra == 3;
+#endif
+}
+#endif
 const dg_movie_t *dg_loaded(dg_runtime_t *, unsigned);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+// A text member's colour runs and hyperlinks, NULL when it has none.
+const dg_text_extra_t *dg_text_extra(dg_runtime_t *, uint32_t member);
+#endif
 bool dg_event(dg_runtime_t *, const char *, unsigned);
 unsigned dg_hit(dg_runtime_t *, int, int);
 unsigned dg_mouse_hit(dg_runtime_t *, int, int);
@@ -617,6 +764,8 @@ void dg_sprite_changed(dg_runtime_t *, unsigned);
 #if DG_D10
 // Whether a script replaced the member's image, and with what: another
 // member's id, or 0 for the platform's stage snapshot.
+// The image source of a blank image(w, h, depth): the member draws nothing.
+#define DG_IMAGE_BLANK 0xffffffffu
 bool dg_image_source(const dg_runtime_t *, uint32_t member, uint32_t *source);
 // The named field of a Flash member, matched case-insensitively against the
 // recorded instance name or bound variable; NULL when the name is not a field.

@@ -92,6 +92,16 @@ PROBE_FEATURES = {
     },
 }
 DEFAULT_FEATURES = {"pad": False, "buttons": 0, "keys": {}}
+# The browser runtime's probe (platforms/web/node/probe.mjs, --browser): the
+# page's and the TV's pads drive the pointer through the shared controller,
+# and their keyboards enter text into editable fields; Director key events
+# have no RPC there.
+BROWSER_FEATURES = {
+    "pad": True,
+    "buttons": 0x7FF,
+    "keys": {},
+    "text": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_.",
+}
 
 SANITIZER_MARKS = (
     "ERROR: AddressSanitizer",
@@ -345,6 +355,9 @@ class Runner:
     movies: list[str]
     actions: int
     minimize: bool
+    # Scripted openings (--prelude): one, chosen per episode, runs right after
+    # boot, so the random walk starts past a game's login or name entry.
+    preludes: list[list[str]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     signatures: dict[str, dict] = field(default_factory=dict)
     coverage: dict[str, int] = field(default_factory=dict)
@@ -359,6 +372,10 @@ class Runner:
         outcome = None
         try:
             probe.receive(timeout=120.0)
+            if self.preludes:
+                for line in rng.choice(self.preludes):
+                    ticks = int(line.split()[1]) if line.startswith("step ") else 0
+                    probe.send(line, ticks=ticks)
             episode_commands(probe, rng, self.actions, self.features)
             outcome = probe.close()
         except ProbeFailure as failure:
@@ -525,9 +542,23 @@ def main(game, argv: list[str]) -> int:
     parser.add_argument("--replay", type=Path, help="re-run a recorded case and exit")
     parser.add_argument("--no-minimize", action="store_true")
     parser.add_argument("--output", type=Path, help="artifact directory")
+    parser.add_argument(
+        "--probe", type=Path, help="probe executable (default the sanitized native probe)"
+    )
+    parser.add_argument(
+        "--prelude",
+        type=Path,
+        action="append",
+        help="commands each episode starts with, after boot (repeatable: one per episode)",
+    )
+    parser.add_argument(
+        "--browser",
+        action="store_true",
+        help="the --probe speaks for the browser runtime (pads and text, no key events)",
+    )
     args = parser.parse_args(argv)
 
-    executable = game.work / "native/director-probe-sanitized"
+    executable = args.probe or game.work / "native/director-probe-sanitized"
     env = os.environ | {
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1",
         "ASAN_OPTIONS": "halt_on_error=1:detect_leaks=1",
@@ -538,11 +569,21 @@ def main(game, argv: list[str]) -> int:
     runner = Runner(
         executable=executable,
         output=output,
-        features=PROBE_FEATURES.get(game.slug, DEFAULT_FEATURES),
+        features=(
+            BROWSER_FEATURES if args.browser else PROBE_FEATURES.get(game.slug, DEFAULT_FEATURES)
+        ),
         env=env,
         movies=args.movie or [game.data["port"].get("entry_movie", "START")],
         actions=args.actions,
         minimize=not args.no_minimize,
+        preludes=[
+            [
+                line
+                for line in path.read_text().splitlines()
+                if line.strip() and not line.startswith("#")
+            ]
+            for path in args.prelude or []
+        ],
     )
     if args.replay:
         movie, commands = load_case(args.replay)

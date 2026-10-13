@@ -1,0 +1,343 @@
+{
+  "director_version": 850,
+  "directories": [
+    ".",
+    "ABC",
+    "BASTELKE",
+    "BAUWAGEN",
+    "FABRIKSP",
+    "FOTOLADE",
+    "FOTOLADE/FOTOLABO",
+    "FREIZEIT",
+    "GALERIE",
+    "KLAVIER",
+    "KOCHBUCH",
+    "LABYRINT",
+    "LEXIKON",
+    "MOOR",
+    "MPEGS",
+    "PETERSGA",
+    "SCHNITTP",
+    "SCHWEIN1",
+    "SCHWEINE",
+    "SOUNDMEM",
+    "TS",
+    "WIW"
+  ],
+  "director_files": 56,
+  "source_sha256": "b1d146c2f036109c56dbf52b739b8571dd7681618d7ba4f5ed0906bc2a7cc15c",
+  "folder_qualified_names": true,
+  "folder_aliases": {
+    "BASTELKE": "BASTELKELLER",
+    "FABRIKSP": "FABRIKSPIEL",
+    "FOTOLABO": "FOTOLABOR",
+    "FOTOLADE": "FOTOLADEN",
+    "LABYRINT": "LABYRINTH",
+    "PETERSGA": "PETERS_GALERIE",
+    "SCHNITTP": "SCHNITTPLATZ",
+    "SCHWEIN1": "SCHWEINEAUFRUF",
+    "SCHWEINE": "SCHWEINESPIEL",
+    "SOUNDMEM": "SOUNDMEMORY"
+  },
+  "file_aliases": {
+    "FOTOLABO/FOTOLADE.DCR": "fotoladen.dcr"
+  },
+  "extended_d6": true,
+  "stage_prescale": true,
+  "deferred_conversions": [
+    {
+      "movie": "FOTOLABOR__FOTOLADEN.DXR",
+      "cast": 1,
+      "member": 78,
+      "error": "unsupported shape geometry/pattern",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "FOTOLABOR__FOTOLADEN.DXR",
+      "cast": 1,
+      "member": 132,
+      "error": "unsupported embedded font format",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "FOTOLABOR__FOTOLADEN.DXR",
+      "cast": 1,
+      "member": 144,
+      "error": "unsupported shape geometry/pattern",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "FOTOLABOR__SCRATCH.CXT",
+      "cast": 1,
+      "member": 14,
+      "error": "missing or excessive Paige section 6",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "LEXIKON__MUSIKSTI.DXR",
+      "cast": 1,
+      "member": 3,
+      "error": "unsupported static SWF tag 45",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "MOOR__MOOR.DXR",
+      "cast": 1,
+      "member": 63,
+      "error": "unsupported shape geometry/pattern",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 1,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 2,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 3,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 4,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 5,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 6,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 11,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 12,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 13,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 14,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 15,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 16,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 17,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 18,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 19,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 20,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 25,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 26,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 27,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 28,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 29,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 30,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 31,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 32,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 40,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 41,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 42,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 43,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 44,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 45,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "MPEGS__VIDEOM.CXT",
+      "cast": 1,
+      "member": 46,
+      "error": "Xtra quickTimeMedia requires native conversion",
+      "disposition": "QuickTime video member; video conversion pending, draws nothing"
+    },
+    {
+      "movie": "LABYRINTH__LABYRINT.DXR",
+      "cast": 3,
+      "member": 1,
+      "error": "film-loop main-channel action",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "LABYRINTH__LABYRINT.DXR",
+      "cast": 4,
+      "member": 1,
+      "error": "film-loop main-channel action",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "SCHWEINESPIEL__SCHWEINE.DXR",
+      "cast": 2,
+      "member": 28,
+      "error": "film-loop bounds",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "SCHWEINESPIEL__SCHWEINE.DXR",
+      "cast": 2,
+      "member": 30,
+      "error": "film-loop bounds",
+      "disposition": "conversion pending; the member draws nothing"
+    },
+    {
+      "movie": "LEXIKON__SCHWEINE.DXR",
+      "cast": 1,
+      "member": 35,
+      "error": "SWF frame count exceeds conversion bounds",
+      "disposition": "conversion pending; the member draws nothing"
+    }
+  ]
+}

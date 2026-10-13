@@ -10,7 +10,7 @@ use crate::emit::{fold, Compiled};
 use crate::names::Names;
 use crate::scene::{Profile, Scene, TextStyle};
 
-pub const FORMAT: u16 = 2;
+pub const FORMAT: u16 = 5;
 
 /// The runtime ABI a package is compiled against: name ids and opcodes are
 /// positions in these two files.
@@ -193,7 +193,11 @@ pub fn write(
             }
             movies.u16(m.shape);
             movies.u16(m.pattern);
-            for v in [m.filled, m.line_width, m.looping, m.film_assets.len() as u8, m.film_loop, m.line_direction] {
+            for v in [m.filled, m.line_width, m.looping] {
+                movies.u8(v);
+            }
+            movies.u16(m.film_assets.len() as u16);
+            for v in [m.film_loop, m.line_direction] {
                 movies.u8(v);
             }
             for asset in &m.film_assets {
@@ -231,6 +235,8 @@ pub fn write(
             }
             if profile.d10() {
                 movies.u8(m.source_xtra);
+                movies.u32(strings.add(&m.video_audio)?);
+                movies.u32(m.video_flags);
                 movies.u8(u8::try_from(m.flash_labels.len()).map_err(|_| "flash label count exceeds u8")?);
                 movies.u8(u8::try_from(m.flash_fields.len()).map_err(|_| "flash field count exceeds u8")?);
                 for (name, frame) in &m.flash_labels {
@@ -249,6 +255,17 @@ pub fn write(
                     movies.u8(f.multiline);
                     movies.i8(f.leading);
                     movies.u16(f.style.map_or(0, |i| i + 1));
+                }
+                movies.u16(m.text_runs.len() as u16);
+                for &(offset, rgb) in &m.text_runs {
+                    movies.u32(offset);
+                    movies.u32(rgb);
+                }
+                movies.u16(m.links.len() as u16);
+                for (first, last, data) in &m.links {
+                    movies.u32(*first);
+                    movies.u32(*last);
+                    movies.u32(strings.add(data)?);
                 }
             }
         }

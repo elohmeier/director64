@@ -9,15 +9,15 @@ static const lv_t sprite = lv_make(LV_SPRITE, 1);
 static const lv_movie_t code = {"STATE.DXR",0,NULL,NULL, NULL, NULL, NULL, 0};
 static const dg_cast_t cast = {"Internal",1,1};
 static const dg_member_t members[] = {
-  {.id=0x110001,.number=1,.cast=1,.type=3,.text="First"},
-  {.id=0x110002,.number=2,.cast=1,.type=3,.text="Second"},
-  {.id=0x110003,.number=3,.cast=1,.type=1,.width=10,.height=20},
-  {.id=0x110004,.number=4,.cast=1,.type=2,.width=10,.height=20,.film_count=6,.film_loop=1},
-  {.id=0x110005,.number=5,.cast=1,.type=6,.rate=60,.samples=600,.looping=1},
-  {.id=0x110006,.number=6,.cast=1,.type=2,.width=10,.height=20,.film_count=3},
-  {.id=0x110007,.number=7,.cast=1,.type=6,.rate=60,.samples=2},
+  {.id=0x210001,.number=1,.cast=1,.type=3,.text="First"},
+  {.id=0x210002,.number=2,.cast=1,.type=3,.text="Second"},
+  {.id=0x210003,.number=3,.cast=1,.type=1,.width=10,.height=20},
+  {.id=0x210004,.number=4,.cast=1,.type=2,.width=10,.height=20,.film_count=6,.film_loop=1},
+  {.id=0x210005,.number=5,.cast=1,.type=6,.rate=60,.samples=600,.looping=1},
+  {.id=0x210006,.number=6,.cast=1,.type=2,.width=10,.height=20,.film_count=3},
+  {.id=0x210007,.number=7,.cast=1,.type=6,.rate=60,.samples=2},
 };
-static dg_spec_t initial = {.member=0x110003,.type=16,.blend=100,
+static dg_spec_t initial = {.member=0x210003,.type=16,.blend=100,
                             .x=10,.y=20,.width=10,.height=20};
 static dg_delta_t deltas[5];
 static dg_frame_t frames[5];
@@ -104,11 +104,11 @@ static void property_ownership(void) {
   assert(!d.sprites[1].auto_mask);
 
   boot(); // A cast write releases both dimensions, even without size bytes.
-  next=initial; next.member=0x110004;
+  next=initial; next.member=0x210004;
   change(2,DG_MEMBER,next);
   set("width",71); set("height",81); set("castnum",6);
   assert(dg_seek(&d,2));
-  assert(d.sprites[1].value.member==0x110004);
+  assert(d.sprites[1].value.member==0x210004);
   assert(d.sprites[1].value.width==10 && d.sprites[1].value.height==20);
   assert(!d.sprites[1].auto_mask);
 
@@ -149,7 +149,7 @@ static void blend_flags(void) {
 }
 static void field_lifecycle(void) {
   boot();
-  lv_t first=lv_make(LV_MEMBER, 0x110001), second=lv_make(LV_MEMBER, 0x110002);
+  lv_t first=lv_make(LV_MEMBER, 0x210001), second=lv_make(LV_MEMBER, 0x210002);
   lv_set(&r,NULL,"forecolor",first,lv_num(8));
   lv_set(&r,NULL,"text",first,lv_text(&r,"Changed",false));
   assert(lv_numeric(r.roots[DG_FIELD_COLOR_ROOT])==8);
@@ -161,7 +161,7 @@ static void field_lifecycle(void) {
     assert(lv_type(r.roots[i])==LV_VOID);
   assert(lv_type(r.roots[0])==LV_LIST);
   assert(!strcmp(lv_cstr(&r,lv_get(&r,NULL,"text",second)),"Second"));
-  assert(d.field_members[0]==0x110002 && lv_type(r.roots[DG_FIELD_COLOR_ROOT])==LV_VOID);
+  assert(d.field_members[0]==0x210002 && lv_type(r.roots[DG_FIELD_COLOR_ROOT])==LV_VOID);
   assert(!strcmp(lv_cstr(&r,lv_get(&r,NULL,"text",first)),"First"));
 }
 static void audio_lifecycle(void) {
@@ -175,14 +175,14 @@ static void audio_lifecycle(void) {
       dg_stop_sounds(&d);
       assert(!busy(NULL,0) && !busy(NULL,1));
     }
-    dg_delta_t audio={.channel=4,.value={.member=0x110007}};
+    dg_delta_t audio={.channel=4,.value={.member=0x210007}};
     dg_frame_t audio_frame={0,1};
     dg_movie_t destination=movie;
     destination.frame_count=1; destination.frames=&audio_frame; destination.deltas=&audio;
     assert(dg_enter(&d,&destination,1,NULL,0));
     assert(stops[0]==1 && stops[1]==1 && starts[0]==2 && starts[1]==1);
     assert(!d.sound_puppet[0] && !d.sound_puppet[1]);
-    assert(d.sounds[0]==0x110007 && !d.sounds[1]);
+    assert(d.sounds[0]==0x210007 && !d.sounds[1]);
     assert(lv_truth(&r,call("soundbusy",1,(lv_t[]){lv_num(1)})));
     assert(!lv_truth(&r,call("soundbusy",1,(lv_t[]){lv_num(2)})));
     for (unsigned i=0;i<2;i++) assert(dg_tick(&d,0,0,false,DG_SERVICE_BUDGET));
@@ -214,10 +214,10 @@ static void film_and_trails(void) {
   for (unsigned i=0;i<6;i++) { advance(); dg_update_stage(&d); }
   assert(!d.sprites[1].film_frame); // Loop wraps rather than overflowing.
   boot();
-  dg_spec_t next=initial; next.member=0x110004;
+  dg_spec_t next=initial; next.member=0x210004;
   change(2,DG_MEMBER,next);
   advance();
-  assert(d.sprites[1].value.member==0x110004 && !d.sprites[1].film_frame);
+  assert(d.sprites[1].value.member==0x210004 && !d.sprites[1].film_frame);
   advance();
   assert(d.sprites[1].film_frame==1); // Score assignment also presents pose 0 first.
 

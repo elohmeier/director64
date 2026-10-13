@@ -4,7 +4,7 @@ mod common;
 
 use common::*;
 use director64_aot::convert::fdi::{fdi_image, fdi_pixel, FdiMeta};
-use director64_aot::convert::film::{compose_film_frame, shape_spans, Composed};
+use director64_aot::convert::film::{compose_film_frame, shape_spans, Composed, NESTED_PENDING};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -46,8 +46,12 @@ fn solid(count: usize, color: [u8; 4]) -> Vec<u8> {
 }
 fn compose(movie: &Value, lp: &Value, states: &[(i64, Value)], assets: &HashMap<String, Vec<u8>>,
     movies: &[Value], limits: &mut Vec<Value>) -> Composed {
+    compose_at(movie, lp, 0, states, assets, movies, limits).unwrap()
+}
+fn compose_at(movie: &Value, lp: &Value, frame: usize, states: &[(i64, Value)], assets: &HashMap<String, Vec<u8>>,
+    movies: &[Value], limits: &mut Vec<Value>) -> Result<Composed, String> {
     let mut load = |asset: &str| assets.get(asset).cloned().ok_or_else(|| "no bitmap".to_string());
-    compose_film_frame(movie, lp, states, &mut load, movies, limits).unwrap()
+    compose_film_frame(movie, lp, frame, false, states, &mut load, movies, limits)
 }
 
 #[test]
@@ -95,6 +99,26 @@ fn mask_ink_stencils_through_the_neighbouring_bitmap_member() {
     assert_eq!(fdi_pixel(&soft.data, 0, 8)[3], 255);
     assert_eq!(fdi_pixel(&soft.data, 1, 8)[3], 0);
     assert_eq!(limits.iter().map(|l| l["kind"].clone()).collect::<Vec<_>>(), [json!("film-loop-mask-antialiased")]);
+}
+
+#[test]
+fn director_85_masks_keep_grey_levels_as_coverage() {
+    let lp = json!({"cast": 1, "number": 9, "left": 0, "top": 0, "width": 2, "height": 1, "filmScore": {"version": 13}});
+    let (child, pixels) = bitmap(5, 2, 1, &solid(2, [255, 0, 0, 255]), 1);
+    let (mask, gray) = bitmap(6, 2, 1, &[60, 60, 60, 255, 200, 200, 200, 255], 1);
+    let assets = HashMap::from([
+        (child["asset"].as_str().unwrap().to_string(), pixels),
+        (mask["asset"].as_str().unwrap().to_string(), gray),
+    ]);
+    let movie = json!({"name": "M", "directorVersion": 850, "members": [child, mask]});
+    let states = [(6, sprite(Sprite { ink: 9, cast: 1, member: 5, ..Default::default() }))];
+    let mut limits = vec![];
+    let soft = compose(&movie, &lp, &states, &assets, &[], &mut limits);
+    // The 5-bit stored grey reads back a little off its authored value.
+    let (dark, light) = (fdi_pixel(&soft.data, 0, 8)[3], fdi_pixel(&soft.data, 1, 8)[3]);
+    assert!((190..=200).contains(&dark), "dark mask pixel coverage {dark}");
+    assert!((45..=60).contains(&light), "light mask pixel coverage {light}");
+    assert!(limits.is_empty());
 }
 
 #[test]
@@ -179,4 +203,59 @@ fn d5_flag_poses_preserve_uncovered_margins_under_parent_copy_ink() {
         let first = (240 - reg_y - top) * lw + 320 - reg_x - left;
         assert_eq!(fdi_pixel(&composed.data, first as usize, 0), [255, 255, 255, 255]);
     }
+}
+
+#[test]
+fn director_85_loops_draw_a_nested_loops_frame_and_wait_for_it() {
+    let lp = json!({"cast": 1, "number": 9, "left": 0, "top": 0, "width": 1, "height": 1, "filmScore": {"version": 13}});
+    let (_, red) = bitmap(0, 1, 1, &solid(1, [255, 0, 0, 255]), 1);
+    let (_, blue) = bitmap(0, 1, 1, &solid(1, [0, 0, 255, 255]), 1);
+    let assets = HashMap::from([("red".to_string(), red), ("blue".to_string(), blue)]);
+    let nested = json!({"cast": 1, "number": 4, "type": 2, "width": 1, "height": 1, "regX": 0, "regY": 0,
+        "filmAssets": ["red", "blue"]});
+    let movie = json!({"name": "M", "directorVersion": 850, "members": [nested]});
+    let at = [(6, sprite(Sprite { cast: 1, member: 4, ..Default::default() }))];
+    let frame = |n| compose_at(&movie, &lp, n, &at, &assets, &[], &mut vec![]).unwrap().data;
+    assert_eq!(fdi_pixel(&frame(0), 0, 8), [255, 0, 0, 255]);
+    assert_eq!(fdi_pixel(&frame(3), 0, 8), [0, 0, 255, 255]);
+    let pending = json!({"name": "M", "directorVersion": 850, "members": [{"cast": 1, "number": 4, "type": 2, "width": 1, "height": 1}]});
+    assert_eq!(compose_at(&pending, &lp, 0, &at, &assets, &[], &mut vec![]).err().as_deref(), Some(NESTED_PENDING));
+    // Other versions keep their deferral of nested loops.
+    let d10 = json!({"name": "M", "directorVersion": 1000, "members": [nested]});
+    assert!(compose_at(&d10, &lp, 0, &at, &assets, &[], &mut vec![]).is_err());
+}
+
+#[test]
+fn nonvisual_and_director_85_field_children_are_skipped_and_recorded() {
+    let lp = json!({"cast": 1, "number": 9, "left": 0, "top": 0, "width": 1, "height": 1, "filmScore": {"version": 13}});
+    let at = |member| [(6, sprite(Sprite { cast: 1, member, ..Default::default() }))];
+    let none = HashMap::new();
+    let members = json!([{"cast": 1, "number": 2, "type": 6}, {"cast": 1, "number": 3, "type": 3, "name": "Marker", "width": 9, "height": 9}]);
+    let movie = json!({"name": "M", "directorVersion": 850, "members": members});
+    let mut limits = vec![];
+    compose_at(&movie, &lp, 0, &at(2), &none, &[], &mut limits).unwrap();
+    compose_at(&movie, &lp, 0, &at(3), &none, &[], &mut limits).unwrap();
+    assert_eq!(limits.iter().map(|l| l["kind"].clone()).collect::<Vec<_>>(),
+        [json!("film-loop-nonvisual-child"), json!("film-loop-unflattened-child")]);
+    let d10 = json!({"name": "M", "directorVersion": 1000, "members": members});
+    assert!(compose_at(&d10, &lp, 0, &at(3), &none, &[], &mut vec![]).is_err());
+}
+
+#[test]
+fn mask_ink_without_a_bitmap_mask_copies_and_on_a_shape_draws_nothing() {
+    let lp = json!({"cast": 1, "number": 9, "left": 0, "top": 0, "width": 2, "height": 1, "filmScore": {"version": 13}});
+    let (child, pixels) = bitmap(5, 2, 1, &solid(2, [255, 0, 0, 255]), 1);
+    let assets = HashMap::from([(child["asset"].as_str().unwrap().to_string(), pixels)]);
+    let movie = json!({"name": "M", "members": [child, {"cast": 1, "number": 6, "type": 3}]});
+    let mut limits = vec![];
+    let copied = compose(&movie, &lp, &[(6, sprite(Sprite { ink: 9, cast: 1, member: 5, ..Default::default() }))], &assets, &[], &mut limits);
+    assert_eq!(fdi_pixel(&copied.data, 1, 8), [255, 0, 0, 255]);
+    assert_eq!(limits[0]["kind"], "film-loop-mask-missing");
+    let shape = json!({"cast": 1, "number": 2, "type": 8, "shape": 1, "pattern": 1, "filled": 1, "lineWidth": 0,
+        "lineDirection": 5, "width": 2, "height": 1});
+    let movie = json!({"name": "M", "members": [shape]});
+    let mut limits = vec![];
+    let hidden = compose(&movie, &lp, &[(6, sprite(Sprite { ink: 9, cast: 1, member: 2, fore: Some([10, 20, 30]), ..Default::default() }))], &assets, &[], &mut limits);
+    assert_eq!(fdi_pixel(&hidden.data, 0, 8)[3], 0);
+    assert_eq!(limits[0]["kind"], "film-loop-shape-mask-ink");
 }

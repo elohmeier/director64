@@ -158,7 +158,7 @@ static const dg_cast_t casts[] = {
     {"c5", 1, 5}, {"c6", 1, 6},   {"c7", 1, 7},   {"c8", 1, 8},
     {"c9", 1, 9}, {"c10", 1, 10}, {"c11", 1, 11}, {"c12", 1, 12}};
 static const dg_member_t members[] = {
-    {.id = 0x1c0001,
+    {.id = 0x2c0001,
      .number = 1,
      .cast = 12,
      .type = 1,
@@ -167,15 +167,15 @@ static const dg_member_t members[] = {
      .reg_x = 10,
      .reg_y = 5,
      .name = "image"},
-    {.id = 0x1c0002, .number = 2, .cast = 12, .type = 11, .name = "behavior"},
-    {.id = 0x1c0003, .number = 3, .cast = 12, .type = 6, .name = "voice"},
+    {.id = 0x2c0002, .number = 2, .cast = 12, .type = 11, .name = "behavior"},
+    {.id = 0x2c0003, .number = 3, .cast = 12, .type = 6, .name = "voice"},
 };
 static const dg_delta_t deltas[] = {
     {.channel = 1, .value = {.delay = 2}},
     {.channel = 805,
      .mask = DG_ALL,
-     .value = {.member = 0x1c0001,
-               .script = 0x1c0002,
+     .value = {.member = 0x2c0001,
+               .script = 0x2c0002,
                .x = 100,
                .y = 100,
                .width = 20,
@@ -226,7 +226,7 @@ static void emptied_member_rect(void) {
   // assigning VOID leaves the sprite as it was (ScummVM does both).
   lv_t spr = lv_make(LV_SPRITE, 798), empty =lv_make(LV_MEMBER, 0x10000);
   dg_sprite_t *s = &director.sprites[798];
-  *s = (dg_sprite_t){.value = {.member = 0x1c0001, .x = 100, .y = 100,
+  *s = (dg_sprite_t){.value = {.member = 0x2c0001, .x = 100, .y = 100,
                                .width = 40, .height = 30}};
   lv_t rect = lv_get(&values, NULL, "rect", empty);
   assert(lv_type(rect) == LV_VOID && !values.failed);
@@ -239,7 +239,7 @@ static void sprite_dimensions(void) {
   // animerapistongen repeatedly uses height when updating the piston quad.
   lv_t spr = lv_make(LV_SPRITE, 799);
   dg_sprite_t *s = &director.sprites[799];
-  *s = (dg_sprite_t){.value = {.member = 0x1c0001, .x = 100, .y = 100,
+  *s = (dg_sprite_t){.value = {.member = 0x2c0001, .x = 100, .y = 100,
                                .width = 40, .height = 30, .rotation = 9000}};
   assert(lv_numeric(lv_get(&values, NULL, "width", spr)) == 20);
   assert(lv_numeric(lv_get(&values, NULL, "height", spr)) == 10);
@@ -336,7 +336,7 @@ int main(void) {
   director.mouse_x = 100;
   director.mouse_y = 100;
   lv_t mouse_member = lv_get(&values, NULL, "mousemember", (lv_t){0});
-  assert(lv_type(mouse_member) == LV_MEMBER && lv_id(mouse_member) == 0x1c0001);
+  assert(lv_type(mouse_member) == LV_MEMBER && lv_id(mouse_member) == 0x2c0001);
   lv_frame_t caller = {.movie = &code};
   lv_t member_string = lv_call(&values, &caller, "string", 1, &mouse_member);
   assert(!strcmp(lv_cstr(&values, member_string), "member 1 of castLib 12"));
@@ -374,15 +374,15 @@ int main(void) {
   assert(!values.depth && !values.failed);
   assert(lv_integer(&values, lv_get(&values, NULL, "rotation", spr)) == 90);
   lv_t ref = lv_reference(&values, "script", lv_num(2), lv_num(12));
-  assert(lv_type(ref) == LV_SCRIPT && lv_id(ref) == 0x1c0002);
+  assert(lv_type(ref) == LV_SCRIPT && lv_id(ref) == 0x2c0002);
   lv_t result = {0};
   bool yield = false;
   assert(values.services.call(
       &values, "puppetsound", 2,
-      (lv_t[]){lv_num(8), lv_make(LV_MEMBER, 0x1c0003)}, &result,
+      (lv_t[]){lv_num(8), lv_make(LV_MEMBER, 0x2c0003)}, &result,
       &yield));
   assert(!values.failed && sound_channel == 8 &&
-         director.sounds[7] == 0x1c0003);
+         director.sounds[7] == 0x2c0003);
   for (unsigned i = 0; i < 119; i++)
     assert(dg_tick(&director, 0, 0, false, 288));
   assert(director.frame == 1);
@@ -400,7 +400,7 @@ int main(void) {
   assert(dg_hit(&director, 100, 100) == 799);
   dg_stop_sounds(&director);
   assert(!director.sounds[7]);
-  lv_t sound_member = lv_make(LV_MEMBER, 0x1c0003);
+  lv_t sound_member = lv_make(LV_MEMBER, 0x2c0003);
   lv_set(&values, NULL, "loop", sound_member, lv_num(1));
   assert(lv_truth(&values, lv_get(&values, NULL, "loop", sound_member)));
   service("preload", 1, &sound_member);

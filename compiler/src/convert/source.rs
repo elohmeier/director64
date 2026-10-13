@@ -75,7 +75,86 @@ pub struct SourceFile {
 
 /// source-files.mjs `sourceFiles`: the audited directories' Director files,
 /// names folded to their runtime namespace, collisions rejected.
+/// The parser's script casts under the names the audit gives castlibs.
+/// Castlibs that share a library id (Director 8.5 movies give Internal and
+/// their external casts 1024) share one script context, which the parser
+/// lists once per castlib under the last one's name; such a context takes
+/// the first castlib's name and is listed once. Other movies pass unchanged.
+pub fn script_casts<'a>(scripts: &'a Value, cast_entries: &Value) -> Vec<(String, &'a Value)> {
+    let entries = cast_entries.as_array().cloned().unwrap_or_default();
+    let mut out: Vec<(String, &Value)> = Vec::new();
+    let mut shared: Vec<String> = Vec::new();
+    for cast in scripts["casts"].as_array().into_iter().flatten() {
+        let name = cast["name"].as_str().unwrap_or("").to_string();
+        let id = entries.iter().find(|e| e["name"] == cast["name"]).map(|e| e["id"].clone());
+        let first = id.and_then(|id| entries.iter().find(|e| e["id"] == id)).and_then(|e| e["name"].as_str());
+        match first {
+            Some(first) if first != name => {
+                if shared.iter().any(|s| s == first) {
+                    continue;
+                }
+                shared.push(first.to_string());
+                out.push((first.to_string(), cast));
+            }
+            _ => out.push((name, cast)),
+        }
+    }
+    out
+}
+
+/// The name a Director file converts under: protected and Shockwave
+/// (Afterburner) movies are movies, external and Shockwave casts are casts.
+pub fn canonical_name(upper: &str) -> String {
+    for (from, to) in [(".CST", ".CXT"), (".CCT", ".CXT"), (".DCR", ".DXR"), (".DIR", ".DXR")] {
+        if let Some(stem) = upper.strip_suffix(from) {
+            return format!("{stem}{to}");
+        }
+    }
+    upper.to_string()
+}
+
 pub fn source_files(fs: &dyn Files, root: &str, directories: &[String]) -> Result<Vec<SourceFile>, String> {
+    source_files_in(fs, root, directories, None)
+}
+
+/// The policy's Director files. With `folder_qualified_names` a file in a
+/// subfolder converts as `FOLDER__NAME`: Löwenzahn 7 ships three different
+/// SCHWEINE.DCR movies, and its scripts and cast lists find each by folder.
+pub fn policy_source_files(fs: &dyn Files, root: &str, policy: &Value, directories: &[String]) -> Result<Vec<SourceFile>, String> {
+    let qualify = policy["folder_qualified_names"].as_bool() == Some(true);
+    source_files_in(fs, root, directories, qualify.then_some(policy))
+}
+
+/// A folder name as a qualifier: its Joliet long name where the policy's
+/// `folder_aliases` records one (SCHWEIN1 is "Schweineaufruf"), uppercase,
+/// other characters as `_`.
+pub fn qualifier_name(policy: &Value, folder: &str) -> String {
+    let upper = folder.to_uppercase();
+    let long = policy["folder_aliases"].get(&upper).and_then(Value::as_str).unwrap_or(&upper).to_uppercase();
+    long.chars().map(|c| if c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_' || c == '-' { c } else { '_' }).collect()
+}
+
+/// The folder qualifier `policy_source_files` gives a file in `directory`.
+pub fn folder_qualifier(policy: &Value, directory: &str) -> Option<String> {
+    let last = directory.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    (!last.is_empty() && last != ".").then(|| qualifier_name(policy, last))
+}
+
+/// A file's Joliet long name where the policy's `file_aliases` records one
+/// under `FOLDER/ISONAME` (Optik's LEXIKONT/LEXIKO10.DCR is
+/// lexikon_o_linsen.dcr): ISO 9660 numbered the names it could not shorten,
+/// and the scripts navigate by the long names, whose 8.3 truncation would
+/// land in a sibling movie.
+fn file_alias(policy: Option<&Value>, directory: &str, item: &str) -> String {
+    let last = directory.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_uppercase();
+    let key = format!("{last}/{}", item.to_uppercase());
+    policy
+        .and_then(|policy| policy["file_aliases"].get(&key))
+        .and_then(Value::as_str)
+        .map_or_else(|| item.to_string(), str::to_string)
+}
+
+fn source_files_in(fs: &dyn Files, root: &str, directories: &[String], qualify: Option<&Value>) -> Result<Vec<SourceFile>, String> {
     let base = files::normalize(root);
     let mut out = Vec::new();
     let mut names = HashSet::new();
@@ -84,20 +163,35 @@ pub fn source_files(fs: &dyn Files, root: &str, directories: &[String]) -> Resul
         if within(&base, &folder).is_none() {
             return Err("Director source directory escapes media root".into());
         }
-        for (item, irregular) in fs.list(&folder)? {
+        // A Shockwave movie and its unprotected original under one name
+        // (DAMPF.DCR beside DAMPF.DIR): the Shockwave file is the one shipped.
+        let mut items = fs.list(&folder)?;
+        let priority = |item: &str| {
             let lower = item.to_ascii_lowercase();
-            if !(lower.ends_with(".dxr") || lower.ends_with(".cxt") || lower.ends_with(".cst")) {
+            if lower.ends_with(".dcr") || lower.ends_with(".cct") { 0 } else if lower.ends_with(".dir") { 2 } else { 1 }
+        };
+        items.sort_by_key(|(item, _)| priority(item));
+        let mut shockwave = HashSet::new();
+        for (item, irregular) in items {
+            let lower = item.to_ascii_lowercase();
+            if ![".dxr", ".cxt", ".cst", ".dcr", ".cct", ".dir"].iter().any(|e| lower.ends_with(e)) {
                 continue;
             }
             if irregular {
                 return Err(format!("Director source is not a regular file: {item}"));
             }
-            let mut name = item.to_uppercase();
-            if name.ends_with(".CST") {
-                name = format!("{}.CXT", &name[..name.len() - 4]);
+            let name = canonical_name(&file_alias(qualify, directory, &item).to_uppercase());
+            if priority(&item) == 0 {
+                shockwave.insert(name.clone());
+            } else if shockwave.contains(&name) {
+                continue;
             }
+            let name = match qualify.and_then(|policy| folder_qualifier(policy, directory)) {
+                Some(prefix) => format!("{prefix}__{name}"),
+                None => name,
+            };
             let (stem, ext) = name.rsplit_once('.').unwrap();
-            if stem.is_empty() || !stem.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+            if stem.is_empty() || !stem.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
                 || !(ext == "DXR" || ext == "CXT")
             {
                 return Err(format!("unsupported source name: {item}"));
@@ -284,7 +378,7 @@ pub fn file_model(input: FileInput, movie_names: &HashSet<String>) -> Result<Val
     let scripts = normalized_scripts(&dump.json, &dump.scripts)?;
     let valid = name.rsplit_once('.').is_some_and(|(stem, ext)| {
         !stem.is_empty()
-            && stem.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+            && stem.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
             && matches!(ext, "DXR" | "CXT" | "EXE" | "DAT")
     });
     require(valid, format!("unsupported source name: {name}"))?;
@@ -385,10 +479,11 @@ pub fn file_model(input: FileInput, movie_names: &HashSet<String>) -> Result<Val
     let mut members = Vec::new();
     for cast in casts {
         let section = cast["id"].as_i64().unwrap_or(0);
-        let (library_id, member_id) = member_locators
-            .get(&section)
-            .cloned()
-            .ok_or_else(|| format!("{name}: CASt {section} absent from all libraries"))?;
+        // A member no cast library lists (a deleted member's chunk left in a
+        // Shockwave movie) is unreachable: no script, score or name finds it.
+        let Some((library_id, member_id)) = member_locators.get(&section).cloned() else {
+            continue;
+        };
         let mid = stable_id("member", &[json!(id), library_id.clone(), json!(member_id)]);
         let data = &cast["data"];
         let kind = data["type"].as_i64().unwrap_or(-1);
@@ -441,8 +536,9 @@ pub fn file_model(input: FileInput, movie_names: &HashSet<String>) -> Result<Val
         members.push(member);
     }
     let mut script_records = Vec::new();
-    for cast in scripts["casts"].as_array().into_iter().flatten() {
-        let library = libraries.iter().find(|l| l["name"] == cast["name"]);
+    for (cast_name, cast) in script_casts(&scripts, &cast_entries) {
+        let library = libraries.iter().find(|l| l["name"] == cast_name.as_str());
+        let cast = &json!({"name": cast_name, "scripts": cast["scripts"].clone()});
         let list = cast["scripts"].as_array().cloned().unwrap_or_default();
         require(library.is_some() || list.is_empty(), format!("{name}: unknown script cast {}", text(&cast["name"])))?;
         for script in list {

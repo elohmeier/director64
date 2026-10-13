@@ -10,7 +10,8 @@ import {join} from "node:path";
 import {pathToFileURL} from "node:url";
 import {availableParallelism} from "node:os";
 import {Worker} from "node:worker_threads";
-import {encodeVideo} from "./video.mjs";
+import {encodeAudio, encodeVideo, encodeMpeg, mpegAudio} from "./video.mjs";
+import {encodeImage} from "./webp.mjs";
 
 const [tools, sourcePath, profilePath, metaPath, manifestPath, out] = process.argv.slice(2);
 if (!out) {
@@ -18,6 +19,8 @@ if (!out) {
   process.exit(2);
 }
 const root = new URL("../../../", import.meta.url).pathname;
+// The image packer (webp.mjs) loads from the tools, here and in the workers.
+process.env.D64_TOOLS = tools;
 const {importGame} = await import(pathToFileURL(join(tools, "pipeline.mjs")).href);
 const {loadConverter} = await import(pathToFileURL(join(root, "platforms/web/import/convert.mjs")).href);
 const {DirectorFile} = await import(pathToFileURL(join(root, "node_modules/projectorrays/dist/pkg/node.es.js")).href);
@@ -49,7 +52,7 @@ const result = await importGame({
     if (stage !== shown) process.stderr.write(`  ${(shown = stage)}\n`);
   },
   tools: {
-    converter, DirectorFile, pool, encodeVideo,
+    converter, DirectorFile, pool, encodeAudio, encodeImage, encodeVideo, encodeMpeg, mpegAudio,
     parserWasm: readFileSync(join(root, "node_modules/projectorrays/dist/projectorrays.wasm")),
     names: readFileSync(join(root, "runtime/lingo/names.txt"), "utf8"),
     bytecodeHeader: readFileSync(join(root, "runtime/lingo/lingo_bytecode.h")),

@@ -1,0 +1,23 @@
+schema_version = 1
+slug = "loewenzahn-2"
+title = "Löwenzahn 2"
+status = "catalogued"
+default_source = "sha256-a90d31062bfb"
+
+# Two pressings: the July 1998 disc replaced the April one (exchange
+# programme). It is a revised build, not a superset: most movies differ,
+# BALL16/BALLW16 and two sounds are new, and the REGENWUR sounds are renamed.
+
+[[sources]]
+id = "sha256-a90d31062bfb"
+file = "Loewenzahn_2_1998-07-18.iso"
+sha256 = "a90d31062bfb8514df01bd6a5ffff47e7417e5ebe43006b571a289cfd7149653"
+bytes = 631552000
+kind = "iso9660"
+
+[[sources]]
+id = "sha256-79ad17950520"
+file = "Loewenzahn_2_1998-04-20.iso"
+sha256 = "79ad17950520a6600d9319a5d70075a81f845afabe1150c130a84cf1f1dcd03e"
+bytes = 557144064
+kind = "iso9660"

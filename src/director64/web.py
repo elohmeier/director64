@@ -45,6 +45,8 @@ EXPORTS = (
     "d64_step",
     "d64_render",
     "d64_pixels",
+    "d64_stage_width",
+    "d64_stage_height",
     "d64_error",
     "d64_movie",
     "d64_ticks",
@@ -149,12 +151,32 @@ def profile_header(game: GameSpec, web: dict) -> str:
     )
 
 
+WEBP = Path("third_party/libwebp")
+
+
+def webp_decoder_sources(root: Path) -> list[str]:
+    """The vendored libwebp decoder (third_party/libwebp), for the images the
+    importer packs as WebP (platforms/web/webp_image.c)."""
+    found = []
+    for folder in ("src/dec", "src/dsp", "src/utils"):
+        for p in sorted((root / WEBP / folder).glob("*.c")):
+            name = p.name
+            if any(tag in name for tag in ("_mips", "_msa", "_enc", "enc_", "cost", "ssim",
+                                           "histogram", "picture", "huffman_encode",
+                                           "quant_levels_utils", "bit_writer")) or name == "enc.c":
+                continue
+            found.append(p.relative_to(root).as_posix())
+    return found
+
+
 def sources(game: GameSpec, linked: bool = False) -> list[str]:
     work = game.work.relative_to(game.root).as_posix()
     runtime = [
         "platforms/web/web_main.c",
         "platforms/web/web_runtime.c",
         "platforms/web/compositor.c",
+        "platforms/web/webp_image.c",
+        *webp_decoder_sources(game.root),
         "runtime/lingo/lingo_runtime.c",
         "runtime/director/director.c",
         "runtime/director/shape.c",
@@ -206,8 +228,12 @@ def compile_command(game: GameSpec, output: Path, linked: bool = False) -> list[
         "-Werror",
         "-pedantic",
         *(f"-I{p}" for p in includes),
+        f"-I{WEBP.as_posix()}",
         *family_defines(game),
         *game_defines(game),
+        "-DDIRECTOR64_WEBP=1",
+        # A hosted build: the deeper Lingo call stack (lingo_runtime.h).
+        "-DDIRECTOR64_HOSTED=1",
         *([] if linked else ["-DDIRECTOR64_PACKAGE"]),
         *sources(game, linked),
         "--js-library",
@@ -288,6 +314,7 @@ def build_tools(root: Path, engine: str) -> dict:
     )
     shutil.copyfile(root / CONVERTER_WASM, tools / "convert.wasm")
     emscripten(root, engine, ["sh", "platforms/web/tools/build-fonttools.sh", "build/web/tools"])
+    emscripten(root, engine, ["sh", "platforms/web/tools/build-webp.sh", "build/web/tools"])
     subprocess.run(["node", root / "platforms/web/import/build.mjs", tools], cwd=root, check=True)
     if sha256(root / PARSER / "projectorrays.wasm") != PARSER_WASM_SHA256:
         raise ValueError("unsupported ProjectorRays WASM; restore the locked npm dependency")
@@ -309,6 +336,8 @@ def build_tools(root: Path, engine: str) -> dict:
         "mkfontWasm": "mkfont.wasm",
         "mksprite": "mksprite.js",
         "mkspriteWasm": "mksprite.wasm",
+        "webp": "webp.js",
+        "webpWasm": "webp.wasm",
         "parserGlue": "projectorrays.js",
         "parserWasm": "projectorrays.wasm",
         "names": "names.txt",
@@ -320,6 +349,17 @@ def build_tools(root: Path, engine: str) -> dict:
         json.dumps(digests, sort_keys=True).encode() + abi_digest(root)
     ).hexdigest()
     return {"files": files, "sha256": digests, "revision": revision, "rustc": rustc.strip()}
+
+
+def web_policy(game: GameSpec) -> dict:
+    """The conversion policy as the browser and Android TV importer apply it:
+    an 800x600 stage keeps its images unscaled (native_stage), and flattened
+    film-loop frames keep only the rectangle they cover."""
+    policy = json.loads((game.directory / "host/source-policy.json").read_text())
+    if policy.get("stage_prescale"):
+        policy["stage_prescale"] = False
+        policy["native_stage"] = True
+    return policy
 
 
 def profile_entry(game: GameSpec, web: dict) -> dict:
@@ -353,7 +393,7 @@ def profile_entry(game: GameSpec, web: dict) -> dict:
             )
             if key in port
         },
-        "policy": json.loads((game.directory / "host/source-policy.json").read_text()),
+        "policy": web_policy(game),
         "save_files": web["save_files"],
     }
 
@@ -483,19 +523,47 @@ def build_package(game: GameSpec, output: Path) -> Path:
     return package
 
 
+def family_version(director_version: int) -> int:
+    """The runtime family for a port's Director version: Director 8.5 runs as
+    the D10 family (runtime/lingo/family.h)."""
+    return 10 if director_version == 850 else director_version // 100
+
+
 def family_defines(game: GameSpec) -> list[str]:
     """The runtime family a game's tables are laid out for
     (runtime/lingo/family.h)."""
     port = game.data["port"]
-    return [
-        f"-DDIRECTOR64_DIRECTOR_VERSION={port['director_version'] // 100}",
+    defines = [
+        f"-DDIRECTOR64_DIRECTOR_VERSION={family_version(port['director_version'])}",
         f"-DDIRECTOR64_EXTENDED_D6={int(port.get('extended_d6', False))}",
     ]
+    # Director 8.5 media conventions inside the D10 family (ink.h masks).
+    if port["director_version"] == 850:
+        defines.append("-DDIRECTOR64_D85=1")
+        # The disc folder the movies sit in, for the moviePath of a movie in a
+        # subfolder (Löwenzahn's DATA\LABYRINTH\).
+        root = str(port.get("media_root", ".")).strip("./\\")
+        if root.isalnum():
+            defines.append(f"-DDIRECTOR64_MEDIA_ROOT={root}")
+    # An 800x600 game the console prescales plays unscaled here (ink.h).
+    if native_stage(game):
+        defines.append("-DDIRECTOR64_NATIVE_STAGE=1")
+    return defines
+
+
+def native_stage(game: GameSpec) -> bool:
+    """Whether the browser and Android TV draw the game's authored 800x600
+    stage as it is, where the console's conversion prescales it to 640x480
+    (the policy's `stage_prescale`)."""
+    policy = json.loads((game.directory / "host/source-policy.json").read_text())
+    return bool(policy.get("stage_prescale"))
 
 
 # The console's per-game switches (platforms/n64/Makefile).
 GAME_DEFINES = {
     "willy-werkel-cars": ["-DDIRECTOR64_WILLY=1"],
+    # Mucklas's controller keys and name keyboard (games/findus-mucklas/runtime/controls.c).
+    "findus-mucklas": ["-DDIRECTOR64_MUCKLAS=1"],
     "loewenzahn-1": ["-DDIRECTOR64_PRINTING=1"],
 }
 
@@ -617,7 +685,13 @@ def stream_pack(game: GameSpec, folders: list[str], output: Path) -> dict:
             "director",
             "stream-pack",
             output,
-            *(f"{folder}={game.work / 'extracted' / folder}" for folder in folders),
+            # A NAME=FOLDER entry streams FOLDER's files under NAME.
+            *(
+                f"{name}={game.work / 'extracted' / folder}"
+                for name, _, folder in (
+                    spec.partition("=") if "=" in spec else (spec, "=", spec) for spec in folders
+                )
+            ),
         ],
         capture_output=True,
         text=True,

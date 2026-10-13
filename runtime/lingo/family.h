@@ -9,7 +9,9 @@
 // files and a guess at which of them meant the same thing. The families are
 // what the ports are: D5 (Löwenzahn), plain D6 (Workshop), extended D6
 // (Willy, a D6 title with D7-era behaviours), D7 (Christmas), D8 (Mucklas)
-// and D10 (Deutsch).
+// and D10 (Deutsch). Director 8.5 ports (manifest 850) build as the D10
+// family: their scores have its 1006 channels, and their scripts use its
+// services (the Buddy API, movie windows, tolerated absent Xtras).
 // Without a version the build is the plain D6 profile, as director.h has
 // always read it: the host tools and the native tests compile that way.
 #ifndef DIRECTOR64_DIRECTOR_VERSION

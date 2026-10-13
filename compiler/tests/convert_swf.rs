@@ -175,7 +175,7 @@ fn flash_timelines_flatten_per_frame_with_move_and_removal_semantics() {
         flash_frames(&swf(&concat(&[&tag(12, &[0x96, 4, 0, 0, 0x30, 0x31, 0, 0x1c, 0]), &body]), 3)).unwrap();
     assert_eq!(gated.ignored_actions.len(), 1);
     assert_eq!(gated.ignored_actions[0]["ops"], json!(["0x96", "0x1c"]));
-    assert!(flash_frames(&swf(&concat(&[&body, &tag(6, &[])]), 3)).err().unwrap().contains("unsupported static SWF tag 6"));
+    assert!(flash_frames(&swf(&concat(&[&body, &tag(19, &[])]), 3)).err().unwrap().contains("unsupported static SWF tag 19"));
     assert!(flash_frames(&swf(&body, 2)).err().unwrap().contains("frame count disagrees"));
 }
 

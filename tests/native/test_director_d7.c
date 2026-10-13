@@ -43,12 +43,12 @@ static const lv_handler_t handlers[]={
 static const lv_movie_t code={"D7.DXR",4,handlers,NULL, NULL, NULL, NULL, 0};
 static const dg_cast_t casts[]={{"Internal",1,1},{"Extra",1,2}};
 static const dg_member_t members[]={
- {.id=0x12000a,.number=10,.cast=2,.type=1,.width=16,.height=16,.name="first"},
- {.id=0x12000b,.number=11,.cast=2,.type=1,.width=16,.height=16,.name="second"},
+ {.id=0x22000a,.number=10,.cast=2,.type=1,.width=16,.height=16,.name="first"},
+ {.id=0x22000b,.number=11,.cast=2,.type=1,.width=16,.height=16,.name="second"},
 };
 static const dg_delta_t deltas[]={
- {.channel=0,.mask=DG_ALL,.value={.script=0x110001}},
- {.channel=3,.mask=DG_ALL,.value={.member=0x11007c}},
+ {.channel=0,.mask=DG_ALL,.value={.script=0x210001}},
+ {.channel=3,.mask=DG_ALL,.value={.member=0x21007c}},
 };
 static const dg_frame_t frames[]={{0,2}};
 static const dg_movie_t movie={.code=&code,.id=1,.tempo=1,.cast_count=2,.casts=casts,.members=members,.member_count=2,
@@ -76,14 +76,14 @@ int main(void) {
  assert(!r.failed && d.transition_type==9 && d.transition_duration==15);
  lv_t sprite=lv_make(LV_SPRITE, 1);
  lv_set(&r,NULL,"membernum",sprite,lv_num(10));
- assert(!r.failed && d.sprites[1].value.member==0x11000a);
- lv_set(&r,NULL,"member",sprite,lv_make(LV_MEMBER, 0x12000a));
+ assert(!r.failed && d.sprites[1].value.member==0x21000a);
+ lv_set(&r,NULL,"member",sprite,lv_make(LV_MEMBER, 0x22000a));
  assert(lv_numeric(lv_get(&r,NULL,"membernum",sprite))==10);
  assert(lv_numeric(lv_get(&r,NULL,"castnum",sprite))==131082);
  lv_set(&r,NULL,"membernum",sprite,lv_num(11));
- assert(d.sprites[1].value.member==0x12000b);
+ assert(d.sprites[1].value.member==0x22000b);
  lv_set(&r,NULL,"castnum",sprite,lv_num(131082));
- assert(d.sprites[1].value.member==0x12000a);
+ assert(d.sprites[1].value.member==0x22000a);
  lv_set(&r,NULL,"puppet",sprite,lv_num(1));
  assert(lv_numeric(lv_get(&r,NULL,"puppet",sprite))==1);
  call("cursor",1,(lv_t[]){lv_list(&r,2,(lv_t[]){lv_num(2000),lv_num(2001)},false)});

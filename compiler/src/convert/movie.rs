@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};
 
-use super::bitmap::{bitmap_metadata, bitmap_pixels, bitmap_source_alpha, builtin_palette, decode_palette, score_model,
+use super::bitmap::{bitmap_metadata, bitmap_pixels, jpeg_bitd, bitmap_source_alpha, builtin_palette, decode_palette, score_model,
     verify_alfa_plane, windows_palette};
 use super::d5media::{cast_strings, font_map, sound_resource, styled_text};
 use super::dump::Dump;
@@ -46,11 +46,33 @@ fn int(v: &Value) -> i64 {
 /// `ext.split(/[\\:]/).at(-1).toUpperCase().replace(/\.CST$/, ".CXT")`
 fn cast_file_name(file_path: &str) -> String {
     let last = file_path.rsplit(['\\', ':']).next().unwrap_or("").to_uppercase();
-    match last.strip_suffix(".CST") {
-        Some(stem) => format!("{stem}.CXT"),
-        None => last,
-    }
+    super::source::canonical_name(&last)
 }
+/// The converted name of an external cast a movie links. With folder-
+/// qualified names (source::policy_source_files) a cast resolves as Director
+/// searches: the folder its path names, then the movie's own folder, then
+/// the media root.
+fn resolve_cast_file(file_path: &str, name: &str, movie_path: &str, source_paths: &Map<String, Value>, policy: &Value) -> String {
+    if policy["folder_qualified_names"].as_bool() != Some(true) {
+        return name.to_string();
+    }
+    let mut folders = Vec::new();
+    let parts: Vec<&str> = file_path.split(['\\', ':', '/']).filter(|p| !p.is_empty() && *p != "@" && *p != "..").collect();
+    if parts.len() >= 2 {
+        folders.push(super::source::qualifier_name(policy, parts[parts.len() - 2]));
+    }
+    if let Some((dir, _)) = movie_path.rsplit_once('/') {
+        if let Some(prefix) = super::source::folder_qualifier(policy, dir) {
+            folders.push(prefix);
+        }
+    }
+    folders
+        .iter()
+        .map(|f| format!("{f}__{name}"))
+        .find(|candidate| source_paths.contains_key(candidate))
+        .unwrap_or_else(|| name.to_string())
+}
+
 fn basename(path: &str) -> &str {
     files::file_name(path.trim_end_matches('/'))
 }
@@ -88,7 +110,7 @@ impl Sources<'_> {
             return Ok(bytes.clone());
         }
         let valid = filename.strip_suffix(".CXT").is_some_and(|stem| {
-            !stem.is_empty() && stem.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+            !stem.is_empty() && stem.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
         });
         if !valid {
             return Err("invalid external palette file".into());
@@ -236,6 +258,8 @@ pub fn convert_movie(fs: &mut dyn Files, sources: &mut Sources, job: &MovieJob) 
         let link = if file_path.is_empty() { find_key(&library["id"], "CAS*") } else { None };
         let authored = cast_file_name(file_path);
         let external = aliases.get(&authored).and_then(Value::as_str).unwrap_or(&authored).to_string();
+        let movie_path = source["source_path"].as_str().unwrap_or(&source_name).to_string();
+        let external = resolve_cast_file(file_path, &external, &movie_path, sources.source_paths, policy);
         let empty_internal = link.is_none() && file_path.is_empty() && int(&library["maxMember"]) < int(&library["minMember"]);
         let mut cast = Map::new();
         cast.insert("number".into(), json!(i + 1));
@@ -408,6 +432,53 @@ struct Member<'a> {
 
 type Child<'c> = dyn Fn(Option<i64>, &str, bool) -> R<Option<&'c [u8]>> + 'c;
 
+/// A bitmap palette reference that names no palette: Director 8.5 files
+/// store castlib 0, or a castlib renumbered since authoring, for bitmaps
+/// moved between casts (lip-sync mouths). The palette member number is
+/// resolved in the movie's castlibs, in order, and the repair recorded.
+fn palette_repair<'c>(
+    m: &Member<'c>,
+    child: &Child<'c>,
+    meta: &super::bitmap::Meta,
+    cast_number: i64,
+    member: i64,
+    limits: &mut Vec<Value>,
+) -> R<Option<Vec<u8>>> {
+    let Some((cast, bytes, candidates)) = palette_search(m, child, meta.palette)? else { return Ok(None) };
+    limits.push(obj(vec![
+        ("kind", json!("source-palette-reference-search")), ("movie", json!(m.movie_name)),
+        ("cast", json!(cast_number)), ("member", json!(member)),
+        ("sourceCast", json!(meta.palette_cast)), ("sourceMember", json!(meta.palette)),
+        ("resolvedCast", json!(cast)), ("candidates", json!(candidates)),
+        ("original_projector_verified", json!(false)),
+    ]));
+    Ok(Some(bytes))
+}
+
+/// The first of the movie's own castlibs whose member `number` is a palette,
+/// with how many castlibs hold one there: (castlib, CLUT bytes, candidates).
+fn palette_search<'c>(m: &Member<'c>, child: &Child<'c>, number: i64) -> R<Option<(i64, Vec<u8>, usize)>> {
+    let mut found: Option<(i64, Vec<u8>)> = None;
+    let mut candidates = 0;
+    for (index, library) in m.castlist.iter().enumerate() {
+        if library["filePath"].as_str().is_some_and(|p| !p.is_empty()) {
+            continue;
+        }
+        let Some(link) = m.key.iter().find(|k| k["castID"] == library["id"] && k["fourCC"] == "CAS*") else { continue };
+        let Some(map) = m.parsed.get(&("CAS*".to_string(), int(&link["sectionID"]))) else { continue };
+        let slot = number - int(&library["minMember"]);
+        let Some(cast_id) = (slot >= 0).then(|| map["memberIDs"].get(slot as usize).map(int)).flatten() else { continue };
+        if cast_id == 0 {
+            continue;
+        }
+        if let Some(bytes) = child(Some(cast_id), "CLUT", false)? {
+            candidates += 1;
+            found.get_or_insert((index as i64 + 1, bytes.to_vec()));
+        }
+    }
+    Ok(found.map(|(cast, bytes)| (cast, bytes, candidates)))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn convert_member<'c>(
     fs: &mut dyn Files,
@@ -445,6 +516,20 @@ fn convert_member<'c>(
                 if let Some(unused) = child(Some(id), "BITD", false)?.filter(|u| !u.is_empty()) {
                     set(entry, "emptyPayload", json!({"bytes": unused.len(), "sha256": sha256(unused)}));
                 }
+                return Ok(());
+            }
+            // A bitmap without pixel data (Director 8.5 print-page placeholders
+            // that imaging Lingo fills) draws nothing; it keeps its size.
+            // Shockwave keeps a JPEG-compressed bitmap as ediM; its key may
+            // still name a BITD the file does not carry.
+            let jpeg = child(Some(id), "ediM", false)?;
+            if jpeg.is_none() && child(Some(id), "BITD", false)?.is_none() {
+                set(entry, "empty", json!(true));
+                limits.push(obj(vec![
+                    ("kind", json!("bitmap-without-pixel-data")), ("movie", json!(m.movie_name)),
+                    ("cast", json!(cast_number)), ("member", json!(member)), ("depth", json!(meta.depth)),
+                    ("original_projector_verified", json!(false)),
+                ]));
                 return Ok(());
             }
             let mut palette: Option<Vec<u8>> = None;
@@ -488,7 +573,13 @@ fn convert_member<'c>(
                         let filename = cast_file_name(file_path);
                         let resolved = policy["external_cast_aliases"].get(&filename).and_then(Value::as_str)
                             .unwrap_or(&filename).to_string();
-                        palette = Some(sources.external_palette(fs, &resolved, meta.palette)?);
+                        let movie_path = sources.source_paths.get(m.source_name).and_then(Value::as_str)
+                            .unwrap_or(m.source_name).to_string();
+                        let resolved = resolve_cast_file(file_path, &resolved, &movie_path, sources.source_paths, policy);
+                        palette = Some(match sources.external_palette(fs, &resolved, meta.palette) {
+                            Ok(bytes) => bytes,
+                            Err(error) => palette_repair(m, child, &meta, cast_number, member, limits)?.ok_or(error)?,
+                        });
                     } else {
                         let cast_id = match pal_cast {
                             None => None,
@@ -498,11 +589,22 @@ fn convert_member<'c>(
                                 if index < 0 { None } else { pc["memberIDs"].get(index as usize).map(int) }
                             }
                         };
-                        palette = child(cast_id, "CLUT", true)?.map(<[u8]>::to_vec);
+                        palette = match child(cast_id, "CLUT", true) {
+                            Ok(found) => found.map(<[u8]>::to_vec),
+                            Err(error) => Some(palette_repair(m, child, &meta, cast_number, member, limits)?.ok_or(error)?),
+                        };
                     }
                 }
             }
-            let bitd = child(Some(id), "BITD", true)?.unwrap();
+            let jpeg_bitd_owned;
+            let (meta, bitd) = match jpeg {
+                Some(jpeg) => {
+                    let (argb, bytes) = jpeg_bitd(&meta, jpeg, child(Some(id), "ALFA", false).ok().flatten())?;
+                    jpeg_bitd_owned = bytes;
+                    (argb, jpeg_bitd_owned.as_slice())
+                }
+                None => (meta.clone(), child(Some(id), "BITD", true)?.unwrap()),
+            };
             let pixels = bitmap_pixels(&meta, bitd, palette.as_deref(), true)?;
             let fdi_meta = FdiMeta {
                 width: meta.width as usize,
@@ -518,7 +620,7 @@ fn convert_member<'c>(
                 let alpha = bitmap_source_alpha(&meta, bitd)?;
                 let alpha_hash = sha256(&alpha);
                 let alpha_asset = format!("{alpha_hash}.a8");
-                let alfa = child(Some(id), "ALFA", false)?;
+                let alfa = child(Some(id), "ALFA", false).ok().flatten();
                 if let Some(alfa) = alfa {
                     verify_alfa_plane(&meta, &alpha, alfa)?;
                 }
@@ -529,7 +631,8 @@ fn convert_member<'c>(
                     ("asset", json!(alpha_asset)), ("sha256", json!(alpha_hash)),
                     ("encoding", json!("row-major unsigned 8-bit alpha")), ("bytes", json!(alpha.len())),
                     ("file", json!(m.source_name)), ("castResource", json!(id)),
-                    ("bitdResource", section("BITD").ok_or("Cannot read properties of undefined (reading 'sectionID')")?),
+                    ("bitdResource", section(if jpeg.is_some() { "ediM" } else { "BITD" })
+                        .ok_or("Cannot read properties of undefined (reading 'sectionID')")?),
                 ] {
                     source.insert(k.into(), v);
                 }
@@ -539,7 +642,7 @@ fn convert_member<'c>(
                 set(entry, "alphaSource", Value::Object(source));
                 set(entry, "alphaEncoding", json!({"sourceBits": 8, "targetBits": if partial > 0 { 8 } else { 1 },
                     "partialPixels": partial, "lossless": true}));
-            } else if let Some(alfa) = child(Some(id), "ALFA", false)? {
+            } else if let Some(alfa) = child(Some(id), "ALFA", false).ok().flatten() {
                 set(entry, "unusedAlfa", json!({"bytes": alfa.len(), "sha256": sha256(alfa)}));
             }
             let asset = image_asset_name(&data);
@@ -549,8 +652,16 @@ fn convert_member<'c>(
         6 => {
             let (header, mut samples): (Vec<u8>, &[u8]);
             let d5_samples;
-            if version == 500 {
-                let sound = sound_resource(child(Some(id), "snd ", true)?.unwrap())?;
+            // Shockwave movies keep a sound as a classic `snd ` resource even
+            // where their key also names sndH/sndS.
+            let classic = if version == 500 { None } else { child(Some(id), "snd ", false).ok().flatten() };
+            let paired = version != 500 && classic.is_some()
+                && matches!(child(Some(id), "sndH", false), Ok(Some(_)));
+            if version == 500 || (classic.is_some() && !paired) {
+                let sound = sound_resource(match classic {
+                    Some(bytes) => bytes,
+                    None => child(Some(id), "snd ", true)?.unwrap(),
+                })?;
                 let mut h = vec![0u8; 84];
                 for (offset, value) in [(40, sound.frames), (44, sound.rate), (68, sound.bits), (76, sound.channels),
                     (20, sound.loop_start), (28, sound.loop_end)]
@@ -578,7 +689,9 @@ fn convert_member<'c>(
             let channels = be32(&header, 76)? as f64;
             let frames = be32(&header, 40)? as f64;
             let declared = frames * bits / 8.0 * channels;
-            if version >= 1000 && samples.len() as f64 > declared {
+            // Director 8.5 and later can pad sndS with a zero prefix (458
+            // bytes in the Findus 8.5 casts) ahead of the declared frames.
+            if version >= 850 && samples.len() as f64 > declared {
                 let pad = samples.len() as f64 - declared;
                 let pad_bytes = pad as usize;
                 if pad.fract() != 0.0 || samples[..pad_bytes].iter().any(|&v| v != 0) {
@@ -881,6 +994,30 @@ fn convert_member<'c>(
                         l.push(("original_projector_verified", json!(false)));
                         limits.push(obj(l));
                     }
+                }
+                "TBDIRECTMEDIA" => {
+                    // Tabuleiro's DirectMedia Xtra: a little-endian header
+                    // (duration in milliseconds at 4, the picture size at 60
+                    // and 64) and the authoring machine's path to the MPEG
+                    // at 112, whose file name the port binds to the disc's.
+                    let le = |at: usize| -> Result<i64, String> {
+                        Ok(i32::from_le_bytes(payload.get(at..at + 4).ok_or("truncated DirectMedia member")?.try_into().unwrap()) as i64)
+                    };
+                    let (duration, width, height) = (le(4)?, le(60)?, le(64)?);
+                    let path = payload.get(112..).ok_or("truncated DirectMedia member")?;
+                    let path = js::latin1(&path[..path.iter().position(|&b| b == 0).unwrap_or(path.len())]);
+                    let file = path.rsplit(['\\', ':', '/']).next().unwrap_or("");
+                    if file.is_empty() || duration < 0 || !(1..=2048).contains(&width) || !(1..=2048).contains(&height) {
+                        return Err("unsupported DirectMedia member".into());
+                    }
+                    set(entry, "linkedFile", json!(file));
+                    set(entry, "videoDurationMs", json!(duration));
+                    set(entry, "width", json!(width));
+                    set(entry, "height", json!(height));
+                    // Placed by its centre, as a digital video is.
+                    set(entry, "regX", json!(width.div_euclid(2)));
+                    set(entry, "regY", json!(height.div_euclid(2)));
+                    set(entry, "videoFlags", json!(0));
                 }
                 other => return Err(format!("Xtra {other} requires native conversion")),
             }

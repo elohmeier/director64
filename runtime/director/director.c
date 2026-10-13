@@ -1,3 +1,4 @@
+#include <time.h>
 #include "director.h"
 #include <ctype.h>
 #include <math.h>
@@ -26,6 +27,11 @@ static void cancel_fade(dg_runtime_t *d, unsigned channel) {
 }
 #endif
 unsigned dg_opacity(const dg_sprite_t *s) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // From Director 7 on a sprite's blend always applies; Birthday hides its
+  // hotspot rectangles at blend 0 in the score.
+  return s->value.blend;
+#endif
   return (s->value.thickness & DG_HAS_BLEND) || s->value.ink == 32
              ? s->value.blend
              : 100;
@@ -215,6 +221,9 @@ void dg_key(dg_runtime_t *d, unsigned code, unsigned character, bool down) {
     return;
   }
   unsigned index = (d->key_first + d->key_count++) % 32;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  if (down) d->last_input_tick = d->ticks;
+#endif
   d->key_events[index].code = code;
   d->key_events[index].character = down ? character : d->key_chars[code];
   d->key_events[index].down = down;
@@ -240,7 +249,7 @@ const dg_member_t *dg_member(dg_runtime_t *d, uint32_t id) {
   for (unsigned i = 0; i < d->dynamic_count; i++)
     if (d->dynamic_members[i].member.id == id) return &d->dynamic_members[i].member;
 #endif
-  const dg_movie_t *movie = dg_loaded(d, id >> 20);
+  const dg_movie_t *movie = dg_loaded(d, DG_ID_FILE(id));
   if (movie) {
     unsigned first = 0, end = movie->member_count;
     while (first < end) {
@@ -296,22 +305,22 @@ static uint32_t reference_id(dg_runtime_t *d, unsigned cast, unsigned member) {
   const dg_movie_t *swap = d10_cast_target(d, lib->name);
   // A swapped library's members live in the target archive's External cast.
   if (swap)
-    return swap->id << 20 | 1u << 16 | member;
+    return DG_ID(swap->id, 1u, member);
 #endif
-  return lib->file << 20 | lib->cast << 16 | member;
+  return DG_ID(lib->file, lib->cast, member);
 }
 static unsigned member_cast(dg_runtime_t *d, uint32_t id) {
   for (unsigned c = 0; c < d->movie->cast_count; c++) {
 #if DG_D10
     const dg_movie_t *swap = d10_cast_target(d, d->movie->casts[c].name);
     if (swap) {
-      if (swap->id == id >> 20 && ((id >> 16) & 15) == 1)
+      if (swap->id == DG_ID_FILE(id) && DG_ID_CAST(id) == 1)
         return c + 1;
       continue;
     }
 #endif
-    if (d->movie->casts[c].file == (id >> 20) &&
-        d->movie->casts[c].cast == ((id >> 16) & 15))
+    if (d->movie->casts[c].file == DG_ID_FILE(id) &&
+        d->movie->casts[c].cast == DG_ID_CAST(id))
       return c + 1;
   }
   return 0;
@@ -336,8 +345,8 @@ static const lv_handler_t *resolve_script(lv_runtime_t *r, lv_t script,
                                           const char *name,
                                           const lv_movie_t **owner) {
   dg_runtime_t *d = r->context;
-  const dg_movie_t *movie = dg_loaded(d, (uint32_t)lv_id(script) >> 20);
-  unsigned cast = ((uint32_t)lv_id(script) >> 16) & 15;
+  const dg_movie_t *movie = dg_loaded(d, DG_ID_FILE(lv_id(script)));
+  unsigned cast = DG_ID_CAST(lv_id(script));
   if (!movie || !cast || cast > movie->cast_count)
     return NULL;
   const char *cast_name = movie->casts[cast - 1].name;
@@ -366,8 +375,7 @@ static lv_t script_identity(lv_runtime_t *r, const lv_movie_t *code,
       continue;
     for (unsigned cast = 0; cast < movie->cast_count; cast++)
       if (eq(movie->casts[cast].name, handler->cast))
-        return lv_make(LV_SCRIPT, (int32_t)(movie->id << 20 | (cast + 1) << 16 |
-                                      handler->member));
+        return lv_make(LV_SCRIPT, (int32_t)DG_ID(movie->id, cast + 1, handler->member));
   }
   return (lv_t){0};
 }
@@ -499,7 +507,7 @@ static lv_t reference(lv_runtime_t *r, const char *kind, lv_t value,
       if (!m->type || !eq(m->name, wanted_member)) continue;
       for (unsigned k = 0; k < d->movie->cast_count; k++)
         if ((lv_type(library) == LV_VOID || k + 1 == cast) &&
-            d->movie->casts[k].file == m->id >> 20)
+            d->movie->casts[k].file == DG_ID_FILE(m->id))
           return lv_make(LV_MEMBER, (int32_t)m->id);
     }
 #endif
@@ -598,9 +606,10 @@ static void sprite_rect(dg_runtime_t *d, const dg_sprite_t *s, int *left,
   uint32_t source;
   if (m && m->type == 1 && d->image_alias_count && dg_image_source(d, m->id, &source)) {
     const dg_member_t *from = source ? dg_member(d, source) : NULL;
+    bool blank = source == DG_IMAGE_BLANK;
     resized = *m;
-    resized.width = from ? from->width : 800;
-    resized.height = from ? from->height : 600;
+    resized.width = from ? from->width : blank ? 0 : 800;
+    resized.height = from ? from->height : blank ? 0 : 600;
     resized.reg_x = (int16_t)(resized.width / 2);
     resized.reg_y = (int16_t)(resized.height / 2);
     m = &resized;
@@ -892,8 +901,8 @@ void dg_update_stage(dg_runtime_t *d) {
 // mouseUp, and does anything it declares take a mouse event at all.
 enum { MOUSE_CAST = 1u, MOUSE_SCRIPT = 2u };
 static bool declares_mouse(dg_runtime_t *d, uint32_t id, unsigned query) {
-  const dg_movie_t *m = dg_loaded(d, id >> 20);
-  unsigned cast = (id >> 16) & 15;
+  const dg_movie_t *m = dg_loaded(d, DG_ID_FILE(id));
+  unsigned cast = DG_ID_CAST(id);
   if (!m || !cast || cast > m->cast_count)
     return false;
   for (unsigned i = 0; i < m->code->count; i++) {
@@ -1035,6 +1044,15 @@ dg_cursor_t dg_cursor_current(dg_runtime_t *d) {
   return dg_cursor_at(d, d->mouse_x, d->mouse_y);
 }
 
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+const dg_text_extra_t *dg_text_extra(dg_runtime_t *d, uint32_t member) {
+  const dg_movie_t *movie = dg_loaded(d, DG_ID_FILE(member));
+  for (unsigned i = 0; movie && i < movie->text_extra_count; i++)
+    if (movie->text_extras[i].member == member)
+      return &movie->text_extras[i];
+  return NULL;
+}
+#endif
 static void cursor_set(dg_runtime_t *d, dg_cursor_t *target, lv_t value) {
   lv_runtime_t *r = d->values;
   dg_cursor_t next = {0};
@@ -1056,6 +1074,14 @@ static void cursor_set(dg_runtime_t *d, dg_cursor_t *target, lv_t value) {
       // DAG13 retains references 2000/2001 without corresponding media.
       if (!m) {
         if (d->platform.trace) d->platform.trace(d->context, "CURSOR_MEMBER_EMPTY");
+        return;
+      }
+#endif
+#if DG_D7_OR_D10
+      // So does a member that is no bitmap: Löwenzahn 7's piano names
+      // "Hotspot" and its own shape member of that name answers first.
+      if (m->type != 1 || !m->width || !m->height) {
+        if (d->platform.trace) d->platform.trace(d->context, "CURSOR_MEMBER_NOT_BITMAP");
         return;
       }
 #endif
@@ -1178,16 +1204,107 @@ static __attribute__((noinline)) lv_t marker_list(lv_runtime_t *r, dg_runtime_t 
     error(d, "marker list capacity", "exceeded");
     return (lv_t){0};
   }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // A property list from frame to name, as Director 7 and later answer it:
+  // Löwenzahn 8's sailing reads getProp(the markerList, marker(0)).
+  // Twice the slots (Optik's laptop has 149 markers), static as the
+  // label array is kept off the stack for the same reason.
+  static lv_t pairs[512];
+  (void)labels;
+  memset(pairs, 0, d->movie->label_count * 2 * sizeof(pairs[0]));
+  lv_t result = lv_list(r, d->movie->label_count * 2, pairs, true);
+  r->roots[DG_SCRATCH_ROOT] = result;
+  for (unsigned i = 0; i < d->movie->label_count; i++) {
+    lv_set_at(r, result, 2 * i + 1, lv_num((int32_t)d->movie->labels[i].frame));
+    lv_set_at(r, result, 2 * i + 2, lv_text(r, d->movie->labels[i].name, false));
+  }
+#else
   lv_t result = lv_list(r, d->movie->label_count, labels, false);
   r->roots[DG_SCRATCH_ROOT] = result;
   for (unsigned i = 0; i < d->movie->label_count; i++)
     lv_set_at(r, result, i + 1, lv_text(r, d->movie->labels[i].name, false));
+#endif
   return result;
+}
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+static dg_film_child_t *film_child(dg_runtime_t *d, lv_t sprite, bool create) {
+  unsigned parent = ((uint32_t)lv_id(sprite) >> 8) & 0x3fff, channel = (uint32_t)lv_id(sprite) & 255;
+  for (unsigned i = 0; i < d->film_child_count; i++)
+    if (d->film_children[i].parent == parent && d->film_children[i].channel == channel)
+      return &d->film_children[i];
+  if (!create || d->film_child_count == DG_FILM_CHILDREN)
+    return NULL;
+  dg_film_child_t *c = &d->film_children[d->film_child_count++];
+  *c = (dg_film_child_t){.parent = (uint16_t)parent, .channel = (uint8_t)channel, .blend = 100};
+  return c;
+}
+static void film_child_size(const dg_runtime_t *d, const dg_film_child_t *c, int *w, int *h) {
+  const dg_member_t *m = c->member ? dg_member((dg_runtime_t *)d, c->member) : NULL;
+  *w = c->sized ? c->width : m ? m->width : 0;
+  *h = c->sized ? c->height : m ? m->height : 0;
+}
+static lv_t film_child_get(dg_runtime_t *d, unsigned ln, lv_t sprite) {
+  lv_runtime_t *r = d->values;
+  const dg_film_child_t *c = film_child(d, sprite, false);
+  dg_film_child_t none = {.blend = 100};
+  if (!c) c = &none;
+  const dg_member_t *m = c->member ? dg_member(d, c->member) : NULL;
+  int w, h;
+  film_child_size(d, c, &w, &h);
+  int left = c->x - (m && m->width ? m->reg_x * w / m->width : 0);
+  int top = c->y - (m && m->height ? m->reg_y * h / m->height : 0);
+  if (ln == LN_MEMBER) return lv_make(LV_MEMBER, (int32_t)c->member);
+  if (ln == LN_LOC) return lv_point(r, c->x, c->y);
+  if (ln == LN_LOCH) return lv_num(c->x);
+  if (ln == LN_LOCV) return lv_num(c->y);
+  if (ln == LN_INK) return lv_num(c->ink);
+  if (ln == LN_BLEND) return lv_num(c->blend);
+  if (ln == LN_WIDTH) return lv_num(w);
+  if (ln == LN_HEIGHT) return lv_num(h);
+  if (ln == LN_LEFT) return lv_num(left);
+  if (ln == LN_TOP) return lv_num(top);
+  if (ln == LN_RIGHT) return lv_num(left + w);
+  if (ln == LN_BOTTOM) return lv_num(top + h);
+  if (ln == LN_RECT) return lv_rect(r, left, top, left + w, top + h);
+  return (lv_t){0};
+}
+static void film_child_set(dg_runtime_t *d, unsigned ln, lv_t sprite, lv_t value) {
+  lv_runtime_t *r = d->values;
+  dg_film_child_t *c = film_child(d, sprite, true);
+  if (!c) {
+    error(d, "film loop channel capacity", "exceeded");
+    return;
+  }
+  if (ln == LN_MEMBER) {
+    c->member = lv_type(value) == LV_MEMBER ? (uint32_t)lv_id(value) : 0;
+    c->sized = 0;
+  } else if (ln == LN_LOC && lv_count(r, value) >= 2) {
+    c->x = (int16_t)lv_integer(r, lv_at(r, value, 1));
+    c->y = (int16_t)lv_integer(r, lv_at(r, value, 2));
+  } else if (ln == LN_LOCH) c->x = (int16_t)lv_integer(r, value);
+  else if (ln == LN_LOCV) c->y = (int16_t)lv_integer(r, value);
+  else if (ln == LN_INK) c->ink = (uint8_t)lv_integer(r, value);
+  else if (ln == LN_BLEND) {
+    int b = lv_integer(r, value);
+    c->blend = (uint8_t)(b < 0 ? 0 : b > 100 ? 100 : b);
+  } else if (ln == LN_WIDTH || ln == LN_HEIGHT) {
+    int w, h;
+    film_child_size(d, c, &w, &h);
+    c->width = (int16_t)(ln == LN_WIDTH ? lv_integer(r, value) : w);
+    c->height = (int16_t)(ln == LN_HEIGHT ? lv_integer(r, value) : h);
+    c->sized = 1;
+  }
+  d->visual_revision++;
 }
 #endif
 static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
   unsigned ln = lv_name_id(r, name);
   dg_runtime_t *d = r->context;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  if (lv_type(owner) == LV_SPRITE && ((uint32_t)lv_id(owner) & DG_CHILD_SPRITE))
+    return film_child_get(d, ln, owner);
+#endif
 #if DG_EXTENDED
   lv_t d6_result = {0};
   if (d6_get(d, name, owner, &d6_result)) return d6_result;
@@ -1247,10 +1364,40 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
       return lv_point(r, d->mouse_x, d->mouse_y);
     if (ln == LN_CURRENTSPRITENUM)
       return lv_num(d->current_event_sprite);
-    if (ln == LN_MOVIEPATH)
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // the pathName is the older name of the moviePath (Optik's back list).
+    if ((ln == LN_MOVIEPATH) || (ln == LN_PATHNAME)) {
+#else
+    if (ln == LN_MOVIEPATH) {
+#endif
+#if DG_D10
+      const char *folder = d->platform.movie_path ? d->platform.movie_path(d->context) : NULL;
+      if (folder)
+        return lv_text(r, folder, false);
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85 && defined(DIRECTOR64_MEDIA_ROOT)
+      // A movie converted from a disc subfolder (FOLDER__NAME) answers that
+      // folder, so a back entry built as the moviePath & the movieName finds
+      // it again from another folder (Optik's light labyrinth back to VORN).
+#define D85_TEXT(x) #x
+#define D85_ROOT(x) D85_TEXT(x)
+      const char *split = strstr(d->movie->code->name, "__");
+      if (split) {
+        char path[96];
+        snprintf(path, sizeof(path), "C:\\%s\\%.*s\\", D85_ROOT(DIRECTOR64_MEDIA_ROOT),
+                 (int)(split - d->movie->code->name), d->movie->code->name);
+        return lv_text(r, path, false);
+      }
+#endif
       return lv_text(r, "C:\\", false);
-    if ((ln == LN_MOVIENAME) || (ln == LN_MOVIE))
+    }
+    if ((ln == LN_MOVIENAME) || (ln == LN_MOVIE)) {
+#if DG_D10
+      if (d->movie_alias[0])
+        return lv_text(r, d->movie_alias, false);
+#endif
       return lv_text(r, d->movie->code->name, false);
+    }
     if ((ln == LN_STAGELEFT) || (ln == LN_STAGETOP))
       return lv_num(0);
     if (ln == LN_STAGERIGHT)
@@ -1403,6 +1550,10 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
       return lv_num(s->visible);
     if (ln == LN_BLEND)
       return lv_num(s->value.blend);
+#if DG_D10
+    if (ln == LN_BLENDLEVEL)
+      return lv_num((int32_t)((s->value.blend * 255 + 50) / 100));
+#endif
     if (ln == LN_STRETCH)
       return lv_num(s->stretch);
     if (ln == LN_TRAILS)
@@ -1437,7 +1588,8 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
       return (s->value.flags & 16)
                  ? lv_make(LV_COLOR, (int32_t)s->value.fore_rgb)
                  : lv_num(s->value.fore);
-    if (ln == LN_BACKCOLOR)
+    // bgColor is the RGB-era name of backColor (Löwenzahn 8 and Optik).
+    if ((ln == LN_BACKCOLOR) || (ln == LN_BGCOLOR))
       return (s->value.flags & 32)
                  ? lv_make(LV_COLOR, (int32_t)s->value.back_rgb)
                  : lv_num(s->value.back);
@@ -1476,9 +1628,21 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
     }
     if (ln == LN_VOLUME)
       return lv_num(d->channel_volume[lv_id(owner) - 1]);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    if (ln == LN_PAN)
+      return lv_num(d->channel_pan[lv_id(owner) - 1]);
+#endif
     if (ln == LN_STATUS)
       return lv_num(d->platform.sound_busy &&
                     d->platform.sound_busy(d->context, lv_id(owner) - 1));
+#if DG_EXTENDED && DG_D10
+    // How far the channel's sound has played, in milliseconds: lip sync
+    // reads its amplitude list at this position.
+    if ((ln == LN_ELAPSEDTIME) || (ln == LN_CURRENTTIME))
+      return lv_num(d->platform.sound_position &&
+                            d->platform.sound_busy && d->platform.sound_busy(d->context, lv_id(owner) - 1)
+                        ? d->platform.sound_position(d->context, lv_id(owner) - 1) : 0);
+#endif
     if (ln == LN_ENDTIME) {
       // The playback range end in milliseconds; converted members always
       // play their full sample count (rooms size waits from it).
@@ -1521,6 +1685,11 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
 #if DG_MODERN
       if (ln == LN_NUMBER)
         return lv_num((lv_id(owner) & 65535) ? (lv_id(owner) & 65535) : -1);
+#if DG_D10
+      // Circus's sound manager probes a name with memberNum < 1.
+      if (ln == LN_MEMBERNUM)
+        return lv_num(-1);
+#endif
       if (ln == LN_TYPE)
         return lv_text(r, "empty", true);
       if (ln == LN_NAME)
@@ -1585,12 +1754,40 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
       return flash;
   }
 #endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // A behavior reached before its beginSprite reads properties of its still
+  // VOID sprite reference (Findus 8.5's sendAllSprites from an earlier
+  // channel's beginSprite); the read answers VOID and the sender goes on.
+  if (lv_type(owner) == LV_VOID) {
+    if (d->platform.trace)
+      d->platform.trace(d->context, "VOID_PROPERTY_READ");
+    return (lv_t){0};
+  }
+#endif
+#ifdef DIRECTOR64_DEV_LENIENT
+  // Development builds report every gap a run reaches instead of the first.
+  script_error(d, "unimplemented property getter", name);
+#else
   error(d, "unimplemented property getter", name);
+#endif
   return (lv_t){0};
 }
 static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
   unsigned ln = lv_name_id(r, name);
   dg_runtime_t *d = r->context;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // A chunk put already rewrote the member's text and hands the member back
+  // (op_chunk_set); storing it into its own text changes nothing.
+  if ((ln == LN_TEXT) && (lv_type(owner) == LV_MEMBER || lv_type(owner) == LV_FIELD) &&
+      lv_type(value) == lv_type(owner) && lv_id(value) == lv_id(owner))
+    return;
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  if (lv_type(owner) == LV_SPRITE && ((uint32_t)lv_id(owner) & DG_CHILD_SPRITE)) {
+    film_child_set(d, ln, owner, value);
+    return;
+  }
+#endif
 #if DG_EXTENDED
   if (d6_set(d, name, owner, value)) return;
 #endif
@@ -1842,6 +2039,14 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
       s->auto_mask |= DG_POSITION;
       return;
     }
+#if DG_D10
+    // blendLevel is blend on Director's 0..255 scale.
+    if (ln == LN_BLENDLEVEL) {
+      ln = LN_BLEND;
+      v = v < 0 ? 0 : v > 255 ? 255 : v;
+      v = (v * 100 + 127) / 255;
+    }
+#endif
     if (ln == LN_BLEND) {
       if (v < 0)
         v = 0;
@@ -1882,7 +2087,7 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
       return;
     }
 #if DG_MODERN
-    if (ln == LN_BACKCOLOR) {
+    if ((ln == LN_BACKCOLOR) || (ln == LN_BGCOLOR)) {
       s->value.back = v;
       s->value.back_rgb = (uint32_t)v & 0xffffff;
       if (lv_type(value) == LV_COLOR || v > 255)
@@ -1925,6 +2130,14 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
                                                        : volume;
       return;
     }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // Löwenzahn 8's hidden-object picture pans its sounds after the sprite.
+    if ((ln == LN_PAN) && lv_id(owner) >= 1 && lv_id(owner) <= DG_SOUND_CHANNELS) {
+      int pan = lv_integer(r, value);
+      d->channel_pan[lv_id(owner) - 1] = (int8_t)(pan < -100 ? -100 : pan > 100 ? 100 : pan);
+      return;
+    }
+#endif
 #endif
   } else if (lv_type(owner) == LV_MEMBER || lv_type(owner) == LV_FIELD) {
     // Text/font/color mutations do not change the sprite record itself.
@@ -2037,7 +2250,20 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
        (ln == LN_FONTSIZE) || (ln == LN_FONTSTYLE) || (ln == LN_BGCOLOR)))
     return;
 #endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // The write twin of VOID_PROPERTY_READ: Löwenzahn 8's mountain game
+  // hides sprites from a newGame that reaches them before their beginSprite
+  // set the reference; that beginSprite hides them again.
+  if (lv_type(owner) == LV_VOID) {
+    if (d->platform.trace) d->platform.trace(d->context, "VOID_PROPERTY_WRITE");
+    return;
+  }
+#endif
+#ifdef DIRECTOR64_DEV_LENIENT
+  script_error(d, "unimplemented property setter", name);
+#else
   error(d, "unimplemented property setter", name);
+#endif
 }
 static const char *basename_(const char *path) {
   const char *base = path;
@@ -2080,8 +2306,19 @@ static unsigned frame_number(dg_runtime_t *d, lv_t value) {
   for (unsigned i = 0; i < d->movie->label_count; i++)
     if (eq(d->movie->labels[i].name, name))
       return d->movie->labels[i].frame;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // Director warns and stays: Löwenzahn 8's login keeps sprites whose
+  // leftover scripts go to labels no movie has.
+  if (d->platform.trace) {
+    char report[64];
+    snprintf(report, sizeof(report), "LABEL_UNKNOWN %.40s", name);
+    d->platform.trace(d->context, report);
+  }
+  return 0;
+#else
   script_error(d, "unknown frame label", name);
   return 0;
+#endif
 }
 static bool file_call(dg_runtime_t *d, const char *name, unsigned argc,
                       const lv_t *a, lv_t *out) {
@@ -2218,6 +2455,26 @@ static bool d8_file_call(dg_runtime_t *d, const char *name, unsigned argc,
       f->opened = d->platform.read_file &&
                   d->platform.read_file(d->context, filename, f->data,
                                         sizeof(f->data) - 1, &f->length);
+#if DG_D10
+      // A file the port ships read-only (Birthday's XML), by its disc name.
+      const char *folder = d->platform.data_folder ? d->platform.data_folder(d->context) : NULL;
+      if (!f->opened && folder && d->platform.read_data) {
+        char shipped[96];
+        int n = snprintf(shipped, sizeof(shipped), "%s/%s", folder, filename);
+        for (int i = (int)strlen(folder) + 1; i < n && i < (int)sizeof(shipped); i++)
+          shipped[i] = (char)toupper((unsigned char)shipped[i]);
+        f->opened = d->platform.read_data(d->context, shipped, f->data,
+                                          sizeof(f->data) - 1, &f->length);
+        // A long name the disc's primary volume truncates to 8.3.
+        char *dot = strrchr(shipped, '.');
+        char *stem = shipped + strlen(folder) + 1;
+        if (!f->opened && dot && dot - stem > 8) {
+          memmove(stem + 8, dot, strlen(dot) + 1);
+          f->opened = d->platform.read_data(d->context, shipped, f->data,
+                                            sizeof(f->data) - 1, &f->length);
+        }
+      }
+#endif
       f->status = f->opened ? 0 : -37;
       f->write = argc < 3 || lv_integer(r, a[2]) != 1;
       f->data[f->length] = 0;
@@ -2329,7 +2586,7 @@ static lv_flow_t send_sprite_step(lv_runtime_t *r, lv_frame_t *f) {
     d->current_event_sprite = (unsigned)lv_integer(r, f->locals[2]);
     if (lv_start_method(r, instance, event,
                         (unsigned)lv_integer(r, f->locals[4]), f->locals + 6)) {
-      f->locals[5] = lv_num(1);
+      f->locals[5] = lv_num(2);
       return LV_CALL;
     }
   }
@@ -2338,13 +2595,23 @@ static lv_flow_t send_sprite_step(lv_runtime_t *r, lv_frame_t *f) {
     f->locals[5] = lv_num(1);
     for (unsigned i = 0; i < d->loaded_count; i++)
       if (lv_start(r, d->loaded[i]->code, event, 0,
-                   (unsigned)lv_integer(r, f->locals[4]), f->locals + 6))
+                   (unsigned)lv_integer(r, f->locals[4]), f->locals + 6)) {
+        f->locals[5] = lv_num(2);
         return LV_CALL;
+      }
   }
+  // Nothing answered: VOID, not what an earlier call left behind.
+  if (lv_integer(r, f->locals[5]) != 2) r->result = (lv_t){0};
   return LV_RETURN;
 }
+// sendAllSprites answers what the last behavior that answered returned
+// (Löwenzahn 7's moor quiz collects its sprites' members that way).
 static lv_flow_t send_all_step(lv_runtime_t *r, lv_frame_t *f) {
-  if (++f->pc >= DG_SPRITES) return LV_RETURN;
+  if (f->pc && lv_type(r->result) != LV_VOID) f->locals[LV_LOCALS - 1] = r->result;
+  if (++f->pc >= DG_SPRITES) {
+    r->result = f->locals[LV_LOCALS - 1];
+    return LV_RETURN;
+  }
   lv_t args[LV_LOCALS] = {lv_num(f->pc), f->locals[0]};
   unsigned count = (unsigned)lv_integer(r, f->locals[1]);
   memcpy(args + 2, f->locals + 2, count * sizeof(lv_t));
@@ -2467,8 +2734,8 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     if (!channel && (lv_type(list) != LV_LIST || !lv_count(r, list)) &&
         d->score[0].script) {
       uint32_t frame_member = d->score[0].script;
-      const dg_movie_t *frame_movie = dg_loaded(d, frame_member >> 20);
-      unsigned frame_cast = (frame_member >> 16) & 15;
+      const dg_movie_t *frame_movie = dg_loaded(d, DG_ID_FILE(frame_member));
+      unsigned frame_cast = DG_ID_CAST(frame_member);
       if (frame_movie && frame_cast && frame_cast <= frame_movie->cast_count) {
         d->current_event_sprite = 0;
         if (lv_start_cast_args(r, frame_movie->code, event,
@@ -2567,6 +2834,10 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     d->sounds[ch] = 0;
     d->sound_puppet[ch] = false;
     d->sound_serial[ch]++;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // stop() keeps what is still queued for the next play().
+    d->sound_chain[ch] = false;
+#endif
     if (d->platform.sound)
       d->platform.sound(d->context, ch, NULL);
     return true;
@@ -2577,8 +2848,17 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     int id = lv_type(a[0]) == LV_NUMBER ? lv_integer(r, a[0])
              : eq(xtra, "fileio")   ? 1
              : eq(xtra, "glu32")    ? 2
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+             : eq(xtra, "xmlparser") ? 3
+             : eq(xtra, "vlist")     ? 4
+             : eq(xtra, "amplitude") ? 5
+#endif
                                     : 0;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    if (id < 1 || id > 5)
+#else
     if (id < 1 || id > 2)
+#endif
       id = 0;
     if (!id) {
 #if DG_D10
@@ -2596,11 +2876,37 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     *out = lv_make(LV_XTRA, id);
     return true;
   }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // A vList file object (Löwenzahn 8 and Optik keep their preferences in
+  // one): a property list naming the save file read() and write() use.
+  if ((ln == LN_NEW) && argc == 2 && lv_type(a[0]) == LV_XTRA && lv_id(a[0]) == 4) {
+    lv_t pairs[2] = {lv_symbol(r, "vlistfile"), lv_text(r, d10_path_base(lv_cstr(r, a[1])), false)};
+    *out = lv_list(r, 2, pairs, true);
+    return true;
+  }
+#endif
   if ((ln == LN_NEW) && argc == 1 && lv_type(a[0]) == LV_XTRA) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // An XML parser object: a property list parseString fills (d10.inc).
+    if (lv_id(a[0]) == 3) {
+      lv_t pairs[4] = {lv_symbol(r, "child"), lv_list(r, 0, NULL, false),
+                       lv_symbol(r, "xmlerror"), (lv_t){0}};
+      *out = lv_list(r, 4, pairs, true);
+      return true;
+    }
+#endif
     if (lv_id(a[0]) == 2) {
       *out = a[0];
       return true;
     }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // The Amplitude Xtra keeps one curve; its object is the Xtra itself.
+    if (lv_id(a[0]) == 5) {
+      d->amp_resolution = 15;
+      *out = a[0];
+      return true;
+    }
+#endif
     if (lv_id(a[0]) == 1) {
       for (unsigned i = 0; i < 4; i++)
         if (d->files[i].used && !d->files[i].opened && !d->files[i].dirty &&
@@ -2622,6 +2928,22 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     *out = lv_num(0);
     return true;
   }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // Amplitude Xtra lip sync (Löwenzahn 8's dog quiz, the Adventskalender):
+  // registration succeeds, ampSetCurve takes the authored loudness list for
+  // a sound channel and ampValue reads it at the channel's position.
+  if ((ln == LN_AMPREGISTER) || (ln == LN_GETAMPERROR)) {
+    *out = ln == LN_AMPREGISTER ? lv_num(0) : lv_text(r, "", false);
+    return true;
+  }
+  if ((ln == LN_AMPSETCURVE) && argc >= 3 && lv_type(a[0]) == LV_XTRA && lv_id(a[0]) == 5) {
+    r->roots[DG_AMP_ROOT] = a[1];
+    int channel = lv_integer(r, a[2]);
+    d->amp_channel = (uint16_t)(channel >= 1 && channel <= DG_SOUND_CHANNELS ? channel : 0);
+    *out = lv_num(0);
+    return true;
+  }
+#endif
   if (ln == LN_GLUNEW) {
     ARITY(7);
     if (lv_type(a[0]) != LV_XTRA || lv_id(a[0]) != 2 ||
@@ -2696,7 +3018,18 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     return true;
   }
 #if DG_EXTENDED
-  if (ln == LN_MARKER) {
+  // label("name"): the labelled frame, zero when absent (Christmas' door 4
+  // probes its own labels this way).
+  if ((ln == LN_LABEL) && argc == 1 && (lv_type(a[0]) == LV_STRING || lv_type(a[0]) == LV_SYMBOL)) {
+    unsigned frame = 0;
+    for (unsigned i = 0; i < d->movie->label_count; i++)
+      if (eq(d->movie->labels[i].name, lv_cstr(r, a[0]))) frame = d->movie->labels[i].frame;
+    *out = lv_num((int32_t)frame);
+    return true;
+  }
+  // label(n) with a number is marker(n): Optik's lexicon goes to
+  // label(-1) + 2.
+  if ((ln == LN_MARKER) || ((ln == LN_LABEL) && argc == 1 && lv_type(a[0]) == LV_NUMBER)) {
     ARITY(1);
     if (lv_type(a[0]) == LV_STRING || lv_type(a[0]) == LV_SYMBOL) {
 #if DG_D10
@@ -2730,6 +3063,9 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
       return true;
     }
     snprintf(d->next_movie, sizeof(d->next_movie), "%s", basename_(lv_cstr(r, a[0])));
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    snprintf(d->next_movie_path, sizeof(d->next_movie_path), "%s", lv_cstr(r, a[0]));
+#endif
     char *dot = strrchr(d->next_movie, '.');
     if (dot && eq(dot, ".dir")) memcpy(dot, ".DXR", 5);
     // The corpus navigates by bare movie stems; registered names carry .DXR.
@@ -2749,6 +3085,9 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     if (argc == 2) {
       snprintf(d->next_movie, sizeof(d->next_movie), "%s",
                basename_(lv_cstr(r, a[1])));
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      snprintf(d->next_movie_path, sizeof(d->next_movie_path), "%s", lv_cstr(r, a[1]));
+#endif
       char *extension = strrchr(d->next_movie, '.');
       if (extension && eq(extension, ".dir")) memcpy(extension, ".DXR", 5);
 #if DG_MODERN
@@ -2761,17 +3100,47 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
       d->next_movie_frame = (unsigned)N(0);
     } else
       d->next_frame = frame_number(d, a[0]);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // A handler run for its value (success = call(#dragNow, obj) in
+    // Birthday's event relay) cannot suspend: its go takes effect when the
+    // service loop next runs, as Director's does after the handler.
+    *yield = !r->atomic_depth;
+#else
+    *yield = true;
+#endif
+    return true;
+  }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // play movie: go to it, remembering where play done comes back to.
+  if ((ln == LN_PLAY_MOVIE) && argc == 1 && d->movie) {
+    if (d->play_depth == 4) {
+      memmove(d->play_return[0], d->play_return[1], sizeof(d->play_return[0]) * 3);
+      memmove(&d->play_return_frame[0], &d->play_return_frame[1], sizeof(d->play_return_frame[0]) * 3);
+      d->play_depth--;
+    }
+    snprintf(d->play_return[d->play_depth], sizeof(d->play_return[0]), "%s", d->movie->code->name);
+    d->play_return_frame[d->play_depth++] = d->frame;
+    return call(r, "gotomovie", 1, a, out, yield);
+  }
+  if ((ln == LN_PLAY_DONE) && !argc && d->play_depth) {
+    d->play_depth--;
+    snprintf(d->next_movie, sizeof(d->next_movie), "%s", d->play_return[d->play_depth]);
+    d->next_movie_path[0] = 0;
+    d->next_movie_label[0] = 0;
+    d->next_movie_frame = d->play_return_frame[d->play_depth];
     *yield = true;
     return true;
   }
+#endif
   if (ln == LN_PLAY_MOVIE) {
     ARITY(1);
     error(d, "nested movie needs continuation stack", lv_cstr(r, a[0]));
     return true;
   }
+  // play done with nothing played does nothing (Christmas' DAG01 has a
+  // leftover button that says it).
   if (ln == LN_PLAY_DONE) {
     ARITY(0);
-    error(d, "play done without movie stack", name);
     return true;
   }
   if (ln == LN_QUIT) {
@@ -2803,8 +3172,12 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
       s->puppet = lv_truth(r, a[1]);
       if (!s->puppet) {
         s->auto_mask = 0;
-        if (old && index > 0)
+        if (old && index > 0) {
           apply(s, &d->score[index + 5], DG_ALL);
+#if DG_D10
+          set_member(s, d10_swap_member(d, s->value.member));
+#endif
+        }
       }
 #if DG_MODERN
       event_channel_changed(d, (unsigned)index);
@@ -2950,8 +3323,31 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     return true;
   }
   if (ln == LN_PUPPETTRANSITION) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // puppetTransition(type [, time, chunk size, area]).
+    if (argc < 1 || argc > 4) {
+      error(d, "argument count", name);
+      return true;
+    }
+#else
     ARITY(1);
+#endif
+#if DG_D10
+    // A transition cast member (Director 8.5 scene changes): its effect is
+    // not converted, so the frame changes as a cut.
+    if (lv_type(a[0]) == LV_MEMBER) {
+      if (d->platform.trace) d->platform.trace(d->context, "TRANSITION_MEMBER_CUT");
+      return true;
+    }
+#endif
     int type = N(0);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // Transitions the compositor does not draw change the frame as a cut.
+    if (type != 23 && type != 9 && type != 10) {
+      if (d->platform.trace) d->platform.trace(d->context, "TRANSITION_TYPE_CUT");
+      return true;
+    }
+#endif
     if (type != 23 && !(DIRECTOR64_EXTENDED_D6 && (type == 9 || type == 10))) {
       error(d, "unsupported transition", name);
       return true;
@@ -3099,6 +3495,9 @@ static void schedule_frame(dg_runtime_t *d, uint64_t base, bool reset) {
 #endif
   d->frame_deadline = base + period;
   d->frame_stalled = false;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  d->tempo_clicked = false;
+#endif
 }
 #if DG_EXTENDED
 static bool d6_queue_cleanup(dg_runtime_t *, unsigned, bool, bool, bool);
@@ -3229,8 +3628,12 @@ static bool seek_now(dg_runtime_t *d, unsigned frame) {
         d->tempo = command_tempo;
         tempo_command = true;
       }
-      if (ch >= 6)
+      if (ch >= 6) {
         changed[ch - 5] |= delta->mask | DG_TOUCHED;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+        if (delta->mask & DG_SPAN) d->seek_span[ch - 5] = (uint16_t)f;
+#endif
+      }
     }
   }
 #if DG_D10
@@ -3273,14 +3676,28 @@ static bool seek_now(dg_runtime_t *d, unsigned frame) {
     if (!rewind && !changed[i]) continue;
     dg_sprite_t *s = &d->sprites[i];
     const dg_spec_t *v = &d->score[i + 5];
+    bool span_kept = false;
 #if DG_MODERN
 #if DG_EXTENDED
     // A span that begins here gets its own instances and its own beginSprite,
     // even where it re-uses the behavior block the last one had: three
     // one-frame sprites carrying the same behavior are three sprites, and the
     // score says so by writing the whole channel record each time.
-    if (s->value.behaviors != v->behaviors ||
-        ((changed[i] & DG_SPAN) && v->behavior_count)) {
+    bool new_span = changed[i] & DG_SPAN;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // Director re-creates a channel's instances only when the target frame
+    // lies outside the span they belong to. Birthday's login jumps back
+    // inside the span of the sprite manager's spare channels, whose
+    // beginSprite would empty the name popup the player is typing into.
+    // The properties Lingo set on such a sprite stay set, as they do while
+    // the span plays forward.
+    if (new_span && d->seek_span[i] == d->span_start[i] && s->value.behaviors == v->behaviors)
+      new_span = false, span_kept = rewind;
+#endif
+    if (s->value.behaviors != v->behaviors || (new_span && v->behavior_count)) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      d->span_start[i] = (changed[i] & DG_SPAN) ? d->seek_span[i] : 0;
+#endif
       attach_behaviors(d, i, v->behaviors, v->behavior_count);
       s->value.behaviors = v->behaviors;
       s->value.behavior_count = v->behavior_count;
@@ -3315,11 +3732,15 @@ static bool seek_now(dg_runtime_t *d, unsigned frame) {
       // including dimensions when it writes the cast. Whole-sprite puppets
       // stay.
       unsigned release = mask | ((mask & DG_MEMBER) ? DG_SIZE : 0);
-      if (!s->puppet)
+      if (!s->puppet && !span_kept)
         s->auto_mask &= ~release;
       mask &= ~s->auto_mask;
       if (!s->puppet && mask) {
         apply(s, v, mask);
+#if DG_D10
+        if (mask & DG_MEMBER)
+          set_member(s, d10_swap_member(d, s->value.member));
+#endif
 #if DG_D5
         d5_media_init(d,s);
 #endif
@@ -3441,13 +3862,25 @@ static void skip_empty_events(dg_runtime_t *d, unsigned *guard,
 static unsigned quiet_row(unsigned mask) {
   return mask == EVENT_PREPARE ? 0u : mask == EVENT_ENTER ? 1u : 2u;
 }
+// The member whose cast script answers a sprite's events. A script member
+// placed in a sprite channel has no cast script: its handlers run only as a
+// behavior or a frame script (Löwenzahn 6's AUSSEN parks a "stopOnly" frame
+// script in a sprite channel, and its exitFrame held the score on frame 1).
+static unsigned sprite_member_script(dg_runtime_t *d, unsigned channel) {
+  unsigned member = d->sprites[channel].value.member;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  const dg_member_t *m = member ? dg_member(d, member) : NULL;
+  if (m && m->type == 11) return 0;
+#endif
+  return member;
+}
 static bool sprite_event(dg_runtime_t *d, const char *event, unsigned channel,
                           unsigned mask) {
   if (!channel || channel >= DG_SPRITES)
     return false;
   lv_t list = d->values->roots[DG_BEHAVIOR_ROOT + channel];
   if (lv_type(list) == LV_VOID) {
-    unsigned member = d->sprites[channel].value.member;
+    unsigned member = sprite_member_script(d, channel);
     bool started = member && event_with_mask(d, event, member, mask);
     if (!started && (mask & (EVENT_PREPARE | EVENT_ENTER | EVENT_EXIT)))
       d->event_quiet[quiet_row(mask)][channel >> 5] |=
@@ -3485,8 +3918,8 @@ static bool sprite_event(dg_runtime_t *d, const char *event, unsigned channel,
   // resolutions a tick that could only fail. event_channel_changed clears the
   // bit on a member, behavior-list or scriptInstanceList change, and nothing
   // in the corpus mutates that list in place.
-  bool started = d->sprites[channel].value.member &&
-                 event_with_mask(d, event, d->sprites[channel].value.member, mask);
+  unsigned member = sprite_member_script(d, channel);
+  bool started = member && event_with_mask(d, event, member, mask);
   if (!started && (mask & (EVENT_PREPARE | EVENT_ENTER | EVENT_EXIT)))
     d->event_quiet[quiet_row(mask)][channel >> 5] |=
         UINT32_C(1) << (channel & 31);
@@ -3588,8 +4021,8 @@ static bool cue_dispatch(dg_runtime_t *d) {
       for (unsigned i = 1; i <= lv_count(r, list) && !started; i++)
         started = lv_start_method(r, lv_at(r, list, i), "cuepassed", 3, args);
     unsigned member = d->score[0].script;
-    const dg_movie_t *frame_movie = started ? NULL : dg_loaded(d, member >> 20);
-    unsigned cast = (member >> 16) & 15;
+    const dg_movie_t *frame_movie = started ? NULL : dg_loaded(d, DG_ID_FILE(member));
+    unsigned cast = DG_ID_CAST(member);
     if (frame_movie && cast && cast <= frame_movie->cast_count)
       started = lv_start_cast_args(r, frame_movie->code, "cuepassed",
                                    member & 65535,
@@ -3636,10 +4069,10 @@ static bool event_with_mask(dg_runtime_t *d, const char *event, unsigned member,
 #else
   (void)bit;
 #endif
-  const dg_movie_t *movie = dg_loaded(d, member >> 20);
+  const dg_movie_t *movie = dg_loaded(d, DG_ID_FILE(member));
   if (!movie)
     return false;
-  unsigned cast = (member >> 16) & 15;
+  unsigned cast = DG_ID_CAST(member);
   if (!cast || cast > movie->cast_count)
     return false;
 #if DG_MODERN
@@ -3677,8 +4110,31 @@ static bool d6_input(dg_runtime_t *d) {
   }
   if (d->input_stage == 11) {
     d->input_stage = 12;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    d->text_passed = d->pass_event;
+#endif
     if (d->pass_event && dg_event(d, "keydown", 0)) return true;
   }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // The field takes the key only when its sprite's keyDown handlers passed
+  // it on: Birthday's name popup types the letter itself and does not pass,
+  // and the name came out doubled ("LLeeaa"); Ghosts' passes the letters
+  // its name allows.
+  if (d->input_stage == 12 && d->text_passed) {
+    const dg_member_t *m = dg_member(d, d->sprites[d->text_sprite].value.member);
+    char text[21];
+    snprintf(text, sizeof(text), "%s", d6_text(d, m));
+    unsigned length = (unsigned)strlen(text);
+    // The closing backspace (code 51) only tells the game typing ended.
+    if (d->text_key != 8 && length < 20) {
+      text[length++] = (char)d->text_key;
+      text[length] = 0;
+    }
+    set(d->values, "text", lv_make(LV_MEMBER, (int32_t)m->id), lv_text(d->values, text, false));
+    d->sel_start = d->sel_end = length;
+    d->text_passed = false;
+  }
+#endif
   if (d->input_stage == 12) {
     d->input_stage = 13;
     if (event_with_mask(d, "idle", d->score[0].script, 0)) return true;
@@ -3693,11 +4149,15 @@ static bool d6_input(dg_runtime_t *d) {
     unsigned length=(unsigned)strlen(text);
     d->text_key=(unsigned char)d->text_replacement[d->text_index];
     if (d->text_key) {
+#if !(defined(DIRECTOR64_D85) && DIRECTOR64_D85)
       if (length<20) {text[length++]=(char)d->text_key;text[length]=0;}
+#endif
       d->text_index++;
       d->text_key_code=0;
     } else {d->text_key=8;d->text_key_code=51;}
+#if !(defined(DIRECTOR64_D85) && DIRECTOR64_D85)
     set(d->values,"text",lv_make(LV_MEMBER, (int32_t)m->id),lv_text(d->values,text,false));
+#endif
     d->sel_start=d->sel_end=length;
     d->input_stage = 10;
     if (*d->key_down_script && dg_event(d, d->key_down_script, 0)) return true;
@@ -3734,6 +4194,13 @@ static bool d6_idle(dg_runtime_t *d) {
     d->input_stage = 0;
     return d->pass_event && dg_event(d, "idle", 0);
   }
+#if DG_D10
+  // Director sends idle while the playhead waits. A score more than a tick
+  // overdue skips it: the Findus 8.5 IdleObjekt sweep outlasts a service
+  // tick, and dispatching it every tick starved the hub on frame 56.
+  if (!d->input_stage && d->clock >= d->frame_deadline + 1000000u)
+    return false;
+#endif
   if (!d->input_stage && d->idle_tick != d->ticks) {
     d->idle_tick = d->ticks;
     d->input_stage = 2;
@@ -3755,6 +4222,10 @@ void dg_stop_sounds(dg_runtime_t *d) {
     }
     d->sounds[ch] = 0;
     d->sound_puppet[ch] = false;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    d->sound_chain[ch] = false;
+    d->sound_queue_count[ch] = 0;
+#endif
   }
 }
 bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
@@ -3809,11 +4280,17 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
   memset(d->event_channels, 0, sizeof(d->event_channels));
   memset(d->event_quiet, 0, sizeof(d->event_quiet));
   memset(d->film_member, 0, sizeof(d->film_member));
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  d->film_child_count = 0;
+#endif
   memset(d->film_loop_channel, 0, sizeof(d->film_loop_channel));
   memset(d->film_channels, 0, sizeof(d->film_channels));
   memset(d->film_loop_member, 0, sizeof(d->film_loop_member));
 #endif
   memset(d->seek_changed, 0, sizeof(d->seek_changed));
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  memset(d->span_start, 0, sizeof(d->span_start));
+#endif
   for (unsigned i = 0; i < count; i++) {
     d->loaded[d->loaded_count++] = shared[i];
     d->values->shared[d->values->shared_count++] = shared[i]->code;
@@ -3957,6 +4434,9 @@ bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
 #if DG_D5
   d5_media_tick(d);
 #endif
+#if DG_D10 && defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  d10_video_tick(d);
+#endif
 #if DG_MODERN
   for (unsigned ch = 0; ch < DG_SOUND_CHANNELS; ch++)
     if (d->fade_duration[ch]) {
@@ -3995,6 +4475,12 @@ bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
   d->mouse_pressed |= pressed;
   d->mouse_released |= !down && d->mouse_down;
   d->mouse_down = down;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  if (pressed)
+    d->tempo_clicked = true;
+  if (pressed || (!down && d->mouse_released))
+    d->last_input_tick = d->ticks;
+#endif
   if (pressed) {
 #if DG_D5
     if(d->score_wait==128)d->score_wait=0;
@@ -4129,6 +4615,13 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
     // Once drained, avoid scanning every score slot between each event.
     if (d->begin_cursor < DG_SPRITES && !d->cleanup_active &&
         (!d->start_movie_pending || !r->depth)) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      // A handler that ran out of budget just as a call returned resumes
+      // reading that call's result; every handler the fan-out runs resets
+      // it. Birthday's scoreWrite saved its animation object as 0 and the
+      // next room's load failed on it.
+      r->roots[DG_HELD_RESULT_ROOT] = r->result;
+#endif
       for (unsigned i = 1; i < DG_SPRITES && !r->failed; i++) {
         if (!d->begin_pending[i]) continue;
         d->begin_pending[i] = false;
@@ -4146,7 +4639,20 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
         }
         d->current_event_sprite = previous;
       }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      r->result = r->roots[DG_HELD_RESULT_ROOT];
+      r->roots[DG_HELD_RESULT_ROOT] = (lv_t){0};
+#endif
     }
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // The outgoing movie's endSprite and stopMovie run before a `go to
+    // movie` continuation resumes (ScummVM keeps frozen scripts frozen while
+    // a jump is pending). Birthday's jumpTo records the room it left only
+    // after its go, and the old room's stopMovie stops by that record.
+    if (d->next_movie[0] && r->depth && r->yielded && !d->movie_ready && !d->cleanup_active &&
+        d6_queue_cleanup(d, 0, false, false, true))
+      continue;
 #endif
     if (r->depth) {
       if (!budget) {
@@ -4208,6 +4714,9 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
     // frame that would otherwise hold waiting for one.
     if (cue_dispatch(d)) continue;
 #endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    d85_sound_service(d);
+#endif
 #if DG_D5
     if(d->source_paused)break;
 #endif
@@ -4252,6 +4761,13 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
       d->key_first = (index + 1) % 32;
       d->key_count--;
       d->key_event_tick = d->ticks;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      // Director offers a key to the frame script before the movie: Circus's
+      // name entry takes it in a frame behavior.
+      if (d->score[0].script &&
+          frame_event(d, down ? "keydown" : "keyup", d->score[0].script, 0))
+        continue;
+#endif
       if (dg_event(d, down ? "keydown" : "keyup", 0)) continue;
     }
 #endif
@@ -4307,6 +4823,45 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
     if (d->mouse_up_dispatch) {
       d->mouse_up_dispatch = false;
       unsigned hit = dg_mouse_hit(d, d->mouse_x, d->mouse_y);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      // A release away from the sprite pressed is that sprite's
+      // mouseUpOutside, and no other sprite's mouseUp (Löwenzahn 8's
+      // mountain pieces drop only what their own mouseDown picked up).
+      unsigned pressed_sprite = d->click_on;
+      if (pressed_sprite && hit != pressed_sprite) {
+        if (hit)
+          d->click_on = hit;
+        if (sprite_event(d, "mouseupoutside", pressed_sprite, EVENT_UP) ||
+            (d->score[0].script && frame_event(d, "mouseup", d->score[0].script, EVENT_UP)) ||
+            dg_event(d, "mouseup", 0))
+          continue;
+        goto mouse_up_done;
+      }
+      // A release on a text sprite's hyperlink is that sprite's
+      // hyperlinkClicked(data, [first, last]) (Optik's Walk of Fame).
+      const dg_member_t *linked = hit ? dg_member(d, d->sprites[hit].value.member) : NULL;
+      const dg_text_extra_t *extra = linked ? dg_text_extra(d, linked->id) : NULL;
+      if (extra && extra->link_count && d->platform.text_char_at) {
+        int l, t, rr, b;
+        dg_sprite_bounds(d, &d->sprites[hit], &l, &t, &rr, &b);
+        int at = d->platform.text_char_at(d->context, linked->id, hit, d->mouse_x - l, d->mouse_y - t) + 1;
+        lv_t list = r->roots[DG_BEHAVIOR_ROOT + hit];
+        bool started = false;
+        for (unsigned k = 0; at > 0 && !started && k < extra->link_count; k++) {
+          const dg_link_t *link = &extra->links[k];
+          if ((uint32_t)at < link->first || (uint32_t)at > link->last) continue;
+          lv_t range[2] = {lv_num((int32_t)link->first), lv_num((int32_t)link->last)};
+          lv_t args[2] = {lv_text(r, link->data, false), lv_list(r, 2, range, false)};
+          d->click_on = hit;
+          d->current_event_sprite = hit;
+          for (unsigned n = 1; !started && lv_type(list) == LV_LIST && n <= lv_count(r, list); n++)
+            started = lv_start_method(r, lv_at(r, list, n), "hyperlinkclicked", 2, args);
+          break;
+        }
+        if (started)
+          continue;
+      }
+#endif
       if (hit)
         d->click_on = hit;
 #if DG_MODERN
@@ -4322,6 +4877,9 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
         continue;
 #endif
     }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  mouse_up_done:
+#endif
 #if DG_EXTENDED
     if (d6_idle(d)) continue;
 #endif
@@ -4337,6 +4895,10 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
 #endif
 #if DG_D10
       if (d10_timeouts(d))
+        continue;
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      if (d85_idle_timeout(d))
         continue;
 #endif
 #if DG_MODERN
@@ -4362,6 +4924,18 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
 #endif
       if (d->phase == 2 && !d->event_cursor && d->clock < d->frame_deadline)
         break;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      // The tempo channel's waits: for sound channel 1 or 2 to finish (a
+      // cue point waits as long), or for a click.
+      if (d->phase == 2 && !d->event_cursor) {
+        unsigned wait = d->score[1].type;
+        if ((wait == 255 || wait == 254) && d->platform.sound_busy &&
+            d->platform.sound_busy(d->context, wait == 255 ? 0 : 1))
+          break;
+        if (wait == 248 && !d->tempo_clicked)
+          break;
+      }
+#endif
       const char *event = d->phase == 1 ? "enterframe" : "exitframe";
 #if DG_MODERN
       unsigned mask = d->phase == 1 ? EVENT_ENTER : EVENT_EXIT;

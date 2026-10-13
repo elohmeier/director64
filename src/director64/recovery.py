@@ -51,18 +51,20 @@ def report(game):
         raise ValueError("score recovery belongs to a different source audit")
     # Launcher code is evidence in its own namespace. It is not implicitly
     # replaced by the entry movie or treated as already executed on the N64.
-    launcher = source["supplemental_projector"]
-    members = {m["id"]: m for m in launcher["members"]}
-    casts = {c["library_id"]: c["name"] for c in launcher["libraries"]}
+    # A slim launcher embeds no movie (the policy names no projector).
+    launcher = source.get("supplemental_projector")
+    members = {m["id"]: m for m in launcher["members"]} if launcher else {}
+    casts = {c["library_id"]: c["name"] for c in launcher["libraries"]} if launcher else {}
     launcher_handlers = []
-    for script in launcher["scripts"]:
+    for script in launcher["scripts"] if launcher else []:
         member = members[script["member_id"]]
         text = (
             f"-- cast: {casts[member['library_id']]}; member: {member['member_id']}; "
             f"type: {script['script_type']}; name: launcher\n" + script["lingo"]
         )
         launcher_handlers.extend(parse_movie(text, launcher["name"]))
-    validate_handlers({"files": [launcher]}, {"handlers": launcher_handlers})
+    if launcher:
+        validate_handlers({"files": [launcher]}, {"handlers": launcher_handlers})
     (analysis / "launcher-program.json").write_text(
         json.dumps({"handlers": launcher_handlers, "native_execution_verified": False}) + "\n"
     )

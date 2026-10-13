@@ -55,7 +55,8 @@ fn strip(s: &str) -> &str {
 fn lower(s: &str) -> String {
     s.to_lowercase()
 }
-/// `str.splitlines()`.
+/// `str.splitlines()`, but for U+0085: recovered text is Latin-1, where 0x85
+/// is a character (a Mac-authored movie's Ö in Mac Roman), never NEL.
 pub fn splitlines(text: &str) -> Vec<&str> {
     let mut lines = Vec::new();
     let mut start = 0;
@@ -63,7 +64,7 @@ pub fn splitlines(text: &str) -> Vec<&str> {
     let mut i = 0;
     while i < chars.len() {
         let (at, c) = chars[i];
-        let breaks = matches!(c, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}');
+        let breaks = matches!(c, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{2028}' | '\u{2029}');
         if breaks {
             lines.push(&text[start..at]);
             let mut next = at + c.len_utf8();
@@ -370,6 +371,11 @@ impl Expression {
                         let lib = self.parse(7)?;
                         value = json!(["get", prop, ["reference", owner, value[3].clone(), lib]]);
                     }
+                } else if owner == "menu" {
+                    // `the name of menu n`: custom menus (installMenu), only as
+                    // an owner here, so a variable named `menu` stays one.
+                    self.take(None)?;
+                    value = json!(["get", prop, ["call", "menu", [self.parse(7)?]]]);
                 } else {
                     value = json!(["get", prop, self.parse(7)?]);
                 }
@@ -497,6 +503,27 @@ pub fn block(lines: &[(usize, String)]) -> Result<Vec<Value>> {
 }
 
 /// Splits at a top-level keyword outside strings, brackets and parentheses.
+/// `set <target> to <value>`: the first top-level `to` whose two sides both
+/// parse, since a chunk range in the target (`char a to b of f`) has its own.
+fn set_operands(text: &str) -> Result<(Value, Value)> {
+    let mut rest = text;
+    let mut consumed = 0;
+    let mut first_error = None;
+    while let Ok((target, value)) = split_keyword(rest, "to") {
+        let target_text = &text[..consumed + target.len()];
+        match (expression(target_text), expression(value)) {
+            (Ok(t), Ok(v)) => return Ok((t, v)),
+            (Err(e), _) | (_, Err(e)) => {
+                first_error.get_or_insert(e);
+            }
+        }
+        let advance = target.len() + " to ".len();
+        consumed += advance;
+        rest = &rest[advance..];
+    }
+    Err(first_error.unwrap_or_else(|| "set requires to".into()))
+}
+
 fn split_keyword<'a>(text: &'a str, keyword: &str) -> Result<(&'a str, &'a str)> {
     let mut depth: i64 = 0;
     let mut quoted = false;
@@ -674,10 +701,10 @@ impl<'a> Statements<'a> {
                     n.insert("op".into(), json!("return"));
                     n.insert("value".into(), expression(&text[7..])?);
                 } else if low.starts_with("set ") {
-                    let (target, value) = split_keyword(&text[4..], "to")?;
+                    let (target, value) = set_operands(&text[4..])?;
                     n.insert("op".into(), json!("set"));
-                    n.insert("target".into(), expression(target)?);
-                    n.insert("value".into(), expression(value)?);
+                    n.insert("target".into(), target);
+                    n.insert("value".into(), value);
                 } else if low.starts_with("delete ") {
                     n.insert("op".into(), json!("delete"));
                     n.insert("target".into(), expression(&text[7..])?);
@@ -714,6 +741,9 @@ impl<'a> Statements<'a> {
                 } else if low.starts_with("play movie ") {
                     n.insert("op".into(), json!("call"));
                     n.insert("value".into(), json!(["call", "play_movie", [expression(&text[11..])?]]));
+                } else if low.starts_with("play frame ") {
+                    n.insert("op".into(), json!("call"));
+                    n.insert("value".into(), json!(["call", "play_frame", [expression(&text[11..])?]]));
                 } else if low == "play done" {
                     n.insert("op".into(), json!("call"));
                     n.insert("value".into(), json!(["call", "play_done", []]));
@@ -881,7 +911,11 @@ pub fn parse_movie(source: &str, movie: &str) -> Result<Vec<Value>> {
             let text = lines[start..lineno].join("\n");
             fields.insert("source_sha256".into(), json!(hex(&Sha256::digest(text.as_bytes()))));
             handlers.push(Parsed { context, fields, body: parsed, globals_first });
-        } else if !strip(text).is_empty() && !text.starts_with("--") {
+        } else if !strip(text).is_empty() && !text.starts_with("--")
+            // ProjectorRays' note on a jump it could not place (Löwenzahn 6's
+            // snow game): a comment; the statements around it stand.
+            && !strip(text).starts_with("-- ERROR:")
+        {
             if current.is_none() {
                 return Err(format!("{movie}:{lineno}: text outside handler"));
             }
@@ -1062,6 +1096,7 @@ mod tests {
         assert_eq!(splitlines("a\n"), ["a"]);
         assert_eq!(splitlines("a\n\nb"), ["a", "", "b"]);
         assert!(splitlines("").is_empty());
+        assert_eq!(splitlines("x = \"\u{80}\u{85}\u{86}\"\ny"), ["x = \"\u{80}\u{85}\u{86}\"", "y"]);
     }
 
     #[test]
@@ -1076,6 +1111,7 @@ mod tests {
     fn expressions_follow_the_reference_grammar() {
         assert_eq!(expression("1 + 2 * 3").unwrap(), json!(["binary", "+", ["number", 1], ["binary", "*", ["number", 2], ["number", 3]]]));
         assert_eq!(expression("the loch of sprite 5").unwrap(), json!(["property", "loch", "sprite", ["number", 5]]));
+        assert_eq!(expression("the name of menu i").unwrap(), json!(["get", "name", ["call", "menu", [["variable", "i"]]]]));
         assert_eq!(expression("member(\"a\", 2)").unwrap(), json!(["reference", "member", ["string", "a"], ["number", 2]]));
         assert_eq!(expression("char 1 to 3 of x").unwrap(), json!(["chunk", "char", ["number", 1], ["number", 3], ["variable", "x"]]));
         assert_eq!(expression("[#a: 1.5]").unwrap(), json!(["proplist", [[["symbol", "a"], ["number", 1.5]]]]));
@@ -1091,5 +1127,21 @@ mod tests {
         assert_eq!(handlers[0]["body"][0], json!({"line": 3, "op": "global", "names": ["ga"]}));
         assert_eq!(handlers[0]["body"][1]["op"], "set");
         assert!(parse_movie("on x\nend\n", "X").is_err());
+    }
+
+    #[test]
+    fn set_skips_a_chunk_range_to() {
+        let source = "-- cast: Internal; member: 3; type: MovieScript; name: x\non p\n  set the foreColor of char 2 to 3 of field 1 to 5\n  set x to 1\nend\n";
+        let handlers = parse_movie(source, "X.DXR").unwrap();
+        assert_eq!(handlers[0]["body"][0]["value"], json!(["number", 5]));
+        assert_eq!(handlers[0]["body"][0]["target"][0], "get");
+        assert_eq!(handlers[0]["body"][1]["value"], json!(["number", 1]));
+    }
+
+    #[test]
+    fn play_frame_is_a_call() {
+        let source = "-- cast: Internal; member: 3; type: MovieScript; name: x\non p name\n  play frame member(name)\nend\n";
+        let handlers = parse_movie(source, "X.DXR").unwrap();
+        assert_eq!(handlers[0]["body"][0]["value"][1], "play_frame");
     }
 }

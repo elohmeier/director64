@@ -5,7 +5,7 @@
 use serde_json::{json, Map, Value};
 
 use super::js::{hex, latin1, mac_roman, windows_1252};
-use super::paige::paige_styles;
+use super::paige::{paige_hyperlinks, paige_styles};
 
 pub struct Xtra {
     pub symbol: String,
@@ -55,9 +55,10 @@ fn hex_digits(bytes: &[u8]) -> Option<u64> {
     u64::from_str_radix(text, 16).ok()
 }
 
-/// A D8/D10 text Xtra's payload and XMED (Paige) document.
+/// A D8/D8.5/D10 text Xtra's payload and XMED (Paige) document. The payload
+/// grew from 76 to 432 bytes with Director 8.5's 3D text properties.
 pub fn text_xtra_model(payload: &[u8], xmed: &[u8], version: i64) -> Result<Map<String, Value>, String> {
-    if payload.len() != if version >= 1000 { 432 } else { 76 } {
+    if payload.len() != if version >= 850 { 432 } else { 76 } {
         return Err("unsupported text Xtra layout".into());
     }
     let width = bei32(payload, 40);
@@ -74,7 +75,10 @@ pub fn text_xtra_model(payload: &[u8], xmed: &[u8], version: i64) -> Result<Map<
     let mut segments: Vec<(u64, Vec<u8>)> = Vec::new();
     let mut p = 25usize;
     let mut extension: Option<usize> = None;
-    let d10 = version >= 1000;
+    let mut truncated_tail = false;
+    // The document structure Director 8.5 introduced with its larger text
+    // Xtra (the FFFE extension, continued text segments) stays through D10.
+    let d10 = version >= 850;
     while p + 1 < xmed.len() {
         if xmed.len() - p == 3 && xmed[p..] == [3, 70, 70] {
             break;
@@ -94,10 +98,20 @@ pub fn text_xtra_model(payload: &[u8], xmed: &[u8], version: i64) -> Result<Map<
         let length = hex_digits(&header[4..12]).unwrap() as usize;
         let count = hex_digits(&header[12..]).unwrap();
         let continued = kind == 2 && d10;
-        if length < 1 || length > xmed.len() - p - 20 || xmed.get(p + 20 + length) != Some(&3)
+        // Some Director 8.5 documents end two bytes short: the trailing style
+        // record 297 without its last byte and the closing 0x03.
+        let short_tail = d10 && kind == 297 && length >= 2 && xmed.len() + 1 == p + 20 + length;
+        if !short_tail && (length < 1 || length > xmed.len() - p - 20 || xmed.get(p + 20 + length) != Some(&3))
             || (records.iter().any(|r| r.0 == kind) && !continued) || (kind == 2 && !segments.is_empty() && !continued)
         {
             return Err("invalid XMED record range".into());
+        }
+        if short_tail {
+            style_records.insert(kind, (xmed[p + 21..].to_vec(), count));
+            records.push((kind, xmed[p + 21..].to_vec()));
+            truncated_tail = true;
+            p = xmed.len();
+            break;
         }
         let body = xmed[p + 21..p + 20 + length].to_vec();
         if kind == 2 {
@@ -109,12 +123,21 @@ pub fn text_xtra_model(payload: &[u8], xmed: &[u8], version: i64) -> Result<Map<
         p += 20 + length;
     }
     let tail = xmed.len() - p;
-    let closed = xmed.get(p) == Some(&3) && (tail == 1 || tail == 3);
+    let closed = truncated_tail || (xmed.get(p) == Some(&3) && (tail == 1 || tail == 3));
     if (extension.is_none() && !closed && !(d10 && tail == 5)) || !records.iter().any(|r| r.0 == 0)
         || !records.iter().any(|r| r.0 == 1)
     {
         return Err("incomplete XMED document".into());
     }
+    // Record 19 lists Paige's special characters (curly quotes, ellipsis,
+    // bullet) in the document's own character set: Windows-1252 has them at
+    // 0x91-0x94, Mac Roman at 0xD2-0xD5. A document without one is decoded
+    // by the version's default. Director 8.5 movies mix both.
+    let windows = match style_records.get(&19).map(|(body, _)| body) {
+        Some(table) if table.contains(&0x91) || table.contains(&0x93) => true,
+        Some(table) if table.contains(&0xd2) || table.contains(&0xd3) => false,
+        _ => version >= 1000,
+    };
     let (mut text, mut text_bytes) = (String::new(), Vec::new());
     for (offset, bytes) in &segments {
         let comma = bytes.iter().position(|&b| b == 44);
@@ -128,7 +151,7 @@ pub fn text_xtra_model(payload: &[u8], xmed: &[u8], version: i64) -> Result<Map<
             return Err("XMED text segments out of order".into());
         }
         let raw = &bytes[comma.unwrap() + 1..];
-        text.push_str(&if d10 { windows_1252(raw) } else { mac_roman(raw) });
+        text.push_str(&if windows { windows_1252(raw) } else { mac_roman(raw) });
         text_bytes.extend_from_slice(raw);
     }
     let typography = match style_records.get(&6) {
@@ -136,15 +159,22 @@ pub fn text_xtra_model(payload: &[u8], xmed: &[u8], version: i64) -> Result<Map<
         _ => None,
     };
     let mut out = Map::new();
+    if truncated_tail {
+        out.insert("truncatedTail".into(), json!(true));
+    }
     out.insert("width".into(), json!(width));
     out.insert("height".into(), json!(height));
     out.insert("regX".into(), json!(0));
     out.insert("regY".into(), json!(0));
     out.insert("text".into(), json!(text));
     out.insert("textHex".into(), json!(hex(&text_bytes)));
-    out.insert("textEncoding".into(), json!(if d10 { "windows-1252" } else { "macintosh" }));
+    out.insert("textEncoding".into(), json!(if windows { "windows-1252" } else { "macintosh" }));
     if let Some(t) = typography {
         out.insert("typography".into(), t);
+    }
+    let hyperlinks = paige_hyperlinks(&style_records, &text)?;
+    if !hyperlinks.is_empty() {
+        out.insert("hyperlinks".into(), Value::Array(hyperlinks));
     }
     out.insert("textPresentation".into(), json!("native-target-font"));
     out.insert("authoredStyleRecords".into(), json!(records.iter().map(|r| r.0).collect::<Vec<_>>()));

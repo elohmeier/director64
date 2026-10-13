@@ -1,7 +1,7 @@
 schema_version = 1
 slug = "findus-birthday"
 title = "Pettersson und Findus: Der Torten werfende Geburtstagskater"
-status = "catalogued"
+status = "experimental"
 default_source = "sha256-dadd038fff19"
 
 # The volume descriptor overstates the volume (copy protection); the decoy
@@ -12,3 +12,18 @@ file = "Geburtstagskater.iso"
 sha256 = "dadd038fff195b08afeb1c97c4c8b8b943d776ff339868856805d96755f0670e"
 bytes = 613697536
 kind = "iso9660"
+
+[recovery]
+director_version = 850
+media_root = "SPIEL"
+
+[port]
+extended_d6 = true
+director_version = 850
+media_root = "SPIEL"
+entry_movie = "PF3"
+launcher_movie = "PF3.DXR"
+native_compatibility = false
+rom_title = "Findus Geburtstag"
+rom_save_type = 80
+controller_count = 4

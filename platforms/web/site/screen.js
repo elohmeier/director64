@@ -5,12 +5,13 @@ const MAX_FACTOR = 8;
 
 // The integer upscale "sharp" scaling draws at: the display scale rounded up,
 // so the browser only ever shrinks the nearest-neighbour image a little.
-export function sharpFactor(cssWidth, cssHeight, pixelRatio = 1) {
-  const scale = Math.min(cssWidth / WIDTH, cssHeight / HEIGHT) * pixelRatio;
+export function sharpFactor(cssWidth, cssHeight, pixelRatio = 1, width = WIDTH, height = HEIGHT) {
+  const scale = Math.min(cssWidth / width, cssHeight / height) * pixelRatio;
   return Math.max(1, Math.min(MAX_FACTOR, Math.ceil(scale - 1e-6)));
 }
 
-// Presents the runtime's 640x480 RGBA frames. "smooth" lets the browser
+// Presents the runtime's RGBA frames: 640x480, or an 800x600 game's
+// unscaled stage (setSize). "smooth" lets the browser
 // filter the stage to the display size; "sharp" first enlarges it by whole
 // pixels so they stay crisp, then filters only the remaining fraction.
 export class Presenter {
@@ -18,14 +19,20 @@ export class Presenter {
     this.canvas = canvas;
     this.context = canvas.getContext("2d", {alpha: false});
     this.source = document.createElement("canvas");
-    this.source.width = WIDTH;
-    this.source.height = HEIGHT;
     this.sourceContext = this.source.getContext("2d", {alpha: false});
-    this.frame = this.sourceContext.createImageData(WIDTH, HEIGHT);
+    this.width = this.height = 0;
+    this.setSize(WIDTH, HEIGHT);
     this.scaling = scaling;
     this.factor = 1;
     new ResizeObserver(() => this.resize()).observe(canvas);
     this.resize();
+  }
+  setSize(width, height) {
+    if (width === this.width && height === this.height) return;
+    this.width = this.source.width = width;
+    this.height = this.source.height = height;
+    this.frame = this.sourceContext.createImageData(width, height);
+    if (this.canvas.width) this.resize(true);
   }
   setScaling(scaling) {
     this.scaling = scaling;
@@ -34,14 +41,14 @@ export class Presenter {
   resize(force = false) {
     const rect = this.canvas.getBoundingClientRect();
     const factor = this.scaling === "sharp" && rect.width
-      ? sharpFactor(rect.width, rect.height, devicePixelRatio || 1) : 1;
-    if (!force && factor === this.factor && this.canvas.width === WIDTH * factor) return;
+      ? sharpFactor(rect.width, rect.height, devicePixelRatio || 1, this.width, this.height) : 1;
+    if (!force && factor === this.factor && this.canvas.width === this.width * factor) return;
     this.factor = factor;
-    this.canvas.width = WIDTH * factor;
-    this.canvas.height = HEIGHT * factor;
+    this.canvas.width = this.width * factor;
+    this.canvas.height = this.height * factor;
     this.draw();
   }
-  // `pixels` is the runtime's framebuffer, WIDTH*HEIGHT*4 bytes.
+  // `pixels` is the runtime's framebuffer, width*height*4 bytes.
   present(pixels) {
     this.frame.data.set(pixels);
     this.sourceContext.putImageData(this.frame, 0, 0);

@@ -19,8 +19,8 @@ static lv_flow_t activate_later(lv_runtime_t *r, lv_frame_t *f) {
          (lv_t){0});
   lv_set(r, f, "member", lv_make(LV_SPRITE, 32), lv_num(0));
   lv_set(r, f, "member", lv_make(LV_SPRITE, 799),
-         lv_make(LV_MEMBER, 0x110003));
-  lv_t instance = lv_instance(r, lv_make(LV_SCRIPT, 0x110002));
+         lv_make(LV_MEMBER, 0x210003));
+  lv_t instance = lv_instance(r, lv_make(LV_SCRIPT, 0x210002));
   lv_set(r, f, "scriptinstancelist", lv_make(LV_SPRITE, 800),
          lv_list(r, 1, &instance, false));
   return LV_RETURN;
@@ -77,7 +77,7 @@ static const lv_handler_t handlers[] = {
 static const lv_movie_t code = {"EVENTS.DXR", 5, handlers,NULL, NULL, NULL, NULL, 0};
 static const dg_cast_t casts[] = {{"Internal", 1, 1}, {"Other", 1, 2}};
 static const dg_member_t members[] = {
-    {.id = 0x110003, .number = 3, .cast = 1, .type = 1,
+    {.id = 0x210003, .number = 3, .cast = 1, .type = 1,
      .width = 1, .height = 1, .name = "later bitmap"},
 };
 static const dg_movie_t movie = {.code = &code, .id = 1, .tempo = 30,
@@ -86,9 +86,9 @@ static const dg_movie_t movie = {.code = &code, .id = 1, .tempo = 30,
 static void test_sparse_film_advancement(void) {
   static const lv_movie_t film_code = {"FILMS.DXR", 0, NULL,NULL, NULL, NULL, NULL, 0};
   static const dg_member_t film_members[] = {
-      {.id = 0x110001, .type = 2, .film_count = 3, .film_loop = true},
-      {.id = 0x110002, .type = 2, .film_count = 2, .film_loop = false},
-      {.id = 0x110003, .type = 1},
+      {.id = 0x210001, .type = 2, .film_count = 3, .film_loop = true},
+      {.id = 0x210002, .type = 2, .film_count = 2, .film_loop = false},
+      {.id = 0x210003, .type = 1},
   };
   static const dg_movie_t film_movie = {
       .code = &film_code, .id = 1, .tempo = 30, .cast_count = 2,
@@ -98,7 +98,7 @@ static void test_sparse_film_advancement(void) {
   for (unsigned n = 0; n < sizeof(channels) / sizeof(channels[0]); n++) {
     unsigned i = channels[n];
     lv_set(&values, NULL, "member", lv_make(LV_SPRITE, (int32_t)i),
-           lv_make(LV_MEMBER, i == 32 ? 0x110002 : 0x110001));
+           lv_make(LV_MEMBER, i == 32 ? 0x210002 : 0x210001));
     director.sprites[i].value.type = i == 800 ? 0 : 1;
   }
   director.sprites[31].film_frame = 2;
@@ -107,7 +107,7 @@ static void test_sparse_film_advancement(void) {
   director.sprites[63].film_frame = 9;
   lv_set(&values, NULL, "scriptinstancelist", lv_make(LV_SPRITE, 63),
          lv_list(&values, 0, NULL, false));
-  director.sprites[255].value.member = 0x110003;
+  director.sprites[255].value.member = 0x210003;
   director.sprites[255].value.type = 1;
   director.sprites[255].film_frame = 7;
   dg_sprite_changed(&director, 255);
@@ -129,7 +129,7 @@ static void test_sparse_film_advancement(void) {
   director.sprites[800].value.type = 1;
   dg_sprite_changed(&director, 800);
   lv_set(&values, NULL, "member", lv_make(LV_SPRITE, 799),
-         lv_make(LV_MEMBER, 0x110002));
+         lv_make(LV_MEMBER, 0x210002));
   assert(director.sprites[799].film_frame == 0);
   director.sprites[32].value.member = 0;
   dg_sprite_changed(&director, 32);
@@ -146,26 +146,26 @@ static void test_sparse_film_advancement(void) {
 int main(void) {
   dg_init(&director, &values, (dg_platform_t){0}, NULL, NULL, 0, 1);
   assert(dg_enter(&director, &movie, 1, NULL, 0));
-  lv_t instance = lv_instance(&values, lv_make(LV_SCRIPT, 0x110001));
+  lv_t instance = lv_instance(&values, lv_make(LV_SCRIPT, 0x210001));
   lv_set(&values, NULL, "scriptinstancelist", lv_make(LV_SPRITE, 1),
          lv_list(&values, 1, &instance, false));
-  instance = lv_instance(&values, lv_make(LV_SCRIPT, 0x110002));
+  instance = lv_instance(&values, lv_make(LV_SCRIPT, 0x210002));
   lv_set(&values, NULL, "scriptinstancelist", lv_make(LV_SPRITE, 31),
          lv_list(&values, 1, &instance, false));
   lv_set(&values, NULL, "member", lv_make(LV_SPRITE, 32),
-         lv_make(LV_MEMBER, 0x110003));
+         lv_make(LV_MEMBER, 0x210003));
   assert(dg_service(&director, DG_SERVICE_BUDGET));
   assert(!values.failed && !strcmp(order, "GECLI"));
   assert(!director.sprites[800].value.member);
   assert(director.phase == 2 && !director.event_cursor);
   // Cache misses are specific to both event and complete cast/member identity.
-  assert(!dg_event(&director, "exitframe", 0x110003));
-  assert(!dg_event(&director, "exitframe", 0x110003));
-  assert(!dg_event(&director, "prepareframe", 0x120003));
-  assert(dg_event(&director, "prepareframe", 0x110003));
+  assert(!dg_event(&director, "exitframe", 0x210003));
+  assert(!dg_event(&director, "exitframe", 0x210003));
+  assert(!dg_event(&director, "prepareframe", 0x220003));
+  assert(dg_event(&director, "prepareframe", 0x210003));
   assert(lv_run(&values, 4) && !values.depth && order[count - 1] == 'C');
-  assert(!dg_event(&director, "prepareframe", 0x110063));
-  assert(!dg_event(&director, "prepareframe", 0x110063));
+  assert(!dg_event(&director, "prepareframe", 0x210063));
+  assert(!dg_event(&director, "prepareframe", 0x210063));
   static const lv_handler_t new_handlers[] = {
       {.name = "prepareframe", .member = 99, .cast = "Internal",
        .kind = "CastScript", .step = loaded_event},
@@ -176,12 +176,12 @@ int main(void) {
   dg_movie_t reloaded = movie;
   reloaded.code = &new_code;
   assert(dg_enter(&director, &reloaded, 1, NULL, 0));
-  assert(dg_event(&director, "prepareframe", 0x110063));
+  assert(dg_event(&director, "prepareframe", 0x210063));
   assert(lv_run(&values, 4) && !values.depth && restored == 1);
-  assert(!dg_event(&director, "ENTERFRAME", 0x110063));
-  assert(dg_event(&director, "PrEpArEfRaMe", 0x110063));
+  assert(!dg_event(&director, "ENTERFRAME", 0x210063));
+  assert(dg_event(&director, "PrEpArEfRaMe", 0x210063));
   assert(lv_run(&values, 4) && !values.depth && restored == 2);
-  assert(dg_event(&director, "CUSTOMevent", 0x110063));
+  assert(dg_event(&director, "CUSTOMevent", 0x210063));
   assert(lv_run(&values, 4) && !values.depth && restored == 3);
   // Cleared behavior roots can leave queued begins with no handler. Their
   // outer-loop slots still precede the next pending begin and a later prepare.
@@ -200,10 +200,10 @@ int main(void) {
   count = 0;
   director.begin_pending[1] = director.begin_pending[2] = true;
   director.begin_pending[3] = director.begin_pending[100] = true;
-  instance = lv_instance(&values, lv_make(LV_SCRIPT, 0x110062));
+  instance = lv_instance(&values, lv_make(LV_SCRIPT, 0x210062));
   lv_set(&values, NULL, "scriptinstancelist", lv_make(LV_SPRITE, 100),
          lv_list(&values, 1, &instance, false));
-  instance = lv_instance(&values, lv_make(LV_SCRIPT, 0x110063));
+  instance = lv_instance(&values, lv_make(LV_SCRIPT, 0x210063));
   lv_set(&values, NULL, "scriptinstancelist", lv_make(LV_SPRITE, 799),
          lv_list(&values, 1, &instance, false));
   assert(dg_service(&director, DG_SERVICE_BUDGET));
@@ -216,7 +216,7 @@ int main(void) {
   reloaded.code = &boundary_code;
   assert(dg_enter(&director, &reloaded, 1, NULL, 0));
   static const unsigned channels[] = {31, 32, 63, 64, 255, 256, 799, 800};
-  instance = lv_instance(&values, lv_make(LV_SCRIPT, 0x110063));
+  instance = lv_instance(&values, lv_make(LV_SCRIPT, 0x210063));
   for (unsigned n = 0; n < sizeof(channels) / sizeof(channels[0]); n++) {
     unsigned i = channels[n];
     lv_set(&values, NULL, "scriptinstancelist", lv_make(LV_SPRITE, i),
@@ -239,7 +239,7 @@ int main(void) {
     assert(lv_set_at(&values, list, 1, instance));
     assert(eligible(i));
     lv_set(&values, NULL, "scriptinstancelist", sprite, (lv_t){0});
-    director.sprites[i].value.member = 0x110003;
+    director.sprites[i].value.member = 0x210003;
     dg_sprite_changed(&director, i);
     assert(eligible(i));
     director.sprites[i].value.member = 0;
@@ -247,7 +247,7 @@ int main(void) {
     assert(!eligible(i));
     // Releasing a puppet reapplies the score member after the dirty notification.
     director.sprites[i].puppet = true;
-    director.score[i + 5].member = 0x110003;
+    director.score[i + 5].member = 0x210003;
     lv_t result = {0};
     bool yield = false;
     assert(values.services.call(&values, "puppetsprite", 2,
@@ -262,7 +262,7 @@ int main(void) {
   assert(!values.failed);
   static const dg_frame_t score_frames[] = {{0, 0}, {0, 1}};
   static const dg_delta_t score_delta = {
-      .channel = 805, .mask = DG_MEMBER, .value = {.script = 0x110002}};
+      .channel = 805, .mask = DG_MEMBER, .value = {.script = 0x210002}};
   reloaded = movie;
   reloaded.frame_count = 2;
   reloaded.frames = score_frames;

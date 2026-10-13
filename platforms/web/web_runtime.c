@@ -3,6 +3,7 @@
 // (site/app.js) drives it frame by frame; the Node probe harness drives the
 // same functions through the line protocol the native probes speak, so parity
 // against the native probe exercises exactly what the page runs.
+#include "ink.h"
 #include "web_runtime.h"
 #include "compositor.h"
 #include "game.h"
@@ -11,12 +12,13 @@
 #ifdef DIRECTOR64_WILLY
 #include "willy_input.h"
 #endif
-#if DG_D8
+#ifdef DIRECTOR64_MUCKLAS
 #include "controls.h"
 #endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <string.h>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -236,6 +238,29 @@ static bool video_frame(void *ctx, unsigned sprite, uint32_t *out, uint32_t cap,
          host.video_frame(host.ctx, sprite, out, cap, width, height);
 }
 #if DG_D10
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+// The character of a text member under (x, y) of its box, as the host sets
+// the text the compositor draws: the field's live text, in the sprite's
+// rectangle or the member's own size.
+static int text_char_at(void *ctx, uint32_t member, unsigned sprite, int x, int y) {
+  (void)ctx;
+  const dg_member_t *m = dg_member(&director, member);
+  if (!m)
+    return -1;
+  const char *text = m->text;
+  for (unsigned j = 0; j < director.field_count; j++)
+    if (director.field_members[j] == m->id)
+      text = lv_cstr(&values, values.roots[DG_FIELD_TEXT_ROOT + j]);
+  int width = m->width, height = m->height;
+  if (sprite && sprite < DG_SPRITES) {
+    int l, t, r, b;
+    dg_sprite_bounds(&director, &director.sprites[sprite], &l, &t, &r, &b);
+    width = r - l;
+    height = b - t;
+  }
+  return wc_text_char_at(&compositor, m, text, width, height, x, y);
+}
+#endif
 static void capture_stage(void *ctx, uint32_t member) {
   (void)ctx;
   wc_capture_stage(&compositor, member);
@@ -246,20 +271,136 @@ static bool rasterize(void *ctx, const char *text, int width, int height,
   (void)ctx;
   return host.text && host.text(host.ctx, text, width, height, style, coverage);
 }
+static int layout(void *ctx, const char *text, int width, int height,
+                  const wc_text_style_t *style, int16_t *boxes, int max_chars) {
+  (void)ctx;
+  return host.layout ? host.layout(host.ctx, text, width, height, style, boxes, max_chars) : 0;
+}
 
+// Ports whose engine reads no folder of its own answer the drive root.
+__attribute__((weak)) const char *game_movie_path(void *ctx) {
+  (void)ctx;
+  return NULL;
+}
+__attribute__((weak)) const char *game_data_folder(void *ctx) {
+  (void)ctx;
+  return NULL;
+}
+#if DG_D10
+// The authored long name find() last resolved through its 8.3 truncation.
+static char found_alias[40];
+#endif
 static const dg_movie_t *find(const char *name) {
   char normalized[64];
+#if DG_D10
+  found_alias[0] = 0;
+#endif
   snprintf(normalized, sizeof(normalized), "%s", name);
   for (char *p = normalized; *p; p++)
     if (*p >= 'a' && *p <= 'z')
       *p -= 32;
   if (!strchr(normalized, '.') && strlen(normalized) + 4 < sizeof(normalized))
     strcat(normalized, ".DXR");
+  // Shockwave and unprotected movies convert as .DXR.
+  char *ext = strrchr(normalized, '.');
+  if (ext && (!strcmp(ext, ".DCR") || !strcmp(ext, ".DIR")))
+    memcpy(ext, ".DXR", 4);
   for (unsigned i = 0; i < dg_registry_count; i++)
     if (!strcmp(dg_registry[i]->code->name, normalized))
       return dg_registry[i];
+  // Joliet discs name movies by their long names ("Baumhoehle"); the
+  // primary volume the importer reads holds the 8.3 truncation.
+  char *dot = strchr(normalized, '.');
+  // The stem after a folder qualifier ("SCHWEINESPIEL__SCHWEINE") is the
+  // part the disc truncated.
+  char *stem = normalized;
+  for (char *q = strstr(normalized, "__"); q && q < dot; q = strstr(q + 2, "__"))
+    stem = q + 2;
+  if (dot && dot - stem > 8) {
+    memmove(stem + 8, dot, strlen(dot) + 1);
+    for (unsigned i = 0; i < dg_registry_count; i++)
+      if (!strcmp(dg_registry[i]->code->name, normalized)) {
+#if DG_D10
+        snprintf(found_alias, sizeof(found_alias), "%s%s", name,
+                 strchr(name, '.') ? "" : ".dxr");
+#endif
+        return dg_registry[i];
+      }
+  }
   return NULL;
 }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+// A movie a folder-qualified port names by path (source.rs
+// policy_source_files: FOLDER__NAME): the folder the path names, then the
+// current movie's own folder, then the plain name.
+static void qualifier(const char *from, size_t length, char *out, size_t size) {
+  size_t n = 0;
+  for (size_t i = 0; i < length && n + 1 < size; i++) {
+    char c = from[i];
+    c = (char)toupper((unsigned char)c);
+    out[n++] = (isalnum((unsigned char)c) || c == '_' || c == '-') ? c : '_';
+  }
+  out[n] = 0;
+}
+// The disc's 8.3 spelling of a long name: letters and digits only, eight
+// at most ("Intro_Dach" is INTRODAC).
+static void short_name(const char *name, char *out, size_t size) {
+  const char *dot = strrchr(name, '.');
+  size_t n = 0;
+  for (const char *p = name; *p && p != dot && n < 8 && n + 1 < size; p++)
+    if (isalnum((unsigned char)*p))
+      out[n++] = *p;
+  snprintf(out + n, size - n, "%s", dot ? dot : "");
+}
+static const dg_movie_t *find_path_stem(const char *path, const char *movie) {
+  char stem[64];
+  const char *base = path;
+  const char *folder = NULL;
+  size_t folder_length = 0;
+  for (const char *p = path; *p; p++)
+    if (*p == ':' || *p == '\\' || *p == '/') {
+      if (p > base && !(p - base == 1 && *base == '@')) {
+        folder = base;
+        folder_length = (size_t)(p - base);
+      }
+      base = p + 1;
+    }
+  snprintf(stem, sizeof(stem), "%s", movie);
+  char candidate[160], prefix[64];
+  if (folder) {
+    qualifier(folder, folder_length, prefix, sizeof(prefix));
+    snprintf(candidate, sizeof(candidate), "%s__%s", prefix, stem);
+    const dg_movie_t *m = find(candidate);
+    if (m) {
+      snprintf(found_alias, sizeof(found_alias), "%s%s", stem, strchr(stem, '.') ? "" : ".dxr");
+      return m;
+    }
+  }
+  const char *current = director.movie ? director.movie->code->name : "";
+  const char *split = strstr(current, "__");
+  if (split && (size_t)(split - current) < sizeof(prefix)) {
+    snprintf(prefix, sizeof(prefix), "%.*s", (int)(split - current), current);
+    snprintf(candidate, sizeof(candidate), "%s__%s", prefix, stem);
+    const dg_movie_t *m = find(candidate);
+    if (m) {
+      snprintf(found_alias, sizeof(found_alias), "%s%s", stem, strchr(stem, '.') ? "" : ".dxr");
+      return m;
+    }
+  }
+  return find(stem);
+}
+static const dg_movie_t *find_path(const char *path, const char *movie) {
+  const dg_movie_t *m = find_path_stem(path, movie);
+  char short_stem[64];
+  short_name(movie, short_stem, sizeof(short_stem));
+  if (m || !strcmp(short_stem, movie))
+    return m;
+  m = find_path_stem(path, short_stem);
+  if (m)
+    snprintf(found_alias, sizeof(found_alias), "%s%s", movie, strchr(movie, '.') ? "" : ".dxr");
+  return m;
+}
+#endif
 static bool enter(const dg_movie_t *movie, unsigned frame) {
   const dg_movie_t *shared[DG_FILES];
   unsigned count = 0;
@@ -285,6 +426,10 @@ static bool enter(const dg_movie_t *movie, unsigned frame) {
              movie->code->name, frame, director.ticks);
     host.trace(host.ctx, line);
   }
+#if DG_D10
+  memcpy(director.movie_alias, found_alias, sizeof(director.movie_alias));
+  found_alias[0] = 0;
+#endif
   return dg_enter(&director, movie, frame, shared, count);
 }
 
@@ -315,7 +460,7 @@ EMSCRIPTEN_KEEPALIVE int d64_load_package(const uint8_t *data, size_t length) {
 EMSCRIPTEN_KEEPALIVE const char *d64_package_error(void) { return package_error; }
 #endif
 
-#if DG_D5
+#if DG_D5 || DG_D10
 // Digital video players, one per sprite channel showing a video member, run
 // by the page (d5_video.c runs the console's): opened when a sprite shows a
 // video, told its time every step, closed when the sprite moves on.
@@ -335,7 +480,7 @@ static void update_videos(void) {
   for (unsigned i = 1; i < DG_SPRITES; i++) {
     const dg_sprite_t *s = &director.sprites[i];
     const dg_member_t *m = s->value.type ? dg_member(&director, s->value.member) : NULL;
-    if (!m || m->type != 10) {
+    if (!dg_is_video(m)) {
       if (video_member[i])
         host.video(host.ctx, i, NULL, "", 0, 0, 0, 0);
       video_member[i] = 0;
@@ -369,6 +514,8 @@ EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
     free(director.suspended_stage);
     director.suspended_stage = NULL;
   }
+#endif
+#if DG_D5 || DG_D10
   close_videos();
 #endif
   booted = true;
@@ -380,7 +527,8 @@ EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
   for (unsigned i = 0; i < DG_SOUND_CHANNELS; i++)
     served_gain[i] = -1.0f;
   wc_init(&compositor,
-          (wc_host_t){.read = read_asset, .text = rasterize, .video_frame = video_frame},
+          (wc_host_t){.read = read_asset, .text = rasterize, .layout = layout,
+                      .video_frame = video_frame},
           (size_t)WEB_IMAGE_BUDGET);
   dg_init(&director, &values,
           (dg_platform_t){.nth_file = game_nth_file, .long_date = game_long_date,
@@ -391,7 +539,11 @@ EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
 #endif
 #if DG_D10
                           .play_file = play_file, .find_movie = find_movie,
+                          .movie_path = game_movie_path, .data_folder = game_data_folder,
                           .read_data = read_data, .capture_stage = capture_stage,
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+                          .text_char_at = text_char_at,
+#endif
 #endif
                           .trace = trace, .hit = hit},
           NULL, global_names, global_count, random_seed);
@@ -420,10 +572,24 @@ EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
 #else
 static bool step(int x, int y, unsigned buttons) {
   if (dg_transition_ready(&director)) {
-    char movie[32];
+    char movie[sizeof(director.next_movie)];
     snprintf(movie, sizeof(movie), "%s", director.next_movie);
     unsigned frame = director.next_movie_frame;
-    if (!enter(find(movie), frame ? frame : 1))
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    const dg_movie_t *target = find_path(director.next_movie_path, movie);
+    char path[96];
+    snprintf(path, sizeof(path), "%s", director.next_movie_path);
+    director.next_movie_path[0] = 0;
+#else
+    const dg_movie_t *target = find(movie);
+    const char *path = "";
+#endif
+    if (!target && director.platform.trace) {
+      char report[200];
+      snprintf(report, sizeof(report), "MOVIE_MISSING %s %s", path, movie);
+      director.platform.trace(director.context, report);
+    }
+    if (!enter(target, frame ? frame : 1))
       return false;
   }
   bool ok = dg_tick(&director, x, y, (buttons & INPUT_A) != 0, DG_SERVICE_BUDGET);
@@ -460,12 +626,12 @@ EMSCRIPTEN_KEEPALIVE int d64_step(int x, int y, int buttons) {
 #if DG_D10
   // The page's 640x480 pointer maps into the authored 800x600 stage, as the
   // console's does; the probe protocol speaks authored coordinates.
-  x = x * 5 / 4;
-  y = y * 5 / 4;
+  x = dg_stage_coord(x);
+  y = dg_stage_coord(y);
 #endif
   step(x, y, (unsigned)buttons);
   serve_gain();
-#if DG_D5
+#if DG_D5 || DG_D10
   update_videos();
 #endif
   return values.failed ? 1 : director.quit ? 2 : 0;
@@ -518,7 +684,7 @@ EMSCRIPTEN_KEEPALIVE int d64_step_pads(void) {
     return 1;
   if (director.quit)
     return 2;
-#if DG_D8
+#ifdef DIRECTOR64_MUCKLAS
   mucklas_pad_keys(&director, &pads);
 #endif
   pointer_update(&pointer, &director, &pads);
@@ -566,7 +732,7 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y) {
     return 0;
 #if DG_D10
   // The editable-field hit test works in the authored 800x600 space.
-  unsigned sprite = dg_mouse_hit(&director, x * 5 / 4, y * 5 / 4);
+  unsigned sprite = dg_mouse_hit(&director, dg_stage_coord(x), dg_stage_coord(y));
 #else
   unsigned sprite = dg_mouse_hit(&director, x, y);
 #endif
@@ -582,7 +748,7 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y) {
             &text_field_rect[2], &text_field_rect[3]);
 #if DG_D10
   for (unsigned i = 0; i < 4; i++)
-    text_field_rect[i] = text_field_rect[i] * 4 / 5;
+    text_field_rect[i] = dg_prescale_coord(text_field_rect[i]);
 #endif
   return sprite;
 #else
@@ -598,16 +764,45 @@ EMSCRIPTEN_KEEPALIVE const int *d64_text_field_rect(void) { return text_field_re
 // and sends each character as a key (platforms/n64/text_input.c). The field
 // at the pointer, or with `anywhere` the one taking a name now, while it
 // does; its stage rectangle is filled in as d64_text_field's.
+#if DG_D10 && !defined(DIRECTOR64_MUCKLAS)
+// A Director 8.5 port's key field (games/<slug>/runtime): none by default.
+__attribute__((weak)) bool game_key_field(void *runtime, unsigned sprite) {
+  (void)runtime;
+  (void)sprite;
+  return false;
+}
+// The Macintosh virtual key code a typed character arrives with.
+static unsigned typed_key_code(unsigned c) {
+  static const uint8_t letters[] = {0,  11, 8,  2,  14, 3,  5,  4,  34, 38, 40, 37, 46,
+                                    45, 31, 35, 12, 15, 1,  17, 32, 9,  13, 7,  16, 6};
+  if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
+  if (c >= 'A' && c <= 'Z') return letters[c - 'A'];
+  return c == 8 ? 51 : c == 13 ? 36 : c == ' ' ? 49 : c == '-' ? 27 : 18;
+}
+#endif
 EMSCRIPTEN_KEEPALIVE unsigned d64_key_field(int x, int y, int anywhere) {
-#if DG_D8
+#if defined(DIRECTOR64_MUCKLAS) || DG_D10
   if (!booted || values.failed || values.depth)
     return 0;
+#if DG_D10
+  // The hit test works in the authored 800x600 space.
+  unsigned first = anywhere ? 1 : dg_mouse_hit(&director, dg_stage_coord(x), dg_stage_coord(y));
+#else
   unsigned first = anywhere ? 1 : dg_mouse_hit(&director, x, y);
+#endif
   unsigned last = anywhere ? DG_SPRITES - 1 : first;
   for (unsigned sprite = first; sprite && sprite <= last && sprite < DG_SPRITES; sprite++)
+#ifdef DIRECTOR64_MUCKLAS
     if (mucklas_name_target(&director, sprite)) {
+#else
+    if (game_key_field(&director, sprite)) {
+#endif
       dg_bounds(&director, sprite, &text_field_rect[0], &text_field_rect[1],
                 &text_field_rect[2], &text_field_rect[3]);
+#if DG_D10
+      for (unsigned i = 0; i < 4; i++)
+        text_field_rect[i] = dg_prescale_coord(text_field_rect[i]);
+#endif
       return sprite;
     }
 #else
@@ -620,9 +815,12 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_key_field(int x, int y, int anywhere) {
 // One character typed into a key field, as the console's keyboard presses
 // and releases it; 8 deletes.
 EMSCRIPTEN_KEEPALIVE void d64_type_key(unsigned character, int down) {
-#if DG_D8
+#ifdef DIRECTOR64_MUCKLAS
   if (booted && !values.failed && character <= 255 && director.key_count < 32)
     dg_key(&director, mucklas_key_code(character), character, down != 0);
+#elif DG_D10
+  if (booted && !values.failed && character <= 255 && director.key_count < 32)
+    dg_key(&director, typed_key_code(character), character, down != 0);
 #else
   (void)character;
   (void)down;
@@ -630,7 +828,7 @@ EMSCRIPTEN_KEEPALIVE void d64_type_key(unsigned character, int down) {
 }
 // The field's text as the keyboard starts from: a lone space is empty.
 EMSCRIPTEN_KEEPALIVE const char *d64_text_value(unsigned sprite) {
-#if DG_EXTENDED || DG_D8
+#if DG_EXTENDED || defined(DIRECTOR64_MUCKLAS)
   if (booted && sprite && sprite < DG_SPRITES) {
     const dg_member_t *m = dg_member(&director, director.sprites[sprite].value.member);
     if (m) {
@@ -689,6 +887,9 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_print_request(void) {
 #endif
 }
 EMSCRIPTEN_KEEPALIVE uint32_t *d64_pixels(void) { return compositor.pixels; }
+// The stage the page presents: 640x480, or the authored 800x600 (ink.h).
+EMSCRIPTEN_KEEPALIVE unsigned d64_stage_width(void) { return WC_WIDTH; }
+EMSCRIPTEN_KEEPALIVE unsigned d64_stage_height(void) { return WC_HEIGHT; }
 EMSCRIPTEN_KEEPALIVE const char *d64_error(void) {
   return values.failed ? values.error : "";
 }
@@ -761,6 +962,11 @@ static void state(void) {
   quoted(values.failed ? values.error : "");
   emit(",\"script_errors\":%u,\"last_script_error\":", values.script_error_count);
   quoted(values.last_script_error);
+#if DG_EXTENDED
+  // A typed entry still feeding its characters (the fuzzer waits for it).
+  if (director.text_pending)
+    emit(",\"text_pending\":true");
+#endif
   emit(",\"handler\":");
   quoted(values.depth ? values.frames[values.depth - 1].handler->name : "");
   emit(",\"line\":%u,\"globals\":{",
@@ -789,9 +995,15 @@ static void state(void) {
       emit(",");
     comma = true;
     emit("{\"id\":%u,\"member\":%u,\"script\":%u,\"bounds\":[%d,%d,%d,%d],"
-         "\"blend\":%u,\"loc\":[%d,%d],\"moveable\":%u}",
+         "\"blend\":%u,\"loc\":[%d,%d],\"moveable\":%u",
          i, s->value.member, s->value.script, l, t, r, b, dg_opacity(s),
          s->value.x, s->value.y, s->moveable);
+#if DG_EXTENDED
+    // Fields a keyboard can type into, as the native probes report them.
+    if (dg_text_editable(&director, i))
+      emit(",\"editable\":1");
+#endif
+    emit("}");
   }
   const pointer_player_t *driver = pointer_driver(&pointer);
   emit("],\"pointer\":{\"player\":%u,\"x\":%d,\"y\":%d},\"save_lengths\":[",
@@ -844,8 +1056,101 @@ EMSCRIPTEN_KEEPALIVE const char *d64_rpc(const char *command) {
   int x, y, down;
   char entered[64];
   (void)entered;
+#ifdef DIRECTOR64_DEV_LENIENT
+  unsigned member_id;
+#endif
   if (!strcmp(command, "reboot")) {
     d64_boot(seed);
+#ifdef DIRECTOR64_DEV_LENIENT
+  } else if (sscanf(command, "member %u", &member_id) == 1) {
+    // Development: what a sprite's member id names.
+    const dg_member_t *m = dg_member(&director, member_id);
+    emit("{\"member\":%u,\"found\":%s", member_id, m ? "true" : "false");
+    if (m)
+      emit(",\"name\":\"%s\",\"type\":%u,\"number\":%u,\"cast\":%u,\"width\":%u,\"height\":%u,\"asset\":\"%s\"",
+           m->name ? m->name : "", m->type, m->number, m->cast, m->width, m->height, m->asset ? m->asset : "");
+    emit("}\n");
+    return output;
+  } else if (sscanf(command, "movie %63s", entered) == 1) {
+    // Development: enter a movie directly, as `go to movie` would, at an
+    // optional label ("movie VIDEOMAT.DXR 06_02").
+    snprintf(director.next_movie, sizeof(director.next_movie), "%s", entered);
+    director.next_movie_frame = 1;
+#if DG_MODERN
+    director.next_movie_label[0] = 0;
+    char label[32];
+    if (sscanf(command, "movie %*s %31s", label) == 1)
+      snprintf(director.next_movie_label, sizeof(director.next_movie_label), "%s", label);
+#endif
+  } else if (sscanf(command, "hide %u", &member_id) == 1 && member_id < DG_SPRITES) {
+    director.sprites[member_id].visible = false;
+    director.visual_revision++;
+    emit("{}\n");
+    return output;
+  } else if (sscanf(command, "spritetext %u", &member_id) == 1 && member_id < DG_SPRITES) {
+    lv_t text = lv_get(&values, NULL, "text",
+                       lv_make(LV_MEMBER, (int32_t)director.sprites[member_id].value.member));
+    emit("{\"text\":");
+    quoted(lv_cstr(&values, text));
+    emit("}\n");
+    return output;
+  } else if (!strncmp(command, "inspect ", 8)) {
+    // Development: a global, then a property path, formatted.
+    char words[8][48];
+    int n = sscanf(command + 8, "%47s %47s %47s %47s %47s %47s %47s %47s", words[0], words[1],
+                   words[2], words[3], words[4], words[5], words[6], words[7]);
+    lv_t v = {0};
+    for (unsigned i = 0; i < values.global_count; i++)
+      if (n > 0 && !strcmp(global_names[i], words[0])) v = values.globals[i];
+    for (int i = 1; i < n && !values.failed; i++)
+      v = lv_get(&values, NULL, words[i], v);
+    static char text[16384];
+    if (!lv_format(&values, v, text, sizeof(text))) strcpy(text, "<format failed>");
+    emit("{\"inspect\":");
+    quoted(text);
+    emit("}\n");
+    return output;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  } else if (!strcmp(command, "children")) {
+    emit("{\"children\":[");
+    for (unsigned i = 0; i < director.film_child_count; i++) {
+      const dg_film_child_t *c = &director.film_children[i];
+      emit("%s[%u,%u,%u,%d,%d,%u,%u]", i ? "," : "", c->parent, c->channel, c->member, c->x, c->y, c->ink, c->blend);
+    }
+    emit("]}\n");
+    return output;
+#endif
+  } else if (!strcmp(command, "clock")) {
+    emit("{\"clock\":%llu,\"deadline\":%llu,\"stalled\":%u,\"tempo\":%u,\"puppet_tempo\":%u,"
+         "\"phase\":%u,\"event_cursor\":%u,\"score_delay\":%u,\"next_frame\":%u}\n",
+         (unsigned long long)director.clock, (unsigned long long)director.frame_deadline,
+         director.frame_stalled, director.tempo, director.puppet_tempo, director.phase,
+         director.event_cursor,
+#if DG_MODERN
+         director.score_delay,
+#else
+         0u,
+#endif
+         director.next_frame);
+    return output;
+  } else if (sscanf(command, "sprite %u", &member_id) == 1 && member_id < DG_SPRITES) {
+    const dg_sprite_t *sp = &director.sprites[member_id];
+    const dg_member_t *m = dg_member(&director, sp->value.member);
+    emit("{\"sprite\":%u,\"member\":%u,\"ink\":%u,\"blend\":%u,\"type\":%u,\"visible\":%u,\"puppet\":%u,"
+         "\"fore\":%u,\"back\":%u,\"fore_rgb\":%u,\"back_rgb\":%u,\"rect\":[%d,%d,%d,%d],\"film_frame\":%u,"
+         "\"member_type\":%u,\"shape\":%u,\"pattern\":%u,\"filled\":%u,\"line\":%u}\n",
+         member_id, sp->value.member, sp->value.ink, sp->value.blend, sp->value.type, sp->visible, sp->puppet,
+         sp->value.fore, sp->value.back,
+#if DG_MODERN
+         sp->value.fore_rgb, sp->value.back_rgb,
+#else
+         0u, 0u,
+#endif
+         sp->value.x, sp->value.y,
+         sp->value.width, sp->value.height, sp->film_frame, m ? m->type : 0, m ? m->shape : 0, m ? m->pattern : 0,
+         m ? m->filled : 0, m ? m->line_width : 0);
+    return output;
+#endif
   } else if (sscanf(command, "pad %u %d %d %u", &ticks, &x, &y, &buttons) == 4 &&
              ticks <= 100000 && x >= -128 && x <= 127 && y >= -128 && y <= 127 &&
              buttons <= UINT16_MAX) {

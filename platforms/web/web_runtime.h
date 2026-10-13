@@ -21,6 +21,9 @@ typedef struct {
   // builtin font); false without a font.
   bool (*text)(void *ctx, const char *utf8, int width, int height,
                const wc_text_style_t *style, uint8_t *coverage);
+  // Each character's box in the text box `text` set (wc_host_t.layout).
+  int (*layout)(void *ctx, const char *utf8, int width, int height,
+                const wc_text_style_t *style, int16_t *boxes, int max_chars);
   // Start (asset non-NULL) or stop a channel.
   void (*sound)(void *ctx, unsigned channel, const char *asset, bool looping,
                 uint32_t loop_start, uint32_t loop_end);

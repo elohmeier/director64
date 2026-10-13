@@ -1,0 +1,12 @@
+schema_version = 1
+slug = "loewenzahn-5"
+title = "Löwenzahn 5"
+status = "catalogued"
+default_source = "sha256-47cce9143e6f"
+
+[[sources]]
+id = "sha256-47cce9143e6f"
+file = "Loewe5.iso"
+sha256 = "47cce9143e6fcc4c1026d75fd39c7804e8e0c281cdfc8ee92791f0a25f78d4e4"
+bytes = 670349312
+kind = "iso9660"

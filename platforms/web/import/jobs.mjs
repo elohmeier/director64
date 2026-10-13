@@ -123,7 +123,7 @@ async function convertMovie({request, index, answers: sent = []}, tools, fetch, 
   }
 }
 
-// tools: {converter, DirectorFile, encodeAudio, encodeVideo}; context (pool workers):
+// tools: {converter, DirectorFile, encodeAudio, encodeImage, encodeVideo}; context (pool workers):
 // {fetch, answers} for movie jobs.
 export async function runJob(kind, payload, tools, context) {
   switch (kind) {
@@ -141,6 +141,9 @@ export async function runJob(kind, payload, tools, context) {
       return tools.converter.prescale(payload);
     case "sound":
       return tools.encodeAudio(payload);
+    case "image":
+      // A stored image (deflated as the converter wrote it) as WebP, or null.
+      return tools.encodeImage ? tools.encodeImage(tools.converter.inflate(payload)) : null;
     case "video": {
       const frames = tools.converter.frames(payload);
       try {
@@ -170,7 +173,7 @@ export function transferables(result) {
 //   loadParser(parser): the environment's ProjectorRays, loaded once
 //   encodeAudio(converter, wav): the environment's sound encoder, if any
 //   encodeVideo(frames): the environment's video encoder, if any
-export function serve(endpoint, {loadParser, encodeAudio, encodeVideo}) {
+export function serve(endpoint, {loadParser, encodeAudio, encodeImage, encodeVideo}) {
   let tools = null;
   let parser = null;
   // A movie batch's answers, kept for its later jobs on this worker.
@@ -179,7 +182,7 @@ export function serve(endpoint, {loadParser, encodeAudio, encodeVideo}) {
   endpoint.receive(async (message) => {
     if (message.type === "init") {
       const converter = await loadConverter(message.converter);
-      tools = {converter, encodeAudio: encodeAudio && ((wav) => encodeAudio(converter, wav)), encodeVideo};
+      tools = {converter, encodeAudio: encodeAudio && ((wav) => encodeAudio(converter, wav)), encodeImage, encodeVideo};
       parser = message.parser;
       endpoint.send({type: "ready"});
       return;

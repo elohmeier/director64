@@ -62,10 +62,26 @@ static bool parse_wav(const uint8_t *bytes, size_t length, wav_t *wav) {
          wav->channels >= 1 && wav->channels <= 2 && wav->rate;
 }
 
+// An Ogg Opus file's length: the last page's granule position (48 kHz
+// samples) less the header's pre-skip.
+static double ogg_opus_duration(const uint8_t *data, size_t length) {
+  if (length < 64 || memcmp(data, "OggS", 4) || memcmp(data + 28, "OpusHead", 8))
+    return 0;
+  unsigned pre_skip = data[38] | data[39] << 8;
+  for (size_t at = length - 27; at > 0; at--)
+    if (!memcmp(data + at, "OggS", 4)) {
+      int64_t granule = 0;
+      for (unsigned i = 0; i < 8; i++)
+        granule |= (int64_t)data[at + 6 + i] << (8 * i);
+      return granule > pre_skip ? (double)(granule - pre_skip) / 48000.0 : 0;
+    }
+  return 0;
+}
+
 double wav_duration(const uint8_t *data, size_t length) {
   wav_t wav;
   if (!parse_wav(data, length, &wav))
-    return 0;
+    return ogg_opus_duration(data, length);
   return (double)(wav.bytes / (wav.bits / 8 * wav.channels)) / wav.rate;
 }
 

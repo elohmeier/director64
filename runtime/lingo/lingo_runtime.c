@@ -609,7 +609,7 @@ bool lv_has_reference(lv_runtime_t *r, lv_type_t type, int32_t id) {
   for (unsigned i = 0; i < r->depth; i++) {
     lv_frame_t *f = &r->frames[i];
     if (REFERENCED(f->self)) return true;
-    for (unsigned j = 0; j < f->handler->locals; j++)
+    for (unsigned j = 0; j < (unsigned)(f->temps - f->locals); j++)
       if (REFERENCED(f->locals[j])) return true;
     for (unsigned j = 0; j < f->temp_count; j++)
       if (REFERENCED(f->temps[j])) return true;
@@ -631,7 +631,7 @@ static void mark_roots(lv_runtime_t *r) {
   for (unsigned i = 0; i < r->depth; i++)
     mark(r, r->frames[i].self, 0);
   for (unsigned i = 0; i < r->depth; i++)
-    for (unsigned j = 0; j < r->frames[i].handler->locals; j++)
+    for (unsigned j = 0; j < (unsigned)(r->frames[i].temps - r->frames[i].locals); j++)
       mark(r, r->frames[i].locals[j], 0);
   for (unsigned i = 0; i < r->depth; i++)
     for (unsigned j = 0; j < r->frames[i].temp_count; j++)
@@ -1019,10 +1019,24 @@ static lv_t binary_op(lv_runtime_t *r, unsigned op, lv_t a, lv_t b) {
     } while (*left++);
     return lv_num(0);
   }
-  if ((lv_type(a) == LV_STRING || lv_type(a) == LV_SYMBOL) &&
-      (lv_type(b) == LV_STRING || lv_type(b) == LV_SYMBOL)) {
-    const unsigned char *left = (const unsigned char *)lv_cstr(r, a),
-                        *right = (const unsigned char *)lv_cstr(r, b);
+  bool text_order = (lv_type(a) == LV_STRING || lv_type(a) == LV_SYMBOL) &&
+                    (lv_type(b) == LV_STRING || lv_type(b) == LV_SYMBOL);
+  char number_text[64];
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // Text that is no number orders against a number as text, as Director
+  // compares them (Löwenzahn 6's paint box tests "paint" & width > height).
+  double ignored;
+  if (!text_order && (op == LB_BIN_LT || op == LB_BIN_GT || op == LB_BIN_LE || op == LB_BIN_GE) &&
+      ((lv_type(a) == LV_STRING && lv_type(b) == LV_NUMBER && !parse_number(lv_cstr(r, a), &ignored)) ||
+       (lv_type(b) == LV_STRING && lv_type(a) == LV_NUMBER && !parse_number(lv_cstr(r, b), &ignored))) &&
+      format_value(r, lv_type(a) == LV_NUMBER ? a : b, number_text, sizeof(number_text), 0))
+    text_order = true;
+  else
+#endif
+    number_text[0] = 0;
+  if (text_order) {
+    const unsigned char *left = (const unsigned char *)(lv_type(a) == LV_NUMBER ? number_text : lv_cstr(r, a)),
+                        *right = (const unsigned char *)(lv_type(b) == LV_NUMBER ? number_text : lv_cstr(r, b));
     while (*left && *right && tolower(*left) == tolower(*right)) {
       left++;
       right++;
@@ -1411,6 +1425,14 @@ lv_t lv_get(lv_runtime_t *r, lv_frame_t *f, const char *property, lv_t owner) {
     builtin(r, "ilk", 1, &owner, &result, &yield);
     return result;
   }
+  // text.value evaluates the text as value(text) does (Löwenzahn 7's piano
+  // reads its key positions from a field this way).
+  if (lv_type(owner) == LV_STRING && (ln == LN_VALUE)) {
+    lv_t result = {0};
+    bool yield = false;
+    builtin(r, "value", 1, &owner, &result, &yield);
+    return result;
+  }
   if (lv_type(owner) == LV_PROPLIST || lv_type(owner) == LV_INSTANCE ||
       lv_type(owner) == LV_SCRIPT) {
     if (lv_type(owner) == LV_PROPLIST && (ln == LN_COUNT))
@@ -1605,6 +1627,10 @@ static lv_t replace_chunk(lv_runtime_t *r, lv_t source, size_t start,
   memcpy(buffer + start + n, s + end, len - end + 1);
   return lv_text(r, buffer, false);
 }
+bool lv_chunk_range(lv_runtime_t *r, const char *kind, lv_t source, lv_t first, lv_t last,
+                    size_t *start, size_t *end) {
+  return chunk_bounds(r, kind, source, first, last, start, end);
+}
 lv_t lv_chunk_set(lv_runtime_t *r, const char *kind, lv_t source, lv_t first,
                   lv_t last, lv_t value) {
   if (lv_type(source) == LV_FIELD || lv_type(source) == LV_MEMBER)
@@ -1698,6 +1724,12 @@ static bool push_with(lv_runtime_t *r, const lv_movie_t *movie,
                       const lv_handler_t *handler, const lv_t *lead,
                       unsigned argc, const lv_t *args) {
   unsigned total = argc + (lead != NULL);
+#if DG_D10
+  // param(n) reads arguments past the declared parameters (variadic helpers).
+  unsigned extra = total > handler->arguments ? total - handler->arguments : 0;
+#else
+  unsigned extra = 0;
+#endif
   lv_t *base = r->stack;
   if (r->depth) {
     const lv_frame_t *caller = &r->frames[r->depth - 1];
@@ -1707,7 +1739,7 @@ static bool push_with(lv_runtime_t *r, const lv_movie_t *movie,
   unsigned room = (unsigned)(r->stack + LV_STACK_SLOTS - base);
   if (r->depth >= LV_FRAMES || total > LV_LOCALS ||
       handler->locals > LV_LOCALS || handler->arguments > handler->locals ||
-      handler->locals >= room) {
+      handler->locals + extra >= room) {
     lv_script_fail(r, "native call stack exhausted");
     return false;
   }
@@ -1717,10 +1749,11 @@ static bool push_with(lv_runtime_t *r, const lv_movie_t *movie,
   // are written before temp_count exposes them to the collector.
   memset(frame, 0, sizeof(*frame));
   frame->locals = base;
-  frame->temps = base + handler->locals;
-  room -= handler->locals;
+  frame->temps = base + handler->locals + extra;
+  room -= handler->locals + extra;
   frame->temp_limit = room < LV_LOCALS ? room : LV_LOCALS;
-  memset(frame->locals, 0, handler->locals * sizeof(lv_t));
+  memset(frame->locals, 0, (handler->locals + extra) * sizeof(lv_t));
+  frame->argc = (uint8_t)(total < 255 ? total : 255);
   frame->movie = movie;
   frame->handler = handler;
   frame->pc = handler->entry;
@@ -1728,8 +1761,11 @@ static bool push_with(lv_runtime_t *r, const lv_movie_t *movie,
     frame->self = script_identity(r, movie, handler);
   unsigned n = 0;
   if (lead && n < handler->arguments) frame->locals[n++] = *lead;
-  for (unsigned i = 0; i < argc && n < handler->arguments; i++)
+  unsigned i = 0;
+  for (; i < argc && n < handler->arguments; i++)
     frame->locals[n++] = args[i];
+  for (unsigned k = 0; i < argc && k < extra; i++, k++)
+    frame->locals[handler->locals + k] = args[i];
   r->result = (lv_t){0};
   return true;
 }
@@ -2122,12 +2158,31 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
     bool prop_like = lv_type(args[0]) == LV_PROPLIST;
     unsigned pairs = lv_count(r, args[0]);
 #endif
-    if (!prop_like || !index || index > pairs) lv_fail(r, "invalid getPropAt");
+    // An index outside the list is the script's own error (Director's
+    // "Index out of range" alert); the runtime goes on.
+    if (!prop_like) lv_fail(r, "invalid getPropAt");
+    else if (!index || index > pairs) lv_script_fail(r, "getPropAt index out of range");
     else *result = lv_at(r, args[0], index * 2 - 1);
     return true;
   }
+  // findPosNear on a sorted list: the first position whose item (a property
+  // list's property) is not less than the value, count + 1 past the end.
+  if (ln == LN_FINDPOSNEAR) {
+    ARITY(2);
+    lv_object_t *o = object(r, args[0]);
+    if (!o || (o->type != LV_LIST && o->type != LV_PROPLIST)) {
+      lv_fail(r, "list search requires list");
+      return true;
+    }
+    unsigned stride = o->type == LV_PROPLIST ? 2u : 1u, count = o->count / stride, i = 1;
+    for (; i <= count; i++)
+      if (!lv_truth(r, lv_binary(r, "<", lv_at(r, args[0], i * stride - (stride - 1)), args[1])))
+        break;
+    *result = lv_num(i);
+    return true;
+  }
   if ((ln == LN_GETONE) || (ln == LN_GETPOS) ||
-      (ln == LN_FINDPOS) || (ln == LN_FINDPOSNEAR) ||
+      (ln == LN_FINDPOS) ||
       (ln == LN_DELETEONE) || (ln == LN_DELETEPROP)) {
     ARITY(2);
     lv_object_t *o = object(r, args[0]);
@@ -2139,6 +2194,11 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
     bool key = stride == 2 && ((ln == LN_FINDPOS) ||
                                (ln == LN_DELETEPROP));
     *result = lv_num(0);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // findPos answers VOID for a property a list lacks (Löwenzahn 6's
+    // lexicon tests voidp(findPos(the markerList, the frame))).
+    if (key && (ln == LN_FINDPOS)) *result = (lv_t){0};
+#endif
     for (unsigned i = 1; i <= o->count / stride; i++) {
       lv_t value = lv_at(r, args[0], i * stride - (key ? 1u : 0u));
       if (!property_key(r, value, args[1])) continue;
@@ -2168,6 +2228,15 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
     else lv_fail(r, "clearProps requires property object");
     return true;
   }
+#if DG_D10
+  // list.deleteAll() empties a list or property list.
+  if ((ln == LN_DELETEALL) && argc == 1 &&
+      (lv_type(args[0]) == LV_LIST || lv_type(args[0]) == LV_PROPLIST)) {
+    lv_object_t *o = object(r, args[0]);
+    if (o) o->count = 0;
+    return true;
+  }
+#endif
   if (ln == LN_DELETEAT) {
     ARITY(2);
     lv_object_t *o = object(r, args[0]);
@@ -2195,8 +2264,14 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
     const char *kind = (ln == LN_COUNT_WORDS) ? "word" :
                        (ln == LN_COUNT_ITEMS) ? "item" :
                        (ln == LN_COUNT_LINES) ? "line" : NULL;
-    *result = lv_num(kind ? lv_chunk_count(r, kind, args[0]) :
-                           lv_count(r, args[0]));
+    lv_t subject = args[0];
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // member.char.count and its kin count the member's text.
+    if ((lv_type(subject) == LV_MEMBER || lv_type(subject) == LV_FIELD) && (ln != LN_COUNT))
+      subject = lv_get(r, NULL, "text", subject);
+#endif
+    *result = lv_num(kind ? lv_chunk_count(r, kind, subject) :
+                           lv_count(r, subject));
     return true;
   }
   if ((ln == LN_GETPROP) || (ln == LN_GETAPROP) ||
@@ -2255,7 +2330,16 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
     return true;
   }
   if (ln == LN_RANDOM) {
+#if DG_D10
+    // Director passes builtins their first arguments and ignores the rest:
+    // Findus 8.5 calls random(low, high) for a random(low).
+    if (argc < 1) {
+      lv_fail(r, "builtin argument count");
+      return true;
+    }
+#else
     ARITY(1);
+#endif
     double bound = ARG(0);
     if (!isfinite(bound)) {
       lv_fail(r, "invalid random bound");
@@ -2278,6 +2362,12 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
       return true;
     }
     *result = lv_num(1 + x % (uint32_t)bound);
+    return true;
+  }
+  // atan(number1, number2): the angle of number1/number2 over all four
+  // quadrants (Löwenzahn 6's dial, Circus' polar coordinates).
+  if ((ln == LN_ATAN) && argc == 2) {
+    *result = lv_float(atan2(ARG(0), ARG(1)));
     return true;
   }
   if ((ln == LN_INTEGER) || (ln == LN_FLOAT) ||
@@ -2384,7 +2474,19 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
     ARITY(1);
     *result = lv_num(lv_type(args[0]) == LV_WINDOW || lv_type(args[0]) == LV_FILE || lv_type(args[0]) == LV_INSTANCE ||
                      lv_type(args[0]) == LV_SCRIPT || lv_type(args[0]) == LV_XTRA ||
-                     lv_type(args[0]) == LV_SOUND);
+                     lv_type(args[0]) == LV_SOUND
+#if DG_D10
+                     // Members are objects from Director 7 on: the Findus 8.5
+                     // lip sync tests behavior parameters this way against a
+                     // "(kein Mund)" text default.
+                     || lv_type(args[0]) == LV_MEMBER
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+                     // Lists are objects too: Circus's engine keeps its
+                     // application data in a property list behind objectp.
+                     || lv_type(args[0]) == LV_LIST || lv_type(args[0]) == LV_PROPLIST
+#endif
+                     );
     return true;
   }
   if ((ln == LN_LISTP) || (ln == LN_STRINGP) ||
@@ -2423,7 +2525,19 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
 #endif
       default: break;
     }
-    *result = argc == 2 ? lv_num(equal_text(kind, lv_cstr(r, args[1]))) : lv_text(r, kind, true);
+    if (argc == 2) {
+      // The two-argument form also accepts the umbrella types: #number for
+      // integers and floats (Circus' ceil), #list for every list kind and
+      // #linearList for a plain list.
+      const char *type = lv_cstr(r, args[1]);
+      bool match = equal_text(kind, type) ||
+                   (equal_text(type, "number") && lv_type(args[0]) == LV_NUMBER) ||
+                   (equal_text(type, "list") && (lv_type(args[0]) == LV_LIST || lv_type(args[0]) == LV_PROPLIST)) ||
+                   (equal_text(type, "linearlist") && lv_type(args[0]) == LV_LIST &&
+                    !strcmp(kind, "list"));
+      *result = lv_num(match);
+    } else
+      *result = lv_text(r, kind, true);
     return true;
   }
   if (ln == LN_VOIDP) {
@@ -2469,8 +2583,10 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
   }
   if (ln == LN_VALUE) {
     ARITY(1);
-    if (lv_type(args[0]) != LV_STRING) { *result = args[0]; return true; }
-    const char *text = lv_cstr(r, args[0]);
+    // value(field "x") evaluates the field's text.
+    lv_t source = lv_type(args[0]) == LV_FIELD ? lv_get(r, NULL, "text", args[0]) : args[0];
+    if (lv_type(source) != LV_STRING) { *result = source; return true; }
+    const char *text = lv_cstr(r, source);
     while (isspace((unsigned char)*text)) text++;
     if (!*text) { *result = lv_num(0); return true; }
     // Director evaluates the text in the calling handler's variable frame, so
@@ -2489,9 +2605,57 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
     if (data_assignment(r, lv_cstr(r, args[0]))) return true;
     goto service;
   }
+  // framesToHMS(frames, tempo, dropFrame, fractionalSeconds): "sHH:MM:SS.FFD"
+  // with s a space or minus, FF frames (or hundredths) and D "d" for drop
+  // frame or a space; hmsToFrames reads that form back.
+  if (ln == LN_FRAMESTOHMS) {
+    ARITY(4);
+    double frames = lv_number(r, args[0]), tempo = lv_number(r, args[1]);
+    if (tempo <= 0) tempo = 1;
+    bool negative = frames < 0, fractional = lv_truth(r, args[3]);
+    if (negative) frames = -frames;
+    double seconds = frames / tempo;
+    long whole = (long)floor(seconds);
+    long part = fractional ? (long)floor((seconds - whole) * 100.0 + 0.5) % 100
+                           : (long)floor(frames - whole * tempo + 0.5);
+    char text[40];
+    snprintf(text, sizeof(text), "%c%02ld:%02ld:%02ld.%02ld%c", negative ? '-' : ' ', whole / 3600,
+             whole / 60 % 60, whole % 60, part, lv_truth(r, args[2]) ? 'd' : ' ');
+    *result = lv_text(r, text, false);
+    return true;
+  }
+  if (ln == LN_HMSTOFRAMES) {
+    ARITY(4);
+    const char *text = lv_cstr(r, args[0]);
+    double tempo = lv_number(r, args[1]);
+    bool negative = false;
+    while (*text == ' ' || *text == '-') negative |= *text++ == '-';
+    long field[4] = {0};
+    unsigned n = 0;
+    for (; *text && n < 4; text++) {
+      if (isdigit((unsigned char)*text)) field[n] = field[n] * 10 + (*text - '0');
+      else if (*text == ':' || *text == '.') n++;
+      else break;
+    }
+    double frames = (field[0] * 3600 + field[1] * 60 + field[2]) * tempo +
+                    (lv_truth(r, args[3]) ? field[3] * tempo / 100.0 : field[3]);
+    *result = lv_num((int32_t)floor((negative ? -frames : frames) + 0.5));
+    return true;
+  }
   if (ln == LN_SYMBOL) {
     ARITY(1);
-    *result = lv_text(r, lv_cstr(r, args[0]), true);
+    // Director cuts a longer string at its first character that cannot be
+    // part of a name: symbol("blutwurst\t\t:") is #blutwurst.
+    const char *text = lv_cstr(r, args[0]);
+    size_t n = 0;
+    if (text[0] && text[1])
+      while (isalnum((unsigned char)text[n]) || text[n] == '_') n++;
+    else n = text[0] == ' ' ? 0 : strlen(text);
+    char name[256];
+    if (n >= sizeof name) n = sizeof name - 1;
+    memcpy(name, text, n);
+    name[n] = 0;
+    *result = lv_text(r, name, true);
     return true;
   }
 service:
@@ -2902,6 +3066,14 @@ static lv_flow_t invoke_method(lv_runtime_t *r, lv_frame_t *f,
     receiver = lv_instance(r, receiver);
     if (r->failed) return LV_RETURN;
   }
+#if DG_D10
+  // rawNew makes the instance without running its new handler.
+  if (lv_type(receiver) == LV_SCRIPT && equal_text(name, "rawnew") && !argc) {
+    r->result = lv_instance(r, receiver);
+    if (!expression) r->the_result = r->result;
+    return LV_CONTINUE;
+  }
+#endif
   const lv_movie_t *movie = NULL;
   lv_t context = receiver;
   const lv_handler_t *handler = resolve_method(r, f, &context, name, &movie);
@@ -2950,6 +3122,13 @@ lv_flow_t lv_invoke_method_expr(lv_runtime_t *r, lv_frame_t *f, const char *name
                                  lv_t receiver, unsigned argc, const lv_t *args) {
   return invoke_method(r, f, name, receiver, argc, args, true, NULL);
 }
+// The steps a synchronous (expression) call may take before it fails: the
+// Director 8.5 ports walk whole animations in one (Birthday's preload).
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#define LV_EXPRESSION_STEPS (1u << 22)
+#else
+#define LV_EXPRESSION_STEPS 65536u
+#endif
 static void returned(lv_runtime_t *r, const lv_frame_t *frame) {
 #if DG_D10
   // Director MX sets `the result` on every handler return, including VOID:
@@ -2996,7 +3175,7 @@ static lv_t atomic_call(lv_runtime_t *r, unsigned depth, lv_flow_t flow) {
   if (flow == LV_YIELD)
     lv_fail(r, "yielding expression call");
   unsigned steps = 0;
-  while (!r->failed && r->depth > depth && steps++ < 65536) {
+  while (!r->failed && r->depth > depth && steps++ < LV_EXPRESSION_STEPS) {
     lv_frame_t *child = &r->frames[r->depth - 1];
     flow = step_frame(r, child);
     if (abort_run(r)) break;
@@ -3038,7 +3217,7 @@ lv_t lv_call_method(lv_runtime_t *r, lv_frame_t *f, const char *name,
   abort_run(r);
   if (flow == LV_YIELD) lv_fail(r, "yielding expression method");
   unsigned steps = 0;
-  while (!r->failed && r->depth > depth && steps++ < 65536) {
+  while (!r->failed && r->depth > depth && steps++ < LV_EXPRESSION_STEPS) {
     lv_frame_t *child = &r->frames[r->depth - 1];
     flow = step_frame(r, child);
     if (abort_run(r)) break;
@@ -3062,7 +3241,7 @@ lv_t lv_dispatch_method(lv_runtime_t *r, lv_frame_t *f, const char *name,
   abort_run(r);
   if (flow == LV_YIELD) lv_fail(r, "yielding expression method");
   unsigned steps = 0;
-  while (!r->failed && r->depth > depth && steps++ < 65536) {
+  while (!r->failed && r->depth > depth && steps++ < LV_EXPRESSION_STEPS) {
     if (!r->atomic_depth) {
       if (r->allocations_since_gc >= LV_OBJECTS / 2 ||
 #if DG_CAP_EMERGENCY_COLLECT
@@ -3309,7 +3488,17 @@ LX_INLINE void op_chunk_count(lv_runtime_t *r, lv_frame_t *f, unsigned index) {
 LX_INLINE void op_chunk_set(lv_runtime_t *r, lv_frame_t *f, unsigned index) {
   lv_t last = op_pop(r, f), first = op_pop(r, f), original = op_pop(r, f),
        value = op_pop(r, f);
-  op_push(r, f, lv_chunk_set(r, op_name(f, index), original, first, last, value));
+  lv_t replaced = lv_chunk_set(r, op_name(f, index), original, first, last, value);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // A chunk of a member put through a variable that holds the member (a
+  // text's ref, Optik's quote fix-up) rewrites the member's text; the
+  // variable keeps the member.
+  if ((lv_type(original) == LV_MEMBER || lv_type(original) == LV_FIELD) && !r->failed) {
+    lv_set(r, NULL, "text", original, replaced);
+    replaced = original;
+  }
+#endif
+  op_push(r, f, replaced);
 }
 LX_INLINE void op_chunk_delete(lv_runtime_t *r, lv_frame_t *f, unsigned index) {
   lv_t last = op_pop(r, f), first = op_pop(r, f), original = op_pop(r, f);
@@ -3568,7 +3757,13 @@ static lv_t literal(lv_runtime_t *r, const char **p, unsigned depth,
       (*p)++;
       return list;
     }
-    for (unsigned n = 0; n < 1024 && *valid; n++) {
+#if DG_D10
+    // Circus keeps every lip-sync plot list in one 148 KB literal.
+    const unsigned item_limit = 65535;
+#else
+    const unsigned item_limit = 1024;
+#endif
+    for (unsigned n = 0; n < item_limit && *valid; n++) {
       lv_t item = literal(r, p, depth + 1, valid);
       spaces(p);
       if (!n && **p == ':') {
@@ -3801,4 +3996,17 @@ lv_flow_t lv_vm_step(lv_runtime_t *r, lv_frame_t *f) {
 #undef I8
 #undef U16
 #undef I32
+}
+
+// param(n) of the running handler: its n-th passed argument, `me` first for a
+// method; VOID past the arguments passed.
+lv_t lv_param(lv_runtime_t *r, unsigned n) {
+  if (!r->depth || !n) return (lv_t){0};
+  const lv_frame_t *f = &r->frames[r->depth - 1];
+  if (n > f->argc) return (lv_t){0};
+  if (n <= f->handler->arguments) return f->locals[n - 1];
+  return f->locals[f->handler->locals + (n - 1 - f->handler->arguments)];
+}
+unsigned lv_param_count(const lv_runtime_t *r) {
+  return r->depth ? r->frames[r->depth - 1].argc : 0;
 }

@@ -1,0 +1,26 @@
+schema_version = 1
+slug = "loewenzahn-7"
+title = "Löwenzahn 7"
+status = "experimental"
+default_source = "sha256-b1d146c2f036"
+
+[[sources]]
+id = "sha256-b1d146c2f036"
+file = "Löwenzahn 7.iso"
+sha256 = "b1d146c2f036109c56dbf52b739b8571dd7681618d7ba4f5ed0906bc2a7cc15c"
+bytes = 700086272
+kind = "iso9660"
+
+[recovery]
+director_version = 850
+media_root = "DATA"
+
+[port]
+extended_d6 = true
+director_version = 850
+media_root = "DATA"
+entry_movie = "START"
+native_compatibility = true
+rom_title = "Loewenzahn 7"
+rom_save_type = 80
+controller_count = 4

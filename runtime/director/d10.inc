@@ -130,6 +130,21 @@ static const dg_movie_t *d10_cast_target(dg_runtime_t *d, const char *cast_name)
     if (eq(d->cast_swaps[i].name, cast_name)) return d->cast_swaps[i].target;
   return NULL;
 }
+// A score-placed member of a swapped library: the score names the authored
+// archive's member, which plays as the same number in the swapped one
+// (Löwenzahn's "video" cast, pointed at videoW).
+static uint32_t d10_swap_member(dg_runtime_t *d, uint32_t id) {
+  if (!d->cast_swap_count || !id)
+    return id;
+  for (unsigned c = 0; c < d->movie->cast_count; c++) {
+    const dg_cast_t *lib = &d->movie->casts[c];
+    if (lib->file != DG_ID_FILE(id) || lib->cast != DG_ID_CAST(id))
+      continue;
+    const dg_movie_t *swap = d10_cast_target(d, lib->name);
+    return swap ? DG_ID(swap->id, 1u, id & 65535u) : id;
+  }
+  return id;
+}
 // castLib values 1..cast_count index the stage movie's castlist; resident
 // controller-window casts encode as 256+i (home) and 512+i (window movie)
 // so window code can address its own libraries from any stage.
@@ -181,7 +196,7 @@ static void d10_cast_store_bind(dg_runtime_t *d, const dg_cast_t *lib,
   if (restore) {
     for (unsigned i = 0; i < d->dynamic_count; i++) {
       dg_member_t *m = &d->dynamic_members[i].member;
-      if (m->type && m->id >> 20 == lib->file) {
+      if (m->type && DG_ID_FILE(m->id) == lib->file) {
         d6_erase_field(d, m->id);
         *m = (dg_member_t){0};
         d->dynamic_members[i].name[0] = 0;
@@ -304,13 +319,13 @@ static int d10_window_member(dg_runtime_t *d, const char *cast_name,
         for (unsigned i = 0; i < file->member_count; i++)
           if (file->members[i].cast == lib_cast &&
               eq(file->members[i].name, lv_cstr(r, value))) {
-            *id = lib_file << 20 | lib_cast << 16 | file->members[i].number;
+            *id = DG_ID(lib_file, lib_cast, file->members[i].number);
             return 1;
           }
       } else if (cast_name) {
         unsigned number = (unsigned)lv_integer(r, value);
         if (number) {
-          *id = lib_file << 20 | lib_cast << 16 | number;
+          *id = DG_ID(lib_file, lib_cast, number);
           return 1;
         }
       }
@@ -328,6 +343,11 @@ static bool d10_timeouts(dg_runtime_t *d) {
     d->timeouts[i].next = d->ticks + (step ? step : 1u);
     d->timeout_cursor = (i + 1) % DG_TIMEOUTS;
     lv_t ref = lv_make(LV_TIMEOUT, (int32_t)i + 1);
+    if (lv_type(r->roots[DG_TIMEOUT_ROOT + i]) == LV_VOID) {
+      for (unsigned m = 0; m < d->loaded_count; m++)
+        if (lv_start(r, d->loaded[m]->code, d->timeouts[i].handler, 0, 1, &ref)) return true;
+      continue;
+    }
     if (lv_start_method(r, r->roots[DG_TIMEOUT_ROOT + i],
                         d->timeouts[i].handler, 1, &ref))
       return true;
@@ -452,10 +472,460 @@ static unsigned d10_flash_slot(dg_runtime_t *d, lv_t value) {
       return i + 1;
   return 0;
 }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+// The XML Parser Xtra, as Birthday reads its string tables and room
+// descriptions: parseString builds the document as nested property lists
+// whose #name, #attributeName, #attributeValue, #child and #text answer the
+// node properties the Xtra's objects do. Whitespace-only text is dropped
+// (the Xtra's ignoreWhiteSpace default); entities decode; UTF-8 stays as it
+// is, as every runtime string.
+typedef struct {
+  const char *p, *end;
+  const char *error;
+} d85_xml_t;
+static bool d85_xml_starts(const d85_xml_t *x, const char *s) {
+  size_t n = strlen(s);
+  return (size_t)(x->end - x->p) >= n && !memcmp(x->p, s, n);
+}
+static void d85_xml_skip_to(d85_xml_t *x, const char *s) {
+  size_t n = strlen(s);
+  while (x->p < x->end && !d85_xml_starts(x, s)) x->p++;
+  x->p = x->p + n <= x->end ? x->p + n : x->end;
+}
+static void d85_xml_space(d85_xml_t *x) {
+  while (x->p < x->end && isspace((unsigned char)*x->p)) x->p++;
+}
+// Decodes [from, to) with its entities into a runtime string.
+static lv_t d85_xml_string(lv_runtime_t *r, const char *from, const char *to) {
+  static char text[32768];
+  size_t n = 0;
+  while (from < to && n + 5 < sizeof(text)) {
+    if (*from != '&') { text[n++] = *from++; continue; }
+    const char *semi = memchr(from, ';', (size_t)(to - from));
+    if (!semi || semi - from > 10) { text[n++] = *from++; continue; }
+    size_t len = (size_t)(semi - from) - 1;
+    const char *name = from + 1;
+    unsigned code = 0;
+    if (len == 3 && !memcmp(name, "amp", 3)) code = '&';
+    else if (len == 2 && !memcmp(name, "lt", 2)) code = '<';
+    else if (len == 2 && !memcmp(name, "gt", 2)) code = '>';
+    else if (len == 4 && !memcmp(name, "quot", 4)) code = '"';
+    else if (len == 4 && !memcmp(name, "apos", 4)) code = '\'';
+    else if (len > 1 && name[0] == '#')
+      code = (unsigned)strtoul(name + 1 + (name[1] == 'x'), NULL, name[1] == 'x' ? 16 : 10);
+    if (!code) { text[n++] = *from++; continue; }
+    // UTF-8 for a numeric reference.
+    if (code < 0x80) text[n++] = (char)code;
+    else if (code < 0x800) { text[n++] = (char)(0xc0 | code >> 6); text[n++] = (char)(0x80 | (code & 63)); }
+    else { text[n++] = (char)(0xe0 | code >> 12); text[n++] = (char)(0x80 | ((code >> 6) & 63)); text[n++] = (char)(0x80 | (code & 63)); }
+    from = semi + 1;
+  }
+  text[n] = 0;
+  return lv_text(r, text, false);
+}
+static lv_t d85_xml_node(lv_runtime_t *r, lv_t name, lv_t attribute_names, lv_t attribute_values,
+                         lv_t children, lv_t text) {
+  lv_t pairs[10] = {lv_symbol(r, "name"), name, lv_symbol(r, "attributename"), attribute_names,
+                    lv_symbol(r, "attributevalue"), attribute_values, lv_symbol(r, "child"), children,
+                    lv_symbol(r, "text"), text};
+  return lv_list(r, 10, pairs, true);
+}
+static lv_t d85_xml_element(lv_runtime_t *r, d85_xml_t *x, unsigned depth) {
+  if (depth > 32 || x->p >= x->end || *x->p != '<') { x->error = "element expected"; return (lv_t){0}; }
+  x->p++;
+  const char *start = x->p;
+  while (x->p < x->end && !isspace((unsigned char)*x->p) && *x->p != '/' && *x->p != '>') x->p++;
+  lv_t name = d85_xml_string(r, start, x->p);
+  lv_t keys[64], values[128];
+  unsigned attributes = 0;
+  bool closed = false;
+  for (;;) {
+    d85_xml_space(x);
+    if (x->p >= x->end) { x->error = "unterminated tag"; return (lv_t){0}; }
+    if (*x->p == '/') { closed = true; x->p++; d85_xml_skip_to(x, ">"); break; }
+    if (*x->p == '>') { x->p++; break; }
+    const char *key = x->p;
+    while (x->p < x->end && *x->p != '=' && !isspace((unsigned char)*x->p)) x->p++;
+    const char *key_end = x->p;
+    d85_xml_space(x);
+    if (x->p >= x->end || *x->p != '=') { x->error = "attribute without value"; return (lv_t){0}; }
+    x->p++;
+    d85_xml_space(x);
+    char quote = x->p < x->end ? *x->p : 0;
+    if (quote != '"' && quote != '\'') { x->error = "unquoted attribute"; return (lv_t){0}; }
+    const char *value = ++x->p;
+    while (x->p < x->end && *x->p != quote) x->p++;
+    if (attributes < 64) {
+      keys[attributes] = d85_xml_string(r, key, key_end);
+      values[2 * attributes] = keys[attributes];
+      values[2 * attributes + 1] = d85_xml_string(r, value, x->p);
+      attributes++;
+    }
+    if (x->p < x->end) x->p++;
+  }
+  // Children collect in heap scratch: a room lists hundreds.
+  unsigned capacity = 16, count = 0;
+  lv_t *children = malloc(capacity * sizeof(lv_t));
+  while (!closed && children && !x->error) {
+    if (x->p >= x->end) { x->error = "unterminated element"; break; }
+    if (d85_xml_starts(x, "</")) { d85_xml_skip_to(x, ">"); break; }
+    lv_t child = {0};
+    bool have = false;
+    if (d85_xml_starts(x, "<!--")) { d85_xml_skip_to(x, "-->"); continue; }
+    if (d85_xml_starts(x, "<?")) { d85_xml_skip_to(x, "?>"); continue; }
+    if (d85_xml_starts(x, "<![CDATA[")) {
+      x->p += 9;
+      const char *data = x->p;
+      d85_xml_skip_to(x, "]]>");
+      child = d85_xml_node(r, lv_text(r, "", false), lv_list(r, 0, NULL, false), lv_list(r, 0, NULL, true),
+                           lv_list(r, 0, NULL, false), lv_bytes(r, data, (unsigned)(x->p - 3 - data)));
+      have = true;
+    } else if (*x->p == '<') {
+      child = d85_xml_element(r, x, depth + 1);
+      have = !x->error;
+    } else {
+      const char *text = x->p;
+      bool blank = true;
+      for (; x->p < x->end && *x->p != '<'; x->p++)
+        if (!isspace((unsigned char)*x->p)) blank = false;
+      if (!blank) {
+        child = d85_xml_node(r, lv_text(r, "", false), lv_list(r, 0, NULL, false), lv_list(r, 0, NULL, true),
+                             lv_list(r, 0, NULL, false), d85_xml_string(r, text, x->p));
+        have = true;
+      }
+    }
+    if (!have) continue;
+    if (count == capacity) {
+      lv_t *grown = realloc(children, 2 * capacity * sizeof(lv_t));
+      if (!grown) break;
+      children = grown;
+      capacity *= 2;
+    }
+    children[count++] = child;
+  }
+  lv_t list = lv_list(r, children ? count : 0, children, false);
+  free(children);
+  return d85_xml_node(r, name, lv_list(r, attributes, keys, false), lv_list(r, 2 * attributes, values, true),
+                      list, (lv_t){0});
+}
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+// DirectMedia video sprites (Löwenzahn 6-8, Optik): the clip starts when its
+// sprite shows it unless authored paused, and runs in 600ths of a second as
+// D5's digital video does; DirectMedia's own API counts milliseconds. A
+// member without converted video has no duration, so it has always ended.
+static void d10_video_init(dg_runtime_t *d, dg_sprite_t *s) {
+  if (s->media_member == s->value.member)
+    return;
+  const dg_member_t *m = dg_member(d, s->value.member);
+  s->media_member = s->value.member;
+  s->video_time = 0;
+  s->video_start = 0;
+  s->video_stop = 0;
+  s->video_volume = 255;
+  s->video_serial++;
+  s->video_rate = dg_is_video(m) && m->samples && !(m->video_flags & 256) ? 1 : 0;
+}
+static void d10_video_tick(dg_runtime_t *d) {
+  for (unsigned i = 1; i < DG_SPRITES; i++) {
+    dg_sprite_t *s = &d->sprites[i];
+    if (!s->value.type && !s->media_member)
+      continue;
+    d10_video_init(d, s);
+    const dg_member_t *m = s->value.type ? dg_member(d, s->value.member) : NULL;
+    if (!dg_is_video(m) || !s->video_rate)
+      continue;
+    s->video_time += 10 * s->video_rate;
+    if (s->video_time >= m->samples) {
+      if (m->video_flags & 16) {
+        s->video_time = 0;
+        s->video_serial++;
+      } else {
+        s->video_time = m->samples;
+        s->video_rate = 0;
+      }
+    }
+    dg_sprite_changed(d, i);
+  }
+}
+static void d10_video_seek(dg_sprite_t *s, const dg_member_t *m, double time) {
+  s->video_time = fmin(fmax(0, time), m->samples);
+  s->video_serial++;
+}
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+// the systemDate: the device's local date as a date's day, month and year
+// (the Adventskalender opens its doors by it; players can change it).
+static lv_t d85_system_date(lv_runtime_t *r) {
+  time_t now = time(NULL);
+  struct tm local = *localtime(&now);
+  lv_t pairs[6] = {lv_symbol(r, "year"), lv_num(local.tm_year + 1900), lv_symbol(r, "month"),
+                   lv_num(local.tm_mon + 1), lv_symbol(r, "day"), lv_num(local.tm_mday)};
+  return lv_list(r, 6, pairs, true);
+}
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+// the timeoutScript: once timeoutLength ticks pass without a click or a
+// key, the named movie handler runs, and the wait starts over (Löwenzahn
+// 8's yeti game nudges an idle player this way).
+static bool d85_idle_timeout(dg_runtime_t *d) {
+  if (!d->timeout_script[0] || !d->timeout_length || d->ticks - d->last_input_tick < d->timeout_length)
+    return false;
+  d->last_input_tick = d->ticks;
+  for (unsigned i = 0; i < d->loaded_count; i++)
+    if (lv_start(d->values, d->loaded[i]->code, d->timeout_script, 0, 0, NULL)) return true;
+  return false;
+}
+// A text member's live text: a field's rewritten text, else the authored.
+static const char *d85_member_text(dg_runtime_t *d, const dg_member_t *m) {
+  for (unsigned j = 0; j < d->field_count; j++)
+    if (d->field_members[j] == m->id)
+      return lv_cstr(d->values, d->values->roots[DG_FIELD_TEXT_ROOT + j]);
+  return m->text ? m->text : "";
+}
+// The byte where Unicode character `index` of UTF-8 text starts.
+static size_t d85_char_byte(const char *text, int index) {
+  size_t at = 0;
+  for (int n = 0; text[at] && n < index; n++)
+    for (at++; ((unsigned char)text[at] & 0xc0) == 0x80; at++) {
+    }
+  return at;
+}
+static int d85_byte_char(const char *text, size_t byte) {
+  int n = 0;
+  for (size_t at = 0; at < byte && text[at]; at++)
+    n += ((unsigned char)text[at] & 0xc0) != 0x80;
+  return n;
+}
+// The palette entry nearest an RGB colour, as an 8-bit text colour reads.
+static unsigned d85_nearest_index(dg_runtime_t *d, uint32_t rgb) {
+  unsigned best = 255;
+  uint32_t best_distance = UINT32_MAX;
+  for (unsigned i = 0; d->movie && d->movie->palette && i < 256; i++) {
+    uint32_t p = d->movie->palette[i];
+    int dr = (int)(p >> 16 & 255) - (int)(rgb >> 16 & 255), dg = (int)(p >> 8 & 255) - (int)(rgb >> 8 & 255),
+        db = (int)(p & 255) - (int)(rgb & 255);
+    uint32_t distance = (uint32_t)(dr * dr + dg * dg + db * db);
+    if (distance < best_distance) best_distance = distance, best = i;
+  }
+  return best;
+}
+// The character of a text sprite at a stage point, -1 for none.
+static int d85_sprite_char(dg_runtime_t *d, unsigned channel, lv_t point) {
+  if (!channel || channel >= DG_SPRITES || !d->platform.text_char_at || lv_type(point) != LV_LIST)
+    return -1;
+  const dg_member_t *m = dg_member(d, d->sprites[channel].value.member);
+  if (!m || (m->type != 3 && m->type != 7))
+    return -1;
+  int l, t, rr, b;
+  dg_sprite_bounds(d, &d->sprites[channel], &l, &t, &rr, &b);
+  return d->platform.text_char_at(d->context, m->id, channel, lv_integer(d->values, lv_at(d->values, point, 1)) - l,
+                                  lv_integer(d->values, lv_at(d->values, point, 2)) - t);
+}
+// A playlist entry names its sound as a member or as a [#member: ...] list.
+static uint32_t d85_sound_entry(dg_runtime_t *d, lv_t entry) {
+  if (lv_type(entry) == LV_PROPLIST) entry = lv_get(d->values, NULL, "member", entry);
+  return lv_type(entry) == LV_MEMBER ? (uint32_t)lv_id(entry) : 0;
+}
+static void d85_sound_start(dg_runtime_t *d, unsigned channel, uint32_t id) {
+  const dg_member_t *m = dg_member(d, id);
+  if (!m || m->type != 6) {
+    if (d->platform.trace) d->platform.trace(d->context, "SOUND_PLAY_EMPTY");
+    return;
+  }
+  d->sound_puppet[channel] = true;
+  d->sound_serial[channel]++;
+  play_member(d, channel, m);
+}
+static void d85_sound_queue(dg_runtime_t *d, unsigned channel, uint32_t id) {
+  if (id && d->sound_queue_count[channel] < DG_SOUND_QUEUE)
+    d->sound_queue[channel][d->sound_queue_count[channel]++] = id;
+}
+static bool d85_sound_busy(dg_runtime_t *d, unsigned channel) {
+  return d->platform.sound_busy && d->platform.sound_busy(d->context, channel);
+}
+static void d85_sound_next(dg_runtime_t *d, unsigned channel) {
+  uint32_t id = d->sound_queue[channel][0];
+  memmove(&d->sound_queue[channel][0], &d->sound_queue[channel][1],
+          sizeof(d->sound_queue[0][0]) * --d->sound_queue_count[channel]);
+  d85_sound_start(d, channel, id);
+}
+// A playing channel moves on to its next queued sound once one ends.
+static void d85_sound_service(dg_runtime_t *d) {
+  for (unsigned ch = 0; ch < DG_SOUND_CHANNELS; ch++) {
+    if (!d->sound_chain[ch] || d85_sound_busy(d, ch)) continue;
+    if (d->sound_queue_count[ch]) d85_sound_next(d, ch);
+    else d->sound_chain[ch] = false;
+  }
+}
+#endif
+// Settings the 8.5 projectors read back that change nothing on the target.
+static int32_t d10_idle_period;
 static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
   unsigned ln = lv_name_id(d->values, name);
   lv_runtime_t *r = d->values;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  if (lv_type(owner) == LV_SPRITE && ((ln == LN_MEDIABUSY) || (ln == LN_MOVIERATE) ||
+                                      (ln == LN_CURRENTTIME) || (ln == LN_MOVIETIME))) {
+    dg_sprite_t *s = sprite(d, owner);
+    const dg_member_t *m = s && s->value.type ? dg_member(d, s->value.member) : NULL;
+    if (!dg_is_video(m)) {
+      *out = lv_num(0);
+      return true;
+    }
+    d10_video_init(d, s);
+    if (ln == LN_MEDIABUSY)
+      *out = lv_num(s->video_rate != 0 && s->video_time < m->samples);
+    else if (ln == LN_MOVIERATE)
+      *out = lv_num(s->video_rate);
+    else if (ln == LN_CURRENTTIME)
+      *out = lv_num(floor(s->video_time * 10 / 6));
+    else
+      *out = lv_num(floor(s->video_time / 10));
+    return true;
+  }
+  if (lv_type(owner) == LV_MEMBER &&
+      ((ln == LN_DURATION) || (ln == LN_VIDEOWIDTH) || (ln == LN_VIDEOHEIGHT))) {
+    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+    if (dg_is_video(m)) {
+      *out = lv_num(ln == LN_DURATION ? floor(m->samples * 10.0 / 6)
+                    : ln == LN_VIDEOWIDTH ? m->width : m->height);
+      return true;
+    }
+    // A video Xtra member left unconverted (QuickTime's) has no length.
+    if (m && m->type == 15) {
+      *out = lv_num(ln == LN_DURATION ? 0 : ln == LN_VIDEOWIDTH ? m->width : m->height);
+      return true;
+    }
+  }
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  if (lv_type(owner) == LV_XTRA && lv_id(owner) == 5 &&
+      ((ln == LN_AMPVALUE) || (ln == LN_RESOLUTION))) {
+    if (ln == LN_RESOLUTION) { *out = lv_num(d->amp_resolution); return true; }
+    lv_t curve = r->roots[DG_AMP_ROOT];
+    unsigned ch = d->amp_channel ? d->amp_channel - 1u : 0u, value = 0;
+    if (d->amp_channel && lv_type(curve) == LV_LIST && d->platform.sound_position &&
+        d->platform.sound_busy && d->platform.sound_busy(d->context, ch)) {
+      unsigned index = d->platform.sound_position(d->context, ch) * d->amp_resolution / 1000u + 1u;
+      if (index <= lv_count(r, curve)) value = (unsigned)lv_integer(r, lv_at(r, curve, index));
+    }
+    *out = lv_num((int32_t)value);
+    return true;
+  }
+#endif
+  // A script member's scriptType, from the kind its handlers were
+  // converted as (Birthday tells its animation parent scripts apart).
+  if (lv_type(owner) == LV_MEMBER && (ln == LN_SCRIPTTYPE)) {
+    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+    const dg_movie_t *movie = m ? dg_loaded(d, DG_ID_FILE(m->id)) : NULL;
+    const char *kind = NULL;
+    for (unsigned i = 0; movie && m->cast && m->cast <= movie->cast_count && i < movie->code->count; i++) {
+      const lv_handler_t *h = &movie->code->handlers[i];
+      if (h->member == m->number && h->cast && eq(h->cast, movie->casts[m->cast - 1].name)) {
+        kind = h->kind;
+        break;
+      }
+    }
+    *out = !kind ? (lv_t){0}
+           : lv_symbol(r, strstr(kind, "Movie") ? "movie" : strstr(kind, "Parent") ? "parent" : "score");
+    return true;
+  }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // A text member's hyperlinks: [[first, last], ...] in characters.
+  if (lv_type(owner) == LV_MEMBER && (ln == LN_HYPERLINKS)) {
+    const dg_text_extra_t *extra = dg_text_extra(d, (uint32_t)lv_id(owner));
+    lv_t ranges[255];
+    unsigned count = extra ? (extra->link_count < 255 ? extra->link_count : 255) : 0;
+    for (unsigned i = 0; i < count; i++) {
+      lv_t pair[2] = {lv_num((int32_t)extra->links[i].first), lv_num((int32_t)extra->links[i].last)};
+      ranges[i] = lv_list(r, 2, pair, false);
+    }
+    *out = lv_list(r, count, ranges, false);
+    return true;
+  }
+#endif
+  // An rgb color's components (Löwenzahn 6's bat cave fades by them).
+  if (lv_type(owner) == LV_COLOR && ((ln == LN_RED) || (ln == LN_GREEN) || (ln == LN_BLUE))) {
+    uint32_t rgb = (uint32_t)lv_id(owner);
+    *out = lv_num((int32_t)(rgb >> (ln == LN_RED ? 16 : ln == LN_GREEN ? 8 : 0) & 255));
+    return true;
+  }
+  // A sound's authored cue points, in milliseconds and by name (Circus' hen
+  // dance times its letters from them).
+  if (lv_type(owner) == LV_MEMBER && (ln == LN_CUEPOINTTIMES || ln == LN_CUEPOINTNAMES)) {
+    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+    lv_t items[255];
+    unsigned count = m ? m->cue_count : 0;
+    for (unsigned i = 0; i < count; i++)
+      items[i] = ln == LN_CUEPOINTTIMES ? lv_num((int32_t)m->cues[i].milliseconds)
+                                        : lv_text(r, m->cues[i].name ? m->cues[i].name : "", false);
+    *out = lv_list(r, count, items, false);
+    return true;
+  }
+  // A script member's script object.
+  if (lv_type(owner) == LV_MEMBER && (ln == LN_SCRIPT)) {
+    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+    if (m && m->type == 11) { *out = lv_make(LV_SCRIPT, lv_id(owner)); return true; }
+  }
+  // A text member's alignment, from its converted style.
+  if (lv_type(owner) == LV_MEMBER && (ln == LN_ALIGNMENT)) {
+    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+    if (m && (m->type == 3 || m->type == 7)) {
+      unsigned align = m->text_style ? m->text_style->align : 0;
+      *out = lv_text(r, align == 1 ? "center" : align == 2 ? "right" : "left", true);
+      return true;
+    }
+  }
+  // Transition members play as cuts (puppetTransition), so they take no time.
+  if (lv_type(owner) == LV_MEMBER && (ln == LN_DURATION)) {
+    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+    if (m && m->type == 14) { *out = lv_num(0); return true; }
+    // A sound's length in milliseconds (Circus scales its lip-sync lists).
+    if (m && m->type == 6 && m->rate) {
+      *out = lv_num((int32_t)((uint64_t)m->samples * 1000u / m->rate));
+      return true;
+    }
+  }
   if (lv_type(owner) == LV_VOID) {
+    if (ln == LN_PARAMCOUNT) { *out = lv_num(lv_param_count(r)); return true; }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // The Xtras these ports answer for: Löwenzahn's start movie looks for
+    // DirectMedia ("DIRECTME") before it plays its videos.
+    if (ln == LN_XTRALIST) {
+      static const char *const files[] = {"DIRECTME.X32", "QTASSET.X32", "FILEIO.X32", "BUDAPI.X32"};
+      lv_t items[4];
+      for (unsigned i = 0; i < 4; i++) {
+        lv_t pair[4] = {lv_symbol(r, "name"), lv_text(r, files[i], false), lv_symbol(r, "filename"),
+                        lv_text(r, files[i], false)};
+        items[i] = lv_list(r, 4, pair, true);
+      }
+      *out = lv_list(r, 4, items, false);
+      return true;
+    }
+#endif
+    if (ln == LN_IDLEHANDLERPERIOD) { *out = lv_num(d10_idle_period); return true; }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    if (ln == LN_TIMEOUTLENGTH) { *out = lv_num((int32_t)d->timeout_length); return true; }
+    if (ln == LN_TIMEOUTSCRIPT) { *out = lv_text(r, d->timeout_script, false); return true; }
+    if (ln == LN_TIMEOUTLAPSED) { *out = lv_num((int32_t)(d->ticks - d->last_input_tick)); return true; }
+#endif
+    if (ln == LN_LASTFRAME) { *out = lv_num(d->movie ? d->movie->frame_count : 0); return true; }
+    // The Windows projectors' sound mixer; lip-sync code branches on MacroMix.
+    if (ln == LN_SOUNDDEVICE) { *out = lv_text(r, "DirectSound", false); return true; }
+    if (ln == LN_SOUNDDEVICELIST) {
+      lv_t devices[2] = {lv_text(r, "MacroMix", false), lv_text(r, "DirectSound", false)};
+      *out = lv_list(r, 2, devices, false);
+      return true;
+    }
+    if (ln == LN_APPLICATIONNAME) { *out = lv_text(r, "Projector.exe", false); return true; }
+    if ((ln == LN_DATE) || (ln == LN_SHORTDATE)) { *out = lv_text(r, "11.10.2026", false); return true; }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    if (ln == LN_SYSTEMDATE) { *out = d85_system_date(r); return true; }
+#endif
+    if (ln == LN_CLICKLOC) { *out = lv_point(r, d->mouse_x, d->mouse_y); return true; }
+    if ((ln == LN_WINDOWLIST) || (ln == LN_SCORESELECTION)) { *out = lv_list(r, 0, NULL, false); return true; }
+    if ((ln == LN_FRAMESOUND1) || (ln == LN_FRAMESOUND2)) { *out = lv_num(0); return true; }
     // Fixed environment answers for the 8 MiB target; the memory monitor
     // renders them, it never branches on them.
     if (ln == LN_MEMORYSIZE) { *out = lv_num(8 * 1024 * 1024); return true; }
@@ -464,6 +934,9 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
       return true;
     }
     if (ln == LN_ACTORLIST) {
+      // Director starts with an empty actor list that scripts add to.
+      if (lv_type(r->roots[DG_BEHAVIOR_ROOT + DG_SPRITES]) == LV_VOID)
+        r->roots[DG_BEHAVIOR_ROOT + DG_SPRITES] = lv_list(r, 0, NULL, false);
       *out = r->roots[DG_BEHAVIOR_ROOT + DG_SPRITES];
       return true;
     }
@@ -628,7 +1101,7 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
           highest = file->members[i].number;
     for (unsigned i = 0; i < d->dynamic_count; i++) {
       const dg_member_t *m = &d->dynamic_members[i].member;
-      if (m->type && m->id >> 20 == lib_file && m->cast == lib_cast &&
+      if (m->type && DG_ID_FILE(m->id) == lib_file && m->cast == lib_cast &&
           m->number > highest)
         highest = m->number;
     }
@@ -670,6 +1143,11 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
     if (slot >= DG_TIMEOUTS) return false;
     if (ln == LN_PERSISTENT) { *out = lv_num(d->timeouts[slot].persistent); return true; }
     if (ln == LN_PERIOD) { *out = lv_num(d->timeouts[slot].period); return true; }
+    // The milliSeconds at which it next fires.
+    if (ln == LN_TIME) {
+      *out = lv_num((int32_t)((uint64_t)d->timeouts[slot].next * 1000u / 60u));
+      return true;
+    }
     if (ln == LN_NAME) { *out = lv_text(r, d->timeouts[slot].name, false); return true; }
     if (ln == LN_TARGET) { *out = r->roots[DG_TIMEOUT_ROOT + slot]; return true; }
     if (ln == LN_FORGET) {
@@ -679,7 +1157,7 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
       return true;
     }
   }
-  if (lv_type(owner) == LV_MEMBER && (ln == LN_IMAGE)) {
+  if (lv_type(owner) == LV_MEMBER && ((ln == LN_IMAGE) || (ln == LN_PICTURE))) {
     *out = lv_make(LV_IMAGE, lv_id(owner));
     return true;
   }
@@ -719,6 +1197,44 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
 static bool d10_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
   unsigned ln = lv_name_id(d->values, name);
   lv_runtime_t *r = d->values;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  if (lv_type(owner) == LV_XTRA && lv_id(owner) == 5 && (ln == LN_RESOLUTION)) {
+    int32_t resolution = lv_integer(r, value);
+    d->amp_resolution = (uint16_t)(resolution > 0 && resolution < 1000 ? resolution : 15);
+    return true;
+  }
+#endif
+  // Renaming a member: the converted tables index members by their authored
+  // names, so only a name it already has is taken (Löwenzahn 8's phantom
+  // picture names its image members "1".."15" again); others are traced.
+  if (lv_type(owner) == LV_MEMBER && (ln == LN_NAME)) {
+    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+    if (!(m && m->name && eq(m->name, lv_cstr(r, value))) && d->platform.trace)
+      d->platform.trace(d->context, "MEMBER_RENAME_PENDING");
+    return true;
+  }
+  if (lv_type(owner) == LV_VOID) {
+    if (ln == LN_IDLEHANDLERPERIOD) { d10_idle_period = (int32_t)lv_integer(r, value); return true; }
+    // Authoring and mixer settings with nothing to change on the target.
+    if ((ln == LN_DEBUGPLAYBACKENABLED) || (ln == LN_SOUNDDEVICE) || (ln == LN_SOUNDKEEPDEVICE) ||
+        (ln == LN_RANDOMSEED) || (ln == LN_USEFASTQUADS) ||
+        (ln == LN_SCORESELECTION))
+      return true;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    if (ln == LN_TIMEOUTLENGTH) {
+      int32_t length = lv_integer(r, value);
+      d->timeout_length = length > 0 ? (uint32_t)length : 0;
+      d->last_input_tick = d->ticks;
+      return true;
+    }
+    if (ln == LN_TIMEOUTSCRIPT) {
+      snprintf(d->timeout_script, sizeof(d->timeout_script), "%s",
+               lv_type(value) == LV_VOID ? "" : lv_cstr(r, value));
+      for (char *c = d->timeout_script; *c; c++) *c = (char)tolower((unsigned char)*c);
+      return true;
+    }
+#endif
+  }
   if (lv_type(owner) == LV_VOID && (ln == LN_ACTORLIST)) {
     r->roots[DG_BEHAVIOR_ROOT + DG_SPRITES] = value;
     return true;
@@ -756,11 +1272,82 @@ static bool d10_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
     snprintf(d->cast_swaps[slot].stem, sizeof(d->cast_swaps[slot].stem), "%s", stem);
     d->cast_swaps[slot].target = target;
     d10_window_share_one(d, target);
+    // Sprites already showing the library's members show the new archive's.
+    for (unsigned i = 1; i < DG_SPRITES; i++) {
+      uint32_t id = d10_swap_member(d, d->sprites[i].value.member);
+      if (id != d->sprites[i].value.member) {
+        set_member(&d->sprites[i], id);
+        dg_sprite_changed(d, i);
+      }
+    }
     if (d->platform.trace) {
       char text[96];
       snprintf(text, sizeof(text), "CAST_SWAP %s %s", lib->name, target->code->name);
       d->platform.trace(d->context, text);
     }
+    return true;
+  }
+  // The compositor follows each converted image's own alpha; a script's
+  // switch is accepted as it stands.
+  if (lv_type(owner) == LV_MEMBER && (ln == LN_USEALPHA)) return true;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // Formatting a text member made at run time (Birthday's tooltips): its
+  // box keeps the size; the converted styles keep their faces, so font and
+  // colour changes are traced.
+  if (lv_type(owner) == LV_MEMBER &&
+      ((ln == LN_WIDTH) || (ln == LN_HEIGHT) || (ln == LN_FONT) || (ln == LN_FONTSIZE) ||
+       (ln == LN_FONTSTYLE) || (ln == LN_ALIGNMENT) || (ln == LN_COLOR) || (ln == LN_BGCOLOR) ||
+       (ln == LN_BOXTYPE))) {
+    for (unsigned i = 0; i < d->dynamic_count; i++) {
+      dg_member_t *m = &d->dynamic_members[i].member;
+      if (m->type && m->id == (uint32_t)lv_id(owner)) {
+        // A text box made at run time takes one line until it is sized, so
+        // the platform's entry can be opened over it.
+        if (ln == LN_WIDTH) {
+          m->width = (uint16_t)lv_integer(r, value);
+          if (!m->height) m->height = 28;
+        }
+        if (ln == LN_HEIGHT) m->height = (uint16_t)lv_integer(r, value);
+      }
+    }
+    if ((ln != LN_WIDTH) && (ln != LN_HEIGHT) && d->platform.trace)
+      d->platform.trace(d->context, "TEXT_FORMAT_PENDING");
+    return true;
+  }
+  // the alertHook names a script that would answer alerts; the port's
+  // alerts are traced, never shown.
+  if (lv_type(owner) == LV_VOID && (ln == LN_ALERTHOOK)) return true;
+  // A button's highlight is the platform's own pointer feedback.
+  if (lv_type(owner) == LV_MEMBER && (ln == LN_HILITE)) return true;
+  // QuickTime's controls on a DirectMedia sprite: movieTime in ticks.
+  if (lv_type(owner) == LV_SPRITE && ((ln == LN_MOVIERATE) || (ln == LN_MOVIETIME))) {
+    dg_sprite_t *s = sprite(d, owner);
+    const dg_member_t *m = s && s->value.type ? dg_member(d, s->value.member) : NULL;
+    if (dg_is_video(m)) {
+      d10_video_init(d, s);
+      if (ln == LN_MOVIERATE)
+        s->video_rate = lv_number(r, value);
+      else
+        d10_video_seek(s, m, lv_number(r, value) * 10);
+      s->video_serial++;
+      dg_sprite_changed(d, (unsigned)lv_id(owner));
+    }
+    return true;
+  }
+  // A text member's insertion point: entry runs through the platform's
+  // own text box, so the selection is accepted as it stands.
+  if (lv_type(owner) == LV_MEMBER && (ln == LN_SELECTION)) return true;
+  // sprite.editable overrides the member's own setting.
+  if (lv_type(owner) == LV_SPRITE && (ln == LN_EDITABLE) && lv_id(owner) >= 0 &&
+      lv_id(owner) < DG_SPRITES) {
+    d->sprite_editable[lv_id(owner)] = lv_integer(r, value) ? 1 : -1;
+    return true;
+  }
+#endif
+  // A member's picture copies a rendering (Circus measures typed text with
+  // one); the compositor keeps none, so the assignment is traced only.
+  if (lv_type(owner) == LV_MEMBER && (ln == LN_PICTURE)) {
+    if (d->platform.trace) d->platform.trace(d->context, "PICTURE_ASSIGN_IGNORED");
     return true;
   }
   if (lv_type(owner) == LV_MEMBER && (ln == LN_IMAGE)) {
@@ -787,6 +1374,16 @@ static bool d10_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
     d->image_aliases[slot].source = source;
     if (!source && d->platform.capture_stage)
       d->platform.capture_stage(d->context, member);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // A bitmap made by new() takes the stage's size and a centred
+    // registration point, as Director gives an assigned image.
+    for (unsigned i = 0; !source && i < d->dynamic_count; i++) {
+      dg_member_t *m = &d->dynamic_members[i].member;
+      if (m->id == member && m->type == 1) {
+        m->width = 800, m->height = 600, m->reg_x = 400, m->reg_y = 300;
+      }
+    }
+#endif
     d->visual_revision++;
     return true;
   }
@@ -801,6 +1398,13 @@ static bool d10_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
       uint32_t ms = (uint32_t)lv_integer(r, value);
       d->timeouts[slot].period = ms;
       d->timeouts[slot].next = d->ticks + (ms * 60u + 999u) / 1000u;
+      return true;
+    }
+    // Reschedule to fire at an absolute milliSeconds value.
+    if (ln == LN_TIME) {
+      int64_t delay = (int64_t)lv_integer(r, value) - (int64_t)(d->clock / 60000u);
+      d->timeouts[slot].next =
+          d->ticks + (delay > 0 ? (uint32_t)((delay * 60 + 999) / 1000) : 0u);
       return true;
     }
     if (ln == LN_TARGET) {
@@ -838,6 +1442,87 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     return true;
   }
   if ((ln == LN_TELL_WINDOW) && argc == 1) { d->tell_window = true; return true; }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // vList: its registration is a licence key; a file object's write() keeps
+  // a value as its Lingo literal and read() answers it, VOID when absent.
+  if (ln == LN_VLIST_REGISTER) { *out = lv_num(1); return true; }
+  if ((ln == LN_SYSTEMDATE) && !argc) { *out = d85_system_date(r); return true; }
+  // date(year, month, day) as its day number, so dates subtract to days
+  // (the Adventskalender counts down to December).
+  if ((ln == LN_DATE) && argc == 3) {
+    int64_t y = lv_integer(r, a[0]), m = lv_integer(r, a[1]), day = lv_integer(r, a[2]);
+    y -= m <= 2;
+    int64_t era = (y >= 0 ? y : y - 399) / 400, yoe = y - era * 400;
+    int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+    *out = lv_num((double)(era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468));
+    return true;
+  }
+  if (((ln == LN_READ) && argc == 1) || ((ln == LN_WRITE) && argc == 2)) {
+    lv_t file = lv_type(a[0]) == LV_PROPLIST ? lv_get(r, NULL, "vlistfile", a[0]) : (lv_t){0};
+    if (lv_type(file) == LV_STRING) {
+      static char text[32768];
+      unsigned length = 0;
+      if (ln == LN_WRITE) {
+        bool ok = lv_format(r, a[1], text, sizeof(text)) && d->platform.write_file &&
+                  d->platform.write_file(d->context, lv_cstr(r, file), text, (unsigned)strlen(text));
+        *out = lv_num(ok);
+      } else if (d->platform.read_file &&
+                 d->platform.read_file(d->context, lv_cstr(r, file), text, sizeof(text) - 1, &length) && length) {
+        text[length] = 0;
+        *out = lv_literal(r, text);
+      } else {
+        *out = (lv_t){0};
+      }
+      return true;
+    }
+  }
+#endif
+  // The PropSave Xtra: a value saved as its Lingo literal and read back as
+  // value() would, through the game's save files by name.
+  if ((ln == LN_SAVEPROPSTODISK) && argc == 2) {
+    static char text[32768];
+    const char *file = d10_path_base(lv_cstr(r, a[0]));
+    bool ok = lv_format(r, a[1], text, sizeof(text)) && d->platform.write_file &&
+              d->platform.write_file(d->context, file, text, (unsigned)strlen(text));
+    // PropSave answers VOID when it saved and an error number when not.
+    *out = ok ? (lv_t){0} : lv_num(-1);
+    return true;
+  }
+  if ((ln == LN_LOADPROPSFROMDISK) && argc == 1) {
+    static char text[32768];
+    unsigned length = 0;
+    const char *file = d10_path_base(lv_cstr(r, a[0]));
+    if (!d->platform.read_file || !d->platform.read_file(d->context, file, text, sizeof(text) - 1, &length) ||
+        !length) {
+      // An error number, as PropSave answers for a missing file.
+      *out = lv_num(-1);
+      return true;
+    }
+    text[length] = 0;
+    *out = lv_literal(r, text);
+    return true;
+  }
+  if ((ln == LN_PARAM) && argc == 1) { *out = lv_param(r, (unsigned)lv_integer(r, a[0])); return true; }
+  // The rest of the sprite's behaviors skip the current event.
+  if ((ln == LN_STOPEVENT) && !argc) { d->behavior_channel = d->behavior_cursor = 0; return true; }
+  // An Xtra's serial-number registration (PrintOMatic's register).
+  if (ln == LN_REGISTER) { *out = lv_num(0); return true; }
+  if ((ln == LN_GETOSDIRECTORY) && !argc) { *out = lv_text(r, "C:\\WINDOWS", false); return true; }
+  if ((ln == LN_QUICKTIMEVERSION) && !argc) { *out = lv_num(6); return true; }
+  // A projector halts by quitting.
+  if ((ln == LN_HALT) && !argc) { d->quit = true; return true; }
+  // Custom menu bars: the target shows none.
+  if (ln == LN_INSTALLMENU) return true;
+  if ((ln == LN_MENU) && argc == 1) { *out = (lv_t){0}; return true; }
+  // A drive holding a file: the target has none to search.
+  if ((ln == LN_BAFINDDRIVE) && argc == 2) { *out = lv_text(r, "", false); return true; }
+  // Screen geometry for the system tests: the 800x600 true-colour stage.
+  if ((ln == LN_BASCREENINFO) && argc == 1) {
+    const char *what = lv_cstr(r, a[0]);
+    *out = lv_num(d10_ends_ci(what, "width") ? 800 : d10_ends_ci(what, "height") ? 600
+                  : d10_ends_ci(what, "depth") ? 32 : 0);
+    return true;
+  }
   // Windows-only Xtra registrations succeed as no-ops on the target; a
   // missing handler would abort the caller under alert-and-continue.
   if (ln == LN_BAREGISTER) {
@@ -870,7 +1555,9 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     *out = lv_make(LV_TIMEOUT, slot + 1);
     return true;
   }
-  if ((ln == LN_NEW) && argc == 4 && lv_type(a[0]) == LV_TIMEOUT) {
+  // Without a target object the handler is a movie handler (Optik's quiz
+  // answer timer).
+  if ((ln == LN_NEW) && (argc == 4 || argc == 3) && lv_type(a[0]) == LV_TIMEOUT) {
     unsigned slot = (unsigned)lv_id(a[0]) - 1;
     if (slot >= DG_TIMEOUTS) return false;
     uint32_t ms = (uint32_t)lv_integer(r, a[1]);
@@ -880,7 +1567,7 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     d->timeouts[slot].next = d->ticks + (ms * 60u + 999u) / 1000u;
     d->timeouts[slot].active = true;
     d->timeouts[slot].persistent = false;
-    r->roots[DG_TIMEOUT_ROOT + slot] = a[3];
+    r->roots[DG_TIMEOUT_ROOT + slot] = argc == 4 ? a[3] : (lv_t){0};
     *out = a[0];
     return true;
   }
@@ -942,6 +1629,19 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     d->tell_window = false;
     return true;
   }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // sprite(n) inside `tell sprite(parent)`: the loop's own channel n when
+  // the told sprite shows a film loop, else the stage's sprite n.
+  if ((ln == LN_TELL_CHILD) && argc == 2) {
+    unsigned parent = lv_type(a[0]) == LV_SPRITE ? (unsigned)lv_id(a[0]) : (unsigned)lv_integer(r, a[0]);
+    unsigned channel = (unsigned)lv_integer(r, a[1]);
+    const dg_member_t *m = parent < DG_SPRITES ? dg_member(d, d->sprites[parent].value.member) : NULL;
+    *out = m && m->type == 2 && channel >= 1 && channel < 256
+               ? lv_make(LV_SPRITE, (int32_t)(DG_CHILD_SPRITE | parent << 8 | channel))
+               : lv_make(LV_SPRITE, (int32_t)channel);
+    return true;
+  }
+#endif
   // Sprite tells drive a flattened film timeline: one-based frames over the
   // sprite's film assets, holding past the end exactly as film advancement.
   if (((ln == LN_SPRITE_FRAME) || (ln == LN_SPRITE_LASTFRAME)) && argc == 1) {
@@ -1000,6 +1700,76 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     *out = lv_num(frame);
     return true;
   }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // The sound object's playlist: queue and setPlaylist line sounds up,
+  // play() starts the first and the channel then works through the rest;
+  // play(sound) starts that one at once and the queue follows it.
+  if (((ln == LN_QUEUE) || (ln == LN_SETPLAYLIST) || (ln == LN_GETPLAYLIST) ||
+       (ln == LN_BREAKLOOP) || (ln == LN_PLAY) || (ln == LN_FADEOUT) || (ln == LN_FADEIN) ||
+       (ln == LN_FADETO)) &&
+      argc >= 1 && lv_type(a[0]) == LV_SOUND) {
+    unsigned ch = (unsigned)lv_id(a[0]) - 1;
+    if (ch >= DG_SOUND_CHANNELS) {
+      error(d, "audio channel", name);
+      return true;
+    }
+    if ((ln == LN_QUEUE) && argc == 2) {
+      d85_sound_queue(d, ch, d85_sound_entry(d, a[1]));
+      return true;
+    }
+    if ((ln == LN_SETPLAYLIST) && argc == 2) {
+      d->sound_queue_count[ch] = 0;
+      unsigned count = lv_type(a[1]) == LV_LIST ? lv_count(r, a[1]) : 0;
+      for (unsigned i = 1; i <= count; i++) d85_sound_queue(d, ch, d85_sound_entry(d, lv_at(r, a[1], i)));
+      return true;
+    }
+    if ((ln == LN_GETPLAYLIST) && argc == 1) {
+      lv_t items[DG_SOUND_QUEUE];
+      for (unsigned i = 0; i < d->sound_queue_count[ch]; i++) {
+        lv_t pair[2] = {lv_symbol(r, "member"), lv_make(LV_MEMBER, (int32_t)d->sound_queue[ch][i])};
+        items[i] = lv_list(r, 2, pair, true);
+      }
+      *out = lv_list(r, d->sound_queue_count[ch], items, false);
+      return true;
+    }
+    // fadeOut(ms) runs the channel's volume down as `sound fadeOut` does;
+    // fadeIn and fadeTo set their end volume at once (the mixer ramps
+    // only down).
+    if ((ln == LN_FADEOUT) && argc <= 2) {
+      uint32_t ms = argc == 2 ? (uint32_t)lv_integer(r, a[1]) : 1000u;
+      cancel_fade(d, ch);
+      d->fade_start[ch] = d->ticks;
+      d->fade_duration[ch] = ms * 60u / 1000u;
+      d->fade_volume[ch] = d->channel_volume[ch];
+      if (!d->fade_duration[ch]) d->channel_volume[ch] = 0;
+      return true;
+    }
+    if ((ln == LN_FADEIN) || (ln == LN_FADETO)) {
+      cancel_fade(d, ch);
+      if (ln == LN_FADETO && argc >= 2) {
+        int volume = lv_integer(r, a[1]);
+        d->channel_volume[ch] = (uint16_t)(volume < 0 ? 0 : volume > 255 ? 255 : volume);
+      } else if (!d->channel_volume[ch]) d->channel_volume[ch] = 255;
+      return true;
+    }
+    if (ln == LN_BREAKLOOP) {
+      // The mixer cannot end a loop at its next pass; the sound loops on.
+      if (d->platform.trace) d->platform.trace(d->context, "SOUND_BREAKLOOP_APPROXIMATED");
+      return true;
+    }
+    if ((ln == LN_PLAY) && argc == 1) {
+      if (!d85_sound_busy(d, ch) && d->sound_queue_count[ch]) d85_sound_next(d, ch);
+      d->sound_chain[ch] = true;
+      return true;
+    }
+    if ((ln == LN_PLAY) && argc == 2 && lv_type(a[1]) == LV_PROPLIST) {
+      d85_sound_start(d, ch, d85_sound_entry(d, a[1]));
+      d->sound_chain[ch] = true;
+      return true;
+    }
+    if ((ln == LN_PLAY) && argc == 2) d->sound_chain[ch] = true;
+  }
+#endif
   // sound(n).play(member) starts a cast sound on the channel; the score's
   // puppet flag holds so frame sounds do not steal the channel.
   if ((ln == LN_PLAY) && argc == 2 && lv_type(a[0]) == LV_SOUND &&
@@ -1040,10 +1810,118 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
                   d->platform.sound_busy(d->context, (unsigned)lv_id(a[0]) - 1));
     return true;
   }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // ticks() and milliseconds() as functions answer as `the` properties do.
+  if (((ln == LN_TICKS) || (ln == LN_MILLISECONDS)) && argc == 0) {
+    *out = lv_num((ln == LN_TICKS) ? (double)d->ticks : (double)(d->clock / 60000u));
+    return true;
+  }
+  // DirectMedia's sprite functions: videoSeek takes milliseconds.
+  if (((ln == LN_VIDEOPAUSE) || (ln == LN_VIDEOPLAY) || (ln == LN_VIDEOSEEK) ||
+       (ln == LN_VIDEOSTOP)) && argc >= 1 && lv_type(a[0]) == LV_SPRITE) {
+    dg_sprite_t *s = sprite(d, a[0]);
+    const dg_member_t *m = s && s->value.type ? dg_member(d, s->value.member) : NULL;
+    if (!dg_is_video(m))
+      return true;
+    d10_video_init(d, s);
+    if (ln == LN_VIDEOPLAY) {
+      if (s->video_time >= m->samples)
+        d10_video_seek(s, m, 0);
+      s->video_rate = 1;
+    } else if (ln == LN_VIDEOPAUSE) {
+      s->video_rate = 0;
+    } else if (ln == LN_VIDEOSTOP) {
+      s->video_rate = 0;
+      d10_video_seek(s, m, 0);
+    } else if (argc >= 2) {
+      d10_video_seek(s, m, lv_number(r, a[1]) * 6 / 10);
+    }
+    s->video_serial++;
+    dg_sprite_changed(d, (unsigned)lv_id(a[0]));
+    return true;
+  }
+  // xmlParser.parseString(text): the document element becomes the parser's
+  // one child; getError() answers VOID once that worked.
+  if ((ln == LN_PARSESTRING) && argc == 2 && lv_type(a[0]) == LV_PROPLIST) {
+    const char *text = lv_cstr(r, a[1]);
+    d85_xml_t x = {text, text + strlen(text), NULL};
+    for (;;) {
+      d85_xml_space(&x);
+      if (d85_xml_starts(&x, "<?")) d85_xml_skip_to(&x, "?>");
+      else if (d85_xml_starts(&x, "<!")) d85_xml_skip_to(&x, ">");
+      else break;
+    }
+    lv_t root = d85_xml_element(r, &x, 0);
+    if (x.error) {
+      lv_set(r, NULL, "xmlerror", a[0], lv_text(r, x.error, false));
+      *out = lv_num(-1);
+      return true;
+    }
+    lv_set(r, NULL, "child", a[0], lv_list(r, 1, &root, false));
+    lv_set(r, NULL, "xmlerror", a[0], (lv_t){0});
+    *out = lv_num(0);
+    return true;
+  }
+  if ((ln == LN_GETERROR) && argc == 1 && lv_type(a[0]) == LV_PROPLIST) {
+    *out = lv_get(r, NULL, "xmlerror", a[0]);
+    return true;
+  }
+#endif
+  // script.handlers() and instance.handlers(): the script's own handler
+  // names as symbols (Circus's event broker checks for receive handlers).
+  if ((ln == LN_HANDLERS) && argc == 1 &&
+      (lv_type(a[0]) == LV_INSTANCE || lv_type(a[0]) == LV_SCRIPT)) {
+    lv_t script = lv_type(a[0]) == LV_SCRIPT ? a[0] : lv_get(r, NULL, "script", a[0]);
+    lv_t names[128];
+    unsigned count = 0;
+    const dg_movie_t *movie =
+        lv_type(script) == LV_SCRIPT ? dg_loaded(d, DG_ID_FILE(lv_id(script))) : NULL;
+    unsigned cast = DG_ID_CAST(lv_id(script));
+    if (movie && cast && cast <= movie->cast_count) {
+      const char *cast_name = movie->casts[cast - 1].name;
+      unsigned member = (uint32_t)lv_id(script) & 65535;
+      for (unsigned i = 0; i < movie->code->count && count < 128; i++) {
+        const lv_handler_t *h = &movie->code->handlers[i];
+        if (h->member == member && eq(h->cast, cast_name))
+          names[count++] = lv_symbol(r, h->name);
+      }
+    }
+    *out = lv_list(r, count, names, false);
+    return true;
+  }
+  // The sound object's pause/resume pair: the mixer has no pause, so the
+  // channel plays on (traced) and a bare play() resumes nothing.
+  if (((ln == LN_PAUSE) || (ln == LN_PLAY)) && argc == 1 &&
+      lv_type(a[0]) == LV_SOUND) {
+    if ((ln == LN_PAUSE) && d->platform.trace)
+      d->platform.trace(d->context, "SOUND_PAUSE_APPROXIMATED");
+    return true;
+  }
+  // image(width, height, depth) makes a blank image; assigned to a member
+  // it draws nothing. Cropping answers a blank image too (traced): the
+  // compositor keeps no cropped stage snapshots.
+  if ((ln == LN_IMAGE) && argc >= 2 && argc <= 4 &&
+      lv_type(a[0]) != LV_MEMBER && lv_type(a[0]) != LV_IMAGE) {
+    *out = lv_make(LV_IMAGE, (int32_t)DG_IMAGE_BLANK);
+    return true;
+  }
+  if ((ln == LN_CROP) && argc == 2 && lv_type(a[0]) == LV_IMAGE) {
+    if (d->platform.trace)
+      d->platform.trace(d->context, "IMAGE_CROP_BLANK");
+    *out = lv_make(LV_IMAGE, (int32_t)DG_IMAGE_BLANK);
+    return true;
+  }
   // Imaging Lingo on member surfaces: reads answer the member's geometry,
   // mutations stay traced approximations until a native compositor exists.
   if (argc >= 1 && lv_type(a[0]) == LV_IMAGE) {
     if (ln == LN_DUPLICATE) { *out = a[0]; return true; }
+    // The alpha channel as its own image: the surface stands for it, and the
+    // copy is traced (Circus composes its puzzle patches this way).
+    if (ln == LN_EXTRACTALPHA) {
+      if (d->platform.trace) d->platform.trace(d->context, "IMAGE_OP_PENDING extractalpha");
+      *out = a[0];
+      return true;
+    }
     if ((ln == LN_SETALPHA) || (ln == LN_FILL) ||
         (ln == LN_COPYPIXELS) || (ln == LN_DRAW) ||
         (ln == LN_SETPIXEL)) {
@@ -1330,6 +2208,103 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
                                          (unsigned)strlen(text)));
     return true;
   }
+  // Deleting a movie file the port ships is a no-op (Löwenzahn 7's photo
+  // shop clears its scratch movie); a save file is emptied, which reads
+  // back as absent.
+  // baCopyFile(from, to, overwrite): a save file copies within the save
+  // store; anything else (the disc's movies) answers success untouched.
+  if ((ln == LN_BACOPYFILE) && argc >= 2) {
+    unsigned length = 0;
+    const char *from = lv_cstr(r, a[0]);
+    if (d->platform.read_file && d->platform.write_file &&
+        d->platform.read_file(d->context, d10_path_base(from), d10_ini_data, sizeof(d10_ini_data), &length) &&
+        length) {
+      char target[128];
+      snprintf(target, sizeof(target), "%s", d10_path_base(lv_cstr(r, a[1])));
+      d->platform.write_file(d->context, target, d10_ini_data, length);
+    }
+    *out = lv_num(0);
+    return true;
+  }
+  // The stage window's handle, and blocking the mouse to it: Birthday's
+  // Malefiz turns block clicks with a sprite of their own as well.
+  if ((ln == LN_BASTAGEHANDLE) && argc == 0) { *out = lv_num(1); return true; }
+  if ((ln == LN_BADISABLEMOUSE) && argc >= 1) { *out = lv_num(1); return true; }
+  // File attributes have nothing to change in the save store; the open
+  // file dialog answers as cancelled (Löwenzahn 7's photo import).
+  if ((ln == LN_BASETFILEATTRIBUTES) && argc >= 1) { *out = lv_num(1); return true; }
+  if ((ln == LN_BAGETFILENAME) && argc >= 1) { *out = lv_text(r, "", false); return true; }
+  // inflate(rect, dx, dy) widens a rectangle on every side.
+  if ((ln == LN_INFLATE) && argc == 3 && lv_type(a[0]) == LV_LIST) {
+    double dx = lv_number(r, a[1]), dy = lv_number(r, a[2]);
+    *out = lv_rect(r, lv_number(r, lv_at(r, a[0], 1)) - dx, lv_number(r, lv_at(r, a[0], 2)) - dy,
+                   lv_number(r, lv_at(r, a[0], 3)) + dx, lv_number(r, lv_at(r, a[0], 4)) + dy);
+    return true;
+  }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // sprite.pointToWord(point) / pointToChar(point): the word or character
+  // of a text sprite under a stage point, -1 where there is none (Optik's
+  // lexicons find the link word clicked this way).
+  if (((ln == LN_POINTTOWORD) || (ln == LN_POINTTOCHAR)) && argc == 2 && lv_type(a[0]) == LV_SPRITE) {
+    unsigned channel = (unsigned)lv_id(a[0]);
+    int index = d85_sprite_char(d, channel, a[1]);
+    if (index < 0) { *out = lv_num(-1); return true; }
+    if (ln == LN_POINTTOCHAR) { *out = lv_num(index + 1); return true; }
+    const char *text = d85_member_text(d, dg_member(d, d->sprites[channel].value.member));
+    size_t at = d85_char_byte(text, index);
+    if (!text[at] || isspace((unsigned char)text[at])) { *out = lv_num(-1); return true; }
+    int words = 0;
+    bool in_word = false;
+    for (size_t i = 0; i <= at; i++) {
+      bool space = isspace((unsigned char)text[i]) != 0;
+      if (!space && !in_word) words++;
+      in_word = !space;
+    }
+    *out = lv_num(words);
+    return true;
+  }
+  // locToCharPos(member, point): the character at a point of the member's
+  // own box, 1-based (0 where there is none).
+  if ((ln == LN_LOCTOCHARPOS) && argc == 2 && lv_type(a[0]) == LV_MEMBER && lv_type(a[1]) == LV_LIST) {
+    int index = d->platform.text_char_at
+                    ? d->platform.text_char_at(d->context, (uint32_t)lv_id(a[0]), 0,
+                                               lv_integer(r, lv_at(r, a[1], 1)), lv_integer(r, lv_at(r, a[1], 2)))
+                    : -1;
+    *out = lv_num(index + 1);
+    return true;
+  }
+  // chunkForeColor(member, kind, first, last): the palette colour of a text
+  // chunk's first character, from the member's colour runs (the compiler
+  // reads `the foreColor of word n of member m` this way).
+  if ((ln == LN_CHUNKFORECOLOR) && argc == 4) {
+    const dg_member_t *m = lv_type(a[0]) == LV_MEMBER || lv_type(a[0]) == LV_FIELD
+                               ? dg_member(d, (uint32_t)lv_id(a[0])) : NULL;
+    if (!m) { *out = lv_num(0); return true; }
+    const char *text = d85_member_text(d, m);
+    size_t start = 0, end = 0;
+    lv_t source = lv_text(r, text, false);
+    if (!lv_chunk_range(r, lv_cstr(r, a[1]), source, a[2], a[3], &start, &end)) { *out = lv_num(0); return true; }
+    uint32_t rgb = m->text_style ? m->text_style->color : 0;
+    const dg_text_extra_t *extra = dg_text_extra(d, m->id);
+    int index = d85_byte_char(text, start);
+    for (unsigned i = 0; extra && i < extra->run_count && extra->runs[i].offset <= (uint32_t)index; i++)
+      rgb = extra->runs[i].rgb;
+    *out = lv_num((int32_t)d85_nearest_index(d, rgb));
+    return true;
+  }
+#endif
+  // sleep(ms) would stall the whole player; the port moves on at once.
+  if ((ln == LN_SLEEP) && argc == 1) return true;
+  if ((ln == LN_BADELETEFILE) && argc == 1) {
+    const char *path = lv_cstr(r, a[0]);
+    if (d10_ends_ci(path, ".dxr") || d10_ends_ci(path, ".dir") || d10_ends_ci(path, ".cxt")) {
+      *out = lv_num(1);
+      return true;
+    }
+    *out = lv_num(d->platform.write_file &&
+                  d->platform.write_file(d->context, d10_path_base(path), "", 0));
+    return true;
+  }
   if ((ln == LN_BAFILEEXISTS) && argc == 1) {
     const char *path = lv_cstr(r, a[0]);
     // Converted movie files always ship on the ROM; navigation still fails
@@ -1341,10 +2316,11 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
       return true;
     }
     unsigned length = 0;
+    // An archive slot never written answers empty: no such file yet.
     *out = lv_num(d->platform.read_file &&
                   d->platform.read_file(d->context, d10_path_base(path),
                                         d10_ini_data, sizeof(d10_ini_data),
-                                        &length));
+                                        &length) && length);
     return true;
   }
   if ((ln == LN_BACREATEFOLDER) || (ln == LN_BAFOLDEREXISTS) ||
@@ -1357,6 +2333,20 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     return true;
   }
   if (ln == LN_BAFINDWINDOW) { *out = lv_num(0); return true; }
+  // A processor past every authored slow-machine threshold (Birthday trims
+  // animations below 751 MHz).
+  if ((ln == LN_BACPUINFO) && argc == 1) {
+    const char *item = lv_cstr(r, a[0]);
+    *out = d10_span_ci(item, (unsigned)strlen(item), "speed") ? lv_num(1000)
+                                                             : lv_text(r, "Pentium", false);
+    return true;
+  }
+  // The disc's folders hold no developer tools: Birthday's debug menu
+  // lists none.
+  if ((ln == LN_BAFOLDERLIST) || (ln == LN_BAFILELIST)) {
+    *out = lv_list(r, 0, NULL, false);
+    return true;
+  }
   if (ln == LN_BAGETVOLUME) { *out = lv_num(100); return true; }
   if (ln == LN_BAVERSION) { *out = lv_text(r, "winxp", false); return true; }
   if (ln == LN_BAWINDOWINFO) { *out = lv_text(r, "normal", false); return true; }

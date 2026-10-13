@@ -107,11 +107,13 @@ pub fn sound_resource(b: &[u8]) -> Result<Sound, String> {
     }
     let bytes = frames * channels as f64 * bits as f64 / 8.0;
     if ![1, 2].contains(&channels) || ![8, 16].contains(&bits) || rate == 0 || frames.fract() != 0.0
-        || bytes != (h.len() - data_offset) as f64 || loop_start > loop_end || loop_end as f64 > frames
+        // Shockwave's resources pad the samples by a few bytes past the frames.
+        || bytes > (h.len() - data_offset) as f64 || loop_start > loop_end || loop_end as f64 > frames
     {
         return Err("invalid snd sample bounds".into());
     }
-    Ok(Sound { rate, frames: frames as u32, channels, bits, loop_start, loop_end, samples: h[data_offset..].to_vec() })
+    let samples = h[data_offset..data_offset + bytes as usize].to_vec();
+    Ok(Sound { rate, frames: frames as u32, channels, bits, loop_start, loop_end, samples })
 }
 
 /// STXT: a 12-byte header and bounded 20-byte FontStyle records.

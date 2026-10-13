@@ -14,7 +14,8 @@ use crate::emit::text_hash;
 pub const DG_SPAN: u16 = 0x8000;
 
 /// The runtime family a package is laid out for (runtime/lingo/family.h):
-/// the port's Director version (500, 600, 700, 800, 1000) and whether it is
+/// the port's Director version (500, 600, 700, 800, 1000; an 8.5 port is laid
+/// out as 1000) and whether it is
 /// built with the extended-D6 services.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Profile {
@@ -112,14 +113,20 @@ pub struct Member {
     // DG_MODERN: indices into Scene::styles
     pub style: Option<u16>,
     pub insert_style: Option<u16>,
-    // DG_D5
+    // DG_D5, and DG_D10's DirectMedia video
     pub video_audio: String,
     pub video_flags: u32,
+    // DG_D5
     pub film_sounds: Vec<u32>,
     // DG_D10
     pub source_xtra: u8,
     pub flash_labels: Vec<(String, u16)>,
     pub flash_fields: Vec<FlashField>,
+    /// A text member's colour runs as (first character, 0xRRGGBB), where
+    /// its words differ in colour (Optik's lexicon marks links in green).
+    pub text_runs: Vec<(u32, u32)>,
+    /// Its hyperlinks: first and last character (1-based) and the data.
+    pub links: Vec<(u32, u32, String)>,
 }
 
 /// dg_spec_t, in field order.
@@ -225,6 +232,11 @@ pub fn score_tempo(record: &[u8], version: u32, extended: bool) -> Result<u16, S
     if (version >= 7 || extended) && opcode == 247 {
         return Ok(0);
     }
+    // Waits for sound channel 1 or 2, or for a click: the tempo channel's
+    // kind carries them (Löwenzahn 6's narrated frames).
+    if version >= 7 && matches!(opcode, 248 | 254 | 255) {
+        return Ok(0);
+    }
     if opcode != 246 {
         return Err(format!("unsupported Director {version} tempo opcode {opcode}"));
     }
@@ -242,6 +254,10 @@ fn movie_version(movie: &Value) -> u32 {
     let mut declared = int(movie.get("directorVersion")).max(0) as u32;
     if movie.get("directorVersion").is_none() {
         declared = 6;
+    }
+    // Director 8.5 files carry the 1006-channel score of the D10 layout.
+    if declared >= 850 {
+        declared = 1000;
     }
     if declared >= 100 {
         declared /= 100;
@@ -496,7 +512,7 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
             let file = text(library.get("file"));
             let target = id_of(&file)?;
             let target_cast = if file == name { cast } else { 1 };
-            Ok(target << 20 | (target_cast as u32) << 16 | member as u32)
+            Ok(target << 21 | (target_cast as u32) << 16 | member as u32)
         };
         let palette: Vec<u32> = match movie.get("palette").and_then(Value::as_array) {
             Some(p) => p.iter().map(|v| int(Some(v)) as u32).collect(),
@@ -518,7 +534,7 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 .and_then(Value::as_array)
                 .map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect())
                 .unwrap_or_default();
-            if film_assets.len() > 255 {
+            if film_assets.len() > 65535 {
                 return Err(format!("{name}: film loop with {} poses", film_assets.len()));
             }
             let what = |field: &str| format!("{name} member {}:{} {field}", int(m.get("cast")), int(m.get("number")));
@@ -602,8 +618,11 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
             let source_xtra = match m.get("xtra").and_then(|x| x.get("symbol")).and_then(Value::as_str) {
                 Some("flash") => 1,
                 Some("vectorShape") => 2,
+                Some("TBDIRECTMEDIA") => 3,
                 _ => 0,
             };
+            let video = version == 5 || (version >= 10 && source_xtra == 3);
+            let (text_runs, links) = if version >= 10 { text_runs_and_links(m, &what)? } else { (Vec::new(), Vec::new()) };
             members.push(Member {
                 id: reference(int(m.get("cast")), int(m.get("number")))?,
                 number: narrow(int(m.get("number")), &what("number"))?,
@@ -634,12 +653,14 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 cues,
                 style,
                 insert_style,
-                video_audio: if version == 5 { text(m.get("videoAudio")) } else { String::new() },
-                video_flags: if version == 5 { narrow(int(m.get("videoFlags")), &what("videoFlags"))? } else { 0 },
+                video_audio: if video { text(m.get("videoAudio")) } else { String::new() },
+                video_flags: if video { narrow(int(m.get("videoFlags")), &what("videoFlags"))? } else { 0 },
                 film_sounds,
                 source_xtra: if version >= 10 { source_xtra } else { 0 },
                 flash_labels,
                 flash_fields,
+                text_runs,
+                links,
             });
         }
         if members.len() > u16::MAX as usize {
@@ -733,6 +754,8 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 } else {
                     let kind = if c == 1 && version < 7 {
                         if version == 5 { b[6] } else { score_tempo(&b, version, extended)? as u8 }
+                    } else if c == 1 && matches!(b[6], 248 | 254 | 255) {
+                        b[6]
                     } else {
                         0
                     };
@@ -844,4 +867,45 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
         });
     }
     Ok(result)
+}
+
+/// A text member's colour runs and hyperlinks from its Paige typography.
+/// Runs are kept only where the text changes colour; a run's offset counts
+/// characters, as the hosts lay the text out.
+#[allow(clippy::type_complexity)]
+fn text_runs_and_links(m: &Value, what: &dyn Fn(&str) -> String) -> Result<(Vec<(u32, u32)>, Vec<(u32, u32, String)>), String> {
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    let typography = &m["typography"];
+    if let (Some(styles), Some(style_runs)) = (typography["styles"].as_array(), typography["styleRuns"].as_array()) {
+        let length = text(m.get("text")).chars().count() as i64;
+        for run in style_runs {
+            let offset = int(run.get("offset"));
+            let Some(style) = usize::try_from(int(run.get("index"))).ok().and_then(|i| styles.get(i)) else {
+                return Err(what("style run"));
+            };
+            if offset >= length {
+                continue;
+            }
+            let channel = |i: usize| (int(style["foreground"].get(i)) as u32 >> 8) & 255;
+            let rgb = channel(0) << 16 | channel(1) << 8 | channel(2);
+            if runs.last().is_none_or(|last| last.1 != rgb) {
+                runs.push((narrow(offset, &what("style run offset"))?, rgb));
+            }
+        }
+        if runs.len() < 2 {
+            runs.clear();
+        }
+    }
+    let mut links = Vec::new();
+    for link in m.get("hyperlinks").and_then(Value::as_array).into_iter().flatten() {
+        links.push((
+            narrow(int(link.get(0)), &what("hyperlink start"))?,
+            narrow(int(link.get(1)), &what("hyperlink end"))?,
+            text(link.get(2)),
+        ));
+    }
+    if runs.len() > 65535 || links.len() > 65535 {
+        return Err(what("text runs or hyperlinks over 65535"));
+    }
+    Ok((runs, links))
 }

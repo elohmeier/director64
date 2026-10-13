@@ -172,7 +172,7 @@ fn static_vector_xmed_rasterizes_authored_geometry_and_rejects_unknown_swf_tags(
     }
     let error = |extra: &[u8]| vector_shape_pixels(&vector_fixture(extra)).err().unwrap();
     assert!(error(&tag(12, &[7, 0])).contains("needs explicit conversion"));
-    assert!(error(&tag(6, &[])).contains("unsupported static SWF tag 6"));
+    assert!(error(&tag(19, &[])).contains("unsupported static SWF tag 19"));
     let whole = vector_fixture(&[]);
     assert!(vector_shape_pixels(&whole[..whole.len() - 1]).err().unwrap().contains("envelope"));
 }

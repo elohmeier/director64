@@ -17,6 +17,15 @@ addToLibrary({
     HEAPU8.set(plane, coverage);
     return 1;
   },
+  d64_host_layout__deps: ['$UTF8ToString'],
+  d64_host_layout: (text, width, height, font, size, align, ascent, lineHeight, boxes, max) => {
+    const style = size ? {font, size, align, ascent, lineHeight} : null;
+    const placed = Module.director64Host.layout?.(UTF8ToString(text), width, height, style);
+    if (!placed) return 0;
+    const count = Math.min(max, placed.length >> 2);
+    HEAP16.set(placed.subarray(0, count * 4), boxes >> 1);
+    return count;
+  },
   d64_host_sound__deps: ['$UTF8ToString'],
   d64_host_sound: (channel, asset, looping, loopStart, loopEnd) => {
     Module.director64Host.sound?.(channel, asset ? UTF8ToString(asset) : null,

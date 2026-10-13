@@ -82,6 +82,11 @@ fn compatibility(program: &Value, port: &Port) -> R<Value> {
         "findus-mucklas" => mucklas_compatibility(program, &port.source_sha256),
         "lernerfolg-deutsch-1-2" => deutsch_compatibility(program, &port.source_sha256),
         "loewenzahn-1" => loewenzahn::compatibility(program, &port.source_sha256),
+        "findus-ghosts" => ghosts_compatibility(program, &port.source_sha256),
+        "findus-circus" => circus_compatibility(program, &port.source_sha256),
+        "loewenzahn-6" | "loewenzahn-7" | "loewenzahn-8" | "loewenzahn-optik" | "loewenzahn-advent" => {
+            optgraph_compatibility(program)
+        }
         other => Err(format!("{other}: its compatibility fixes are not in the converter yet")),
     }
 }
@@ -124,6 +129,130 @@ fn mucklas_compatibility(program: &Value, source: &str) -> R<Value> {
                 "source_sha256": SCRIPT, "bytecode_offsets": [546, 579], "calls_changed": count,
                 "from": "getat", "to": "getaprop", "original_projector_verified": false}]),
     );
+    Ok(result)
+}
+
+/// Findus Gespenster: the film-loop players' puppetAllSprites sweeps every
+/// score channel inside `tell sprite(loop)`, twice a frame per animated
+/// character, to puppet the told film loop's own channels. Flattened loops
+/// have none, and the sweep's 2,000 iterations a character outrun the
+/// target's service budget, so its three copies lower to an empty body.
+fn ghosts_compatibility(program: &Value, source: &str) -> R<Value> {
+    const SOURCE: &str = "05d7ad48350100e96d1deadb10f0dfd5f099dc19d7b63180647ca756239ed41b";
+    const SWEEP: &str = "85d9eb23db484959f0ebe059e3347249c150f9aadc9e1d64d964287386b7613f";
+    if source != SOURCE {
+        return Err("Ghosts compatibility source changed".into());
+    }
+    let mut result = program.clone();
+    let mut fixes = Vec::new();
+    for (movie, member) in [("GLOBPROG.CXT", 25), ("HUEHNER.DXR", 15), ("SCHATTEN.DXR", 37)] {
+        let mut matches = find_handlers(&mut result, movie, member, "puppetallsprites");
+        if matches.len() != 1 || matches[0]["source_sha256"] != SWEEP {
+            return Err(format!("Ghosts puppetAllSprites in {movie} changed; review required"));
+        }
+        matches[0]["body"] = json!([]);
+        fixes.push(json!({"id": "flattened-loop-puppet-sweep", "movie": movie, "member": member,
+                          "handler": "puppetallsprites", "source_sha256": SWEEP,
+                          "disposition": "no-channels-in-a-flattened-film-loop", "original_projector_verified": false}));
+    }
+    result.as_object_mut().ok_or("program")?.insert("compatibility_fixes".into(), Value::Array(fixes));
+    Ok(result)
+}
+
+/// Circus's linked sounds: the casts keep each voice line and effect as a
+/// member linked to "<name>.aif" in MOVIES\SOUNDS, which the recovery
+/// leaves empty; each takes the host's converted record of its file.
+fn circus_media(model: &mut Value, fonts: &PortFonts) -> R<()> {
+    let mut by_name = std::collections::HashMap::new();
+    for record in &fonts.external_media {
+        let source = record["source"].as_str().unwrap_or("");
+        let file = source.rsplit('/').next().unwrap_or(source).to_lowercase();
+        let stem = file.strip_suffix(".aif").ok_or("Circus external media is not AIFF")?.to_string();
+        if by_name.insert(stem, record.clone()).is_some() {
+            return Err("ambiguous Circus sound file".into());
+        }
+    }
+    let mut bound = 0;
+    for movie in model["movies"].as_array_mut().into_iter().flatten() {
+        for member in movie["members"].as_array_mut().into_iter().flatten() {
+            if member["type"] != 6 || member["empty"] != true {
+                continue;
+            }
+            let name = member["name"].as_str().unwrap_or("").to_lowercase();
+            let Some(record) = by_name.get(&name) else { continue };
+            if record["audio"].as_str().unwrap_or("").is_empty() {
+                return Err(format!("Circus sound {name} did not convert"));
+            }
+            let m = member.as_object_mut().ok_or("member")?;
+            m.remove("empty");
+            m.insert("asset".into(), record["audio"].clone());
+            m.insert("rate".into(), record["rate"].clone());
+            m.insert("frames".into(), record["frames"].clone());
+            m.insert("channels".into(), record["channels"].clone());
+            m.insert("loopStart".into(), json!(0));
+            m.insert("loopEnd".into(), record["frames"].clone());
+            m.insert("looping".into(), json!(0));
+            m.insert("externalAudio".into(), record["source"].clone());
+            bound += 1;
+        }
+    }
+    if bound == 0 {
+        return Err("Circus linked sounds not found".into());
+    }
+    model["externalMedia"] = Value::Array(fonts.external_media.clone());
+    Ok(())
+}
+
+/// Circus's copy check: getCDCode calls initdisplay in the disc's
+/// optgraph.dll through the GLU32 Xtra and the engine quits unless it
+/// answers the authored Verification constant. The port answers that
+/// constant, as a stub optgraph.dll does under the original projector.
+fn circus_compatibility(program: &Value, source: &str) -> R<Value> {
+    const SOURCE: &str = "40d3f559158e8f606487563c0d9ad4712cbb6cd6836587d7fc555aaa872be9a9";
+    const CD_CODE: &str = "660e4add2b83a06e76279e7010676f44dc61fc03eb694bdeb9480cc29d209404";
+    const VERIFICATION: i64 = 50576302;
+    if source != SOURCE {
+        return Err("Circus compatibility source changed".into());
+    }
+    let mut result = program.clone();
+    let mut fixes = Vec::new();
+    for member in [12, 144] {
+        let mut matches = find_handlers(&mut result, "ENGINE.CXT", member, "getcdcode");
+        if matches.len() != 1 || matches[0]["source_sha256"] != CD_CODE {
+            return Err(format!("Circus getCDCode in ENGINE.CXT {member} changed; review required"));
+        }
+        let line = matches[0]["line"].clone();
+        matches[0]["body"] = json!([{"op": "return", "line": line, "value": ["number", VERIFICATION]}]);
+        fixes.push(json!({"id": "optgraph-cd-code", "movie": "ENGINE.CXT", "member": member,
+                          "handler": "getcdcode", "source_sha256": CD_CODE,
+                          "disposition": "authored-verification-constant", "original_projector_verified": false}));
+    }
+    result.as_object_mut().ok_or("program")?.insert("compatibility_fixes".into(), Value::Array(fixes));
+    Ok(result)
+}
+
+/// The Löwenzahn 8.5 discs' copy check: getRegOptimal(serNum) asks
+/// initdisplay in the disc's optgraph.dll (through the GLU32 Xtra) and the
+/// start movie refuses to go on unless it answers the serial it was given.
+/// Each such handler answers its argument (Optik has none).
+fn optgraph_compatibility(program: &Value) -> R<Value> {
+    let mut result = program.clone();
+    let mut fixes = Vec::new();
+    for handler in result["handlers"].as_array_mut().into_iter().flatten() {
+        if handler["name"] != "getregoptimal" {
+            continue;
+        }
+        let calls_glu = handler["body"].to_string().contains("\"glunew\"");
+        if handler["parameters"] != json!(["sernum"]) || !calls_glu {
+            return Err(format!("getRegOptimal in {} changed; review required", handler["movie"]));
+        }
+        let line = handler["body"][0]["line"].clone();
+        handler["body"] = json!([{"op": "return", "line": line, "value": ["variable", "sernum"]}]);
+        fixes.push(json!({"id": "optgraph-serial", "movie": handler["movie"], "member": handler["member"],
+                          "handler": "getregoptimal", "source_sha256": handler["source_sha256"],
+                          "disposition": "answers-its-serial", "original_projector_verified": false}));
+    }
+    result.as_object_mut().ok_or("program")?.insert("compatibility_fixes".into(), Value::Array(fixes));
     Ok(result)
 }
 
@@ -182,8 +311,62 @@ pub fn postprocess_model(
         "findus-christmas" => christmas_media(model, fonts),
         "lernerfolg-deutsch-1-2" => deutsch_media(model, fonts, measure),
         "loewenzahn-1" => loewenzahn::media(model, fonts),
+        "findus-circus" => circus_media(model, fonts),
+        "loewenzahn-6" | "loewenzahn-7" | "loewenzahn-8" | "loewenzahn-optik" | "loewenzahn-advent" => directmedia_media(model, fonts),
         _ => Ok(()),
     }
+}
+
+/// Löwenzahn 6-8 and Optik play MPEG-1 movies through the DirectMedia Xtra:
+/// each member names its file as the authoring machine saw it, long names
+/// included ("clay_trailer.mpg" is CLAYTRAI.MPG on the disc). A member takes
+/// the record of its file when the embedder converted it; otherwise it keeps
+/// no duration, which the runtime plays as an ended clip.
+fn directmedia_media(model: &mut Value, fonts: &PortFonts) -> R<()> {
+    let short = |name: &str| -> String {
+        let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
+        let stem: String = stem.chars().filter(char::is_ascii_alphanumeric).take(8).collect();
+        format!("{stem}.{ext}")
+    };
+    let mut by_name = std::collections::HashMap::new();
+    for record in &fonts.external_media {
+        let source = record["source"].as_str().unwrap_or("");
+        let file = source.rsplit('/').next().unwrap_or(source).to_lowercase();
+        if by_name.insert(file, record.clone()).is_some() {
+            return Err("ambiguous DirectMedia movie file".into());
+        }
+    }
+    let mut unbound = Vec::new();
+    for movie in model["movies"].as_array_mut().into_iter().flatten() {
+        for member in movie["members"].as_array_mut().into_iter().flatten() {
+            if member["xtra"]["symbol"] != "TBDIRECTMEDIA" {
+                continue;
+            }
+            let linked = member["linkedFile"].as_str().unwrap_or("").to_lowercase();
+            let Some(record) = by_name.get(&linked).or_else(|| by_name.get(&short(&linked))) else {
+                unbound.push(json!(linked));
+                continue;
+            };
+            if record["video"].as_str().unwrap_or("").is_empty() {
+                continue;
+            }
+            let audio = record["audio"].as_str().unwrap_or("");
+            let milliseconds = member["videoDurationMs"].as_i64().unwrap_or(0);
+            let duration = if milliseconds > 0 { milliseconds as f64 / 1000.0 } else { record["duration"].as_f64().unwrap_or(0.0) };
+            let m = member.as_object_mut().ok_or("member")?;
+            m.insert("asset".into(), record["video"].clone());
+            m.insert("videoAudio".into(), json!(audio));
+            m.insert("videoFlags".into(), json!(if audio.is_empty() { 0 } else { 8 }));
+            m.insert("frames".into(), json!((duration * 600.0).round() as i64));
+            m.insert("rate".into(), json!(600));
+            m.insert("videoSource".into(), record["source"].clone());
+        }
+    }
+    unbound.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    unbound.dedup();
+    model["externalMediaUnbound"] = Value::Array(unbound);
+    model["externalMedia"] = Value::Array(fonts.external_media.clone());
+    Ok(())
 }
 
 /// What the importer does for a port around postprocess_model: whether the
@@ -192,7 +375,7 @@ pub fn postprocess_model(
 /// with `--size SIZE --range R... -c 0`; the disc folders whose files the
 /// runtime streams as sound (playFile) or reads as data (read_data).
 pub fn plan(slug: &str, model: &Value) -> R<Value> {
-    let (changes, measure, streams, data) = match slug {
+    let (changes, measure, streams, data): (bool, Vec<Value>, Vec<String>, Vec<&str>) = match slug {
         "willy-werkel-cars" => (
             true,
             vec![json!({"key": "substitute:24", "font": "substitute", "size": 24, "ranges": ["0x20-0x7e"]})],
@@ -200,8 +383,27 @@ pub fn plan(slug: &str, model: &Value) -> R<Value> {
             vec![],
         ),
         "findus-christmas" => (true, vec![], vec![], vec![]),
-        "lernerfolg-deutsch-1-2" => (true, deutsch_measure(model)?, vec!["voc", "sfx"], vec!["tests_db"]),
+        "lernerfolg-deutsch-1-2" => (true, deutsch_measure(model)?, vec!["voc".into(), "sfx".into()], vec!["tests_db"]),
         "loewenzahn-1" => (true, vec![], vec![], vec![]),
+        "findus-circus" => (true, vec![], vec![], vec![]),
+        "loewenzahn-6" | "loewenzahn-7" | "loewenzahn-8" | "loewenzahn-optik" | "loewenzahn-advent" => (true, vec![], vec![], vec![]),
+        // The string tables and room descriptions FileIO reads as XML.
+        "findus-birthday" => (false, vec![], vec![], vec!["SPIEL/XML"]),
+        // Each scene streams its speech from its own folder's SOUNDS, which
+        // Lingo addresses as "@/sounds/NAME": one "sounds" namespace, as
+        // NAME=FOLDER.
+        "findus-ghosts" => (
+            false,
+            vec![],
+            [
+                "ABSPANN", "BAUMHOEH", "DACHBODE", "FINALE", "HOF", "HUEGEL", "HUEHNER", "INTRO", "KUECHENA",
+                "KUECHETA", "LOGIN", "SCHATTEN", "SCHIESSB", "SCHWARZE",
+            ]
+            .iter()
+            .map(|scene| format!("sounds=DATA/{scene}/SOUNDS"))
+            .collect(),
+            vec![],
+        ),
         _ => (false, vec![], vec![], vec![]),
     };
     let mut plan = json!({"model": changes, "measure": measure, "streams": streams, "data": data});
@@ -211,6 +413,14 @@ pub fn plan(slug: &str, model: &Value) -> R<Value> {
         // documents' artwork folder.
         plan["external_media"] = json!({"root": "MEDIA", "extensions": ["MOV", "AIF"]});
         plan["print"] = json!("MEDIA/PRINT");
+    }
+    if matches!(slug, "loewenzahn-6" | "loewenzahn-7" | "loewenzahn-8" | "loewenzahn-optik" | "loewenzahn-advent") {
+        // DirectMedia's MPEG-1 movies, wherever the disc keeps them.
+        plan["external_media"] = json!({"root": "DATA", "extensions": ["MPG"]});
+    }
+    if slug == "findus-circus" {
+        // The voice and effect members link AIFF files beside the movies.
+        plan["external_media"] = json!({"root": "PF2/MOVIES/SOUNDS", "extensions": ["AIF"]});
     }
     Ok(plan)
 }

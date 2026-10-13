@@ -42,6 +42,9 @@ pub fn package_profile(model: &serde_json::Value, meta: &str) -> Result<scene::P
     let meta: serde_json::Value = serde_json::from_str(meta).map_err(|e| format!("package meta: {e}"))?;
     let version = match meta.get("director_version").and_then(serde_json::Value::as_u64) {
         Some(v @ (500 | 600 | 700 | 800 | 1000)) => v as u16,
+        // Director 8.5 movies use the D10 family's tables and services
+        // (family.h); the header names the layout the runtime checks.
+        Some(850) => 1000,
         Some(v) => return Err(format!("unsupported Director version {v}")),
         None => 600,
     };
@@ -90,6 +93,8 @@ mod tests {
         let meta = r#"{"director_version":600}"#;
         let bytes = build_package(&program(), &model(r#""extendedD6":true,"#), NAMES, b"", meta).unwrap();
         assert_eq!((u16::from_le_bytes([bytes[6], bytes[7]]), u16::from_le_bytes([bytes[8], bytes[9]])), (600, 1));
+        let bytes = build_package(&program(), &model(""), NAMES, b"", r#"{"director_version":850}"#).unwrap();
+        assert_eq!(u16::from_le_bytes([bytes[6], bytes[7]]), 1000);
         let error = build_package(&program(), &model(""), NAMES, b"", r#"{"director_version":900}"#).unwrap_err();
         assert!(error.contains("unsupported Director version"), "{error}");
     }
@@ -101,7 +106,7 @@ mod tests {
         let delta = &scenes[0].deltas[0];
         assert_eq!(delta.channel, 6);
         assert_eq!(delta.mask & scene::DG_SPAN, scene::DG_SPAN);
-        assert_eq!(delta.spec.member, 1 << 20 | 1 << 16 | 2);
+        assert_eq!(delta.spec.member, 1 << 21 | 1 << 16 | 2);
         assert_eq!((delta.spec.x, delta.spec.y, delta.spec.width, delta.spec.height), (20, 10, 4, 2));
         assert_eq!((delta.spec.kind, delta.spec.ink, delta.spec.blend), (16, 8, 100));
         assert_eq!(scenes[0].labels, vec![("start".to_string(), 1)]);

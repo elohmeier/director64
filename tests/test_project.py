@@ -32,8 +32,8 @@ def test_unknown_edition_fails_closed():
 def test_all_catalogued_sources_have_distinct_full_hashes():
     root = GameSpec.load("findus-workshop").root
     games = [GameSpec.load(p.parent.name) for p in root.glob("games/*/game.toml")]
-    assert len(games) == 11
-    assert len({g.source["sha256"] for g in games}) == 11
+    assert len(games) == 20
+    assert len({g.source["sha256"] for g in games}) == 20
     assert all(g.media.is_relative_to(root / "media" / g.slug) for g in games)
     assert all(Path(g.source["file"]).name == g.source["file"] for g in games)
 

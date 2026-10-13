@@ -16,8 +16,16 @@
 // the recursion authored code does (a puzzle piece dragged against a wall
 // recurses once per stage update) is bounded by these, not by the widest
 // handler in the corpus.
+#ifdef DIRECTOR64_HOSTED
+// The browser and Android TV have the memory for the depth a player
+// reaches by holding a wedged puzzle piece for half a minute (Mucklas' NY
+// drag recurses a level per tick while the button is down).
+#define LV_FRAMES 4096
+#define LV_STACK_SLOTS 65536
+#else
 #define LV_FRAMES 256
 #define LV_STACK_SLOTS 4096
+#endif
 #define LV_TEXT_BYTES 16384
 #ifndef DIRECTOR64_DIRECTOR_VERSION
 #define DIRECTOR64_DIRECTOR_VERSION 6
@@ -26,7 +34,11 @@
 #define DIRECTOR64_EXTENDED_D6 0
 #endif
 #ifndef LV_HEAP_BYTES
-#if DG_D10
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+// The Director 8.5 ports run in the browser and on Android only; Circus
+// parses its 148 KB lip-sync table into one value.
+#define LV_HEAP_BYTES (4096u * 1024u)
+#elif DG_D10
 // The D10 main screen peaks past 320 KiB; overruns fail visibly, never
 // silently, and the console budget covers this after the plane-pool removal.
 #define LV_HEAP_BYTES (384u * 1024u)
@@ -39,7 +51,11 @@
 #define LV_ROOTS 256
 #define LV_SHARED 4
 #elif DG_D10
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#define LV_OBJECTS 32768
+#else
 #define LV_OBJECTS 8192
+#endif
 // A thousand sprite behavior roots follow the widened field roots (192
 // mutable fields for the exercise stamp sets), then the timeout and Flash
 // object slots; see director.h.
@@ -210,6 +226,10 @@ struct lv_frame {
   const lv_handler_t *handler;
   unsigned pc, line;
   bool expression;
+  // Arguments passed, `me` included (the paramCount); those beyond the
+  // declared parameters sit after the locals, before the temps. Fits the
+  // padding before self, so the frame's layout is unchanged.
+  uint8_t argc;
   lv_t self;
   // Both point into lv_runtime_t.stack. temp_extent is the deepest the temps
   // have reached: values popped as call arguments stay addressable up to it,
@@ -394,6 +414,8 @@ void lv_set(lv_runtime_t *, lv_frame_t *, const char *, lv_t, lv_t);
 lv_t lv_reference(lv_runtime_t *, const char *, lv_t, lv_t);
 lv_t lv_chunk(lv_runtime_t *, const char *, lv_t, lv_t, lv_t);
 lv_t lv_chunk_set(lv_runtime_t *, const char *, lv_t, lv_t, lv_t, lv_t);
+// Where a chunk of a text lies, as byte offsets [start, end) into it.
+bool lv_chunk_range(lv_runtime_t *, const char *, lv_t, lv_t, lv_t, size_t *, size_t *);
 lv_t lv_chunk_delete(lv_runtime_t *, const char *, lv_t, lv_t, lv_t);
 unsigned lv_chunk_count(lv_runtime_t *, const char *, lv_t);
 lv_t lv_index_get(lv_runtime_t *, lv_t, lv_t);
@@ -499,4 +521,6 @@ lv_t lv_call_builtin(lv_runtime_t *, lv_frame_t *, const char *, unsigned, const
 lv_flow_t lx_invoke_method(lv_runtime_t *, unsigned, unsigned);
 lv_flow_t lx_invoke_expr(lv_runtime_t *, unsigned, unsigned);
 lv_flow_t lx_invoke_method_expr(lv_runtime_t *, unsigned, unsigned);
+lv_t lv_param(lv_runtime_t *, unsigned);
+unsigned lv_param_count(const lv_runtime_t *);
 #endif

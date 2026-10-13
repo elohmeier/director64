@@ -120,10 +120,11 @@ uv run --locked director64 boot --game lernerfolg-deutsch-1-2
 uv run --locked director64 capture --game lernerfolg-deutsch-1-2
 ```
 
-The authored 800x600 stage renders on the 640x480 target through a 4/5
-prescale of every converted image (`stage_prescale` in the source policy,
-mirrored by `dg_prescale_dims` at the render boundary); geometry, scripts
-and hit-testing stay in the authored space. Mask ink renders from the
+On the console the authored 800x600 stage renders on the 640x480 target
+through a 4/5 prescale of every converted image (`stage_prescale` in the
+source policy, mirrored by `dg_prescale_dims` at the render boundary);
+geometry, scripts and hit-testing stay in the authored space. The browser
+and Android TV draw the stage unscaled (docs/web.md, native stage). Mask ink renders from the
 authored `<name>_mask` member that follows each masked image, baked into
 the texture's alpha at load; mask ink over any other neighbour copies, as
 the original does with an unsuitable mask member (the class panel's

@@ -1,0 +1,28 @@
+schema_version = 1
+slug = "loewenzahn-advent"
+title = "Löwenzahn Adventskalender"
+status = "experimental"
+default_source = "sha256-00ae07ac7e3c"
+
+# A raw .bin of a single Mode 1 data track (2352-byte sectors).
+
+[[sources]]
+id = "sha256-00ae07ac7e3c"
+file = "Adventskalender.bin"
+sha256 = "00ae07ac7e3cfba27bcc76e76c62cec73b3ab33c614652b9786795c3b1b5a980"
+bytes = 663786144
+kind = "iso9660"
+
+[recovery]
+director_version = 850
+media_root = "DATA"
+
+[port]
+extended_d6 = true
+director_version = 850
+media_root = "DATA"
+entry_movie = "START"
+native_compatibility = true
+rom_title = "LOEWENZAHN ADVENT"
+rom_save_type = 80
+controller_count = 4

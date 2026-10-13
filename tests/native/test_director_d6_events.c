@@ -5,7 +5,7 @@
 static dg_runtime_t d;
 static lv_runtime_t r;
 static unsigned begins, ended, stopped, clicks, keys, idles;
-static const lv_t member = lv_make(LV_MEMBER, 0x110004);
+static const lv_t member = lv_make(LV_MEMBER, 0x210004);
 static lv_flow_t begin(lv_runtime_t *v, lv_frame_t *f) {
   begins++; lv_set(v,f,"enteredheld",f->locals[0],lv_num(0));return LV_RETURN;
 }
@@ -57,13 +57,13 @@ static const uint8_t advances[95]={[87-32]=11,[73-32]=3};
 static const int16_t kerning[]={87,73,-10};
 static const dg_text_style_t style={.size=24,.line_height=24,.advances=advances,.kerning=kerning,.kerning_count=1};
 static const dg_member_t members[]={
- {.id=0x110003,.cast=1,.number=3,.type=1,.width=30,.height=30,.name="Button",.text="",.asset=""},
- {.id=0x110004,.cast=1,.number=4,.type=3,.width=100,.height=24,.name="Name",.text="",.text_style=&style}};
-static const dg_behavior_t button[]={{0x110001,"[#identity:1]"},{0x110002,"[#identity:2]"}};
-static const dg_behavior_t edit[]={{0x110003,""}};
+ {.id=0x210003,.cast=1,.number=3,.type=1,.width=30,.height=30,.name="Button",.text="",.asset=""},
+ {.id=0x210004,.cast=1,.number=4,.type=3,.width=100,.height=24,.name="Name",.text="",.text_style=&style}};
+static const dg_behavior_t button[]={{0x210001,"[#identity:1]"},{0x210002,"[#identity:2]"}};
+static const dg_behavior_t edit[]={{0x210003,""}};
 static const dg_delta_t deltas[]={
- {.channel=6,.mask=DG_ALL,.value={.type=16,.member=0x110003,.width=30,.height=30,.behaviors=button,.behavior_count=2}},
- {.channel=8,.mask=DG_ALL,.value={.type=16,.member=0x110004,.x=100,.width=100,.height=24,.behaviors=edit,.behavior_count=1}},
+ {.channel=6,.mask=DG_ALL,.value={.type=16,.member=0x210003,.width=30,.height=30,.behaviors=button,.behavior_count=2}},
+ {.channel=8,.mask=DG_ALL,.value={.type=16,.member=0x210004,.x=100,.width=100,.height=24,.behaviors=edit,.behavior_count=1}},
  {.channel=6,.mask=DG_ALL,.value={0}}};
 static const dg_frame_t frames[]={{0,2},{2,1}};
 static const dg_movie_t movie={.code=&code,.id=1,.tempo=1,.cast_count=1,.casts=casts,

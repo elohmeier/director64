@@ -115,6 +115,7 @@ def _build(game, sdk, profile, replay_scenario):
     from .build_inputs import verify
     from .rom_metadata import prepare
     from .toolchain import container_engine, record_build_context
+    from .web import family_version
 
     verify(game)
     game.require_port()
@@ -135,7 +136,7 @@ def _build(game, sdk, profile, replay_scenario):
         f"REPLAY_SCENARIO={replay_scenario}",
         f"ROM_TITLE={port['rom_title']}",
         f"ENTRY_MOVIE={port['entry_movie']}",
-        f"DIRECTOR_VERSION={port['director_version'] // 100}",
+        f"DIRECTOR_VERSION={family_version(port['director_version'])}",
         f"EXTENDED_D6={int(port.get('extended_d6', False))}",
         f"CONTROLLER_COUNT={port.get('controller_count', 1)}",
         f"-j{min(24, os.cpu_count() or 8)}",
@@ -171,7 +172,8 @@ def main(argv=None):
         "native": "Adapter options: --sanitizers --build-only; Workshop: --soak; "
         "Mucklas: --journey --activity --regressions",
         "fuzz": "Options: --duration SECONDS --episodes N --actions N --jobs N --seed N "
-        "--movie NAME --replay CASE --no-minimize --output DIR",
+        "--movie NAME --replay CASE --no-minimize --output DIR --probe EXECUTABLE "
+        "--browser --prelude FILE",
         "perf": "Options: --actions N --dwell TICKS --budget-us MEAN --output DIR",
         "working-sets": "Options: --episodes N --actions N --seed S --no-journey --output PATH",
         "parity": "Options: --against PROBE --probe PROBE --episodes N --actions N --seed N "
@@ -278,8 +280,11 @@ def main(argv=None):
             game.host("full_replay").main()
             build(game, "probe")
         elif args.command == "fuzz":
-            sys.argv = ["native", "--sanitizers", "--build-only"]
-            game.host("full_host").main()
+            # An explicit --probe (the browser runtime's, for one) needs no
+            # native build.
+            if "--probe" not in remaining:
+                sys.argv = ["native", "--sanitizers", "--build-only"]
+                game.host("full_host").main()
             from .fuzz import main as fuzz
 
             return fuzz(game, remaining)

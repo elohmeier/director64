@@ -9,7 +9,7 @@ import {Vfs} from "./vfs.mjs";
 import {fontTools} from "./fonts.mjs";
 import {answer, runJob} from "./jobs.mjs";
 
-const STAGES = ["verify", "extract", "parse", "analyze", "audit", "scores", "convert", "port", "compile", "package", "sound", "video"];
+const STAGES = ["verify", "extract", "parse", "analyze", "audit", "scores", "convert", "port", "compile", "package", "sound", "image", "video"];
 const decoder = new TextDecoder();
 
 // An import that cannot succeed with this input. `reason` "edition": the
@@ -96,22 +96,40 @@ function filesUnder(vfs, directory) {
 // The folders' sound files as the browser streams them (converter.stream),
 // into one blob with a name -> [offset, length, milliseconds] index. A
 // stream is never longer than its source, so the blob is sized once and
-// each disc file is read, converted and copied in a single pass.
+// each disc file is read, converted and copied in a single pass. A folder
+// given as NAME=FOLDER streams under NAME; folders merged so may carry the
+// same file twice.
 function streamPack(vfs, folders, converter) {
-  const files = folders.flatMap((folder) => filesUnder(vfs, `/work/extracted/${folder}`)
-    .filter((name) => !name.includes("/"))
-    .map((name) => [`${folder}/${name.replace(/\.[^.]*$/, "").toLowerCase()}`, `/work/extracted/${folder}/${name}`]));
+  const files = folders.flatMap((spec) => {
+    const [prefix, folder] = spec.includes("=") ? spec.split("=", 2) : [spec, spec];
+    return filesUnder(vfs, `/work/extracted/${folder}`)
+      // Sound Forge's peak files ship beside some sounds.
+      .filter((name) => !name.includes("/") && !/\.sfk$/i.test(name))
+      .map((name) => [`${prefix}/${name.replace(/\.[^.]*$/, "").toLowerCase()}`, `/work/extracted/${folder}/${name}`]);
+  });
   files.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const blob = new Uint8Array(files.reduce((n, [, path]) => n + vfs.size(path), 0)), index = {};
-  let at = 0;
+  let at = 0, previous = null;
   for (const [name, path] of files) {
-    if (name in index) throw new ImportError(`two sound files are both ${name}`);
-    const {bytes, ms} = converter.stream(vfs.read(path));
+    // Sorted, a name's copies are neighbours.
+    const source = vfs.read(path);
+    if (name in index) {
+      if (sameBytes(previous, source)) continue;
+      throw new ImportError(`two sound files are both ${name}`);
+    }
+    previous = source;
+    const {bytes, ms} = converter.stream(source);
     blob.set(bytes, at);
     index[name] = [at, bytes.length, ms];
     at += bytes.length;
   }
   return {index, blob: blob.subarray(0, at)};
+}
+
+function sameBytes(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 // Named files concatenated into one blob with a name -> [offset, length] index.
@@ -197,7 +215,7 @@ export async function importGame({source, profile, tools, onProgress = () => {},
       // projectors) are inflated now; only the rest waits.
       if (!zip)
         vfs.writeLazy(target, entry.length, () => readLogical(read, disc.layout, entry.offset, entry.length));
-      else if (/\.(dxr|cxt|cst|dir|exe)$/i.test(entry.path))
+      else if (/\.(dxr|cxt|cst|dir|dcr|cct|exe)$/i.test(entry.path))
         vfs.write(target, tools.converter.zipFile(source.size, entry.index, read));
       else
         vfs.writeLazy(target, entry.length, () => tools.converter.zipFile(source.size, entry.index, read));
@@ -311,7 +329,7 @@ export async function importGame({source, profile, tools, onProgress = () => {},
   // the video stage encodes. The console's own video is named by its source,
   // so the browser's video of the same movie carries the same asset name.
   const videoSources = [];
-  function convertExternalMedia({root, extensions}, progress) {
+  async function convertExternalMedia({root, extensions}, progress) {
     const base = `/work/extracted/${root}`;
     const sources = filesUnder(vfs, base).filter((path) => extensions.some((e) => path.endsWith(`.${e}`)));
     const records = [];
@@ -322,7 +340,17 @@ export async function importGame({source, profile, tools, onProgress = () => {},
       const source = sha256(bytes);
       const record = {source: path, source_sha256: source, source_bytes: bytes.length, video: "", audio: ""};
       let wav;
-      if (path.endsWith(".MOV")) {
+      if (path.endsWith(".MPG")) {
+        // DirectMedia's MPEG-1 movies need the embedder's decoder (FFmpeg in
+        // the Android export); without one they stay silent and blank.
+        if (!tools.encodeMpeg) {
+          records.push(record);
+          continue;
+        }
+        record.video = `${source.slice(0, 24)}.vp8`;
+        videoSources.push({path: `${base}/${path}`, name: record.video, mpeg: true});
+        wav = await tools.mpegAudio(bytes);
+      } else if (path.endsWith(".MOV")) {
         const info = tools.converter.movInfo(bytes);
         record.duration = info.duration_seconds;
         if (info.video) {
@@ -340,7 +368,7 @@ export async function importGame({source, profile, tools, onProgress = () => {},
         record.channels = view.getUint16(22, true);
         record.rate = view.getUint32(24, true);
         record.frames = view.getUint32(40, true) / (2 * record.channels);
-        if (path.endsWith(".AIF")) record.duration = record.frames / record.rate;
+        if (path.endsWith(".AIF") || path.endsWith(".MPG")) record.duration = record.frames / record.rate;
         record.audio = `${name}.wav64`;
       }
       records.push(record);
@@ -375,7 +403,7 @@ export async function importGame({source, profile, tools, onProgress = () => {},
       }
     }
     const dataFiles = plan.data.reduce((n, folder) => n + filesUnder(vfs, `/work/extracted/${folder}`).length, 0);
-    const externalMedia = plan.external_media ? convertExternalMedia(plan.external_media, progress) : [];
+    const externalMedia = plan.external_media ? await convertExternalMedia(plan.external_media, progress) : [];
     director("port-model", {model: "/work/director/model.json", output: "/work/director", port,
       substitute: "/work/port/substitute.ttf", measured, data_files: dataFiles, external_media: externalMedia});
   });
@@ -463,18 +491,48 @@ export async function importGame({source, profile, tools, onProgress = () => {},
     }
   });
 
+  // The images as lossless WebP (tools.encodeImage: the webp tool, "D64W",
+  // platforms/web/webp_image.h), each only where it comes out smaller; the
+  // runtime decodes them back to the stored bytes. Without an encoder the
+  // images stay deflated.
+  await stage("image", async (progress) => {
+    if (!tools.encodeImage) return;
+    const {index, blob} = result.images;
+    const entries = Object.entries(index).map(([name, [at, length, ...rest]]) => [name, blob.subarray(at, at + length), rest]);
+    let done = 0;
+    await pool.map("image", entries.length, (n) => {
+      const bytes = entries[n][1].slice();
+      return {payload: bytes, transfer: [bytes.buffer]};
+    }, (n, packed) => {
+      if (packed && packed.length < entries[n][1].length) entries[n][1] = packed;
+    }, {signal, onProgress: () => progress(++done / entries.length)});
+    const packed = packFiles(entries.map(([name, bytes]) => [name, bytes]));
+    for (const [name, , rest] of entries) packed.index[name].push(...rest);
+    result.images = packed;
+  });
+
   // The linked movies' video, encoded by the embedder (tools.encodeVideo:
   // WebCodecs in the import worker) from the Cinepak frames the converter
   // decodes. Without an encoder (the Node parity run) there is none.
   result.video = await stage("video", async (progress) => {
     const entries = [];
+    const mpeg = videoSources.filter((v) => v.mpeg);
+    const cinepak = videoSources.filter((v) => !v.mpeg);
     if (tools.encodeVideo) {
       // One movie per job, longest first: each decodes and encodes on its own.
-      const order = videoSources.map(({path}, i) => [vfs.size(path), i]).sort((a, b) => b[0] - a[0]);
+      const order = cinepak.map(({path}, i) => [vfs.size(path), i]).sort((a, b) => b[0] - a[0]);
       await pool.map("video", order.length, (n) => {
-        const bytes = vfs.read(videoSources[order[n][1]].path).slice();
+        const bytes = vfs.read(cinepak[order[n][1]].path).slice();
         return {payload: bytes, transfer: [bytes.buffer]};
-      }, (n, encoded) => entries.push([videoSources[order[n][1]].name, encoded]), {signal, onProgress: progress});
+      }, (n, encoded) => entries.push([cinepak[order[n][1]].name, encoded]), {signal, onProgress: progress});
+    }
+    // MPEG movies go to the embedder's encoder, a few at a time.
+    for (let next = 0, done = 0; next < mpeg.length;) {
+      check(signal);
+      const batch = mpeg.slice(next, next += 4);
+      const encoded = await Promise.all(batch.map(({path}) => tools.encodeMpeg(vfs.read(path))));
+      batch.forEach(({name}, i) => entries.push([name, encoded[i]]));
+      progress((done += batch.length) / mpeg.length);
     }
     result.report.videos = entries.length;
     return packFiles(entries);

@@ -7,6 +7,9 @@ extern uint32_t d64_host_asset(const char *name, uint8_t *out, uint32_t cap);
 extern int d64_host_text(const char *text, int width, int height, int font,
                          int size, int align, int ascent, int line_height,
                          uint8_t *coverage);
+extern int d64_host_layout(const char *text, int width, int height, int font,
+                           int size, int align, int ascent, int line_height,
+                           int16_t *boxes, int max_chars);
 extern void d64_host_sound(unsigned channel, const char *asset, int looping,
                            uint32_t loop_start, uint32_t loop_end);
 extern void d64_host_gain(unsigned channel, float gain);
@@ -33,6 +36,14 @@ static bool text(void *ctx, const char *utf8, int width, int height,
                        style ? (int)style->align : 0,
                        style ? style->ascent : 0,
                        style ? style->line_height : 0, coverage) != 0;
+}
+static int layout(void *ctx, const char *utf8, int width, int height,
+                  const wc_text_style_t *style, int16_t *boxes, int max_chars) {
+  (void)ctx;
+  return d64_host_layout(utf8, width, height, style ? (int)style->font : 0,
+                         style ? (int)style->size : 0, style ? (int)style->align : 0,
+                         style ? style->ascent : 0, style ? style->line_height : 0, boxes,
+                         max_chars);
 }
 static void sound(void *ctx, unsigned channel, const char *name, bool looping,
                   uint32_t loop_start, uint32_t loop_end) {
@@ -76,7 +87,8 @@ static unsigned video_revision(void *ctx) {
 }
 
 int main(void) {
-  web_runtime_host((web_host_t){.asset = asset, .text = text, .sound = sound, .gain = gain,
+  web_runtime_host((web_host_t){.asset = asset, .text = text, .layout = layout,
+                                .sound = sound, .gain = gain,
                                 .save_commit = save_commit, .trace = trace,
                                 .stream = stream, .data = data, .video = video,
                                 .video_frame = video_frame,

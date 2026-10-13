@@ -90,9 +90,16 @@ To add a port, create a game manifest and audited source policy, then implement
 status is separate from executable support. Add synthetic contracts for new shared
 behavior and qualify the game through native journeys and target captures.
 
-Structural score recovery supports the verified Director 5, 6, 7, 8 and 10 layouts.
-The native runtime uses a Director 5, 6, 7, 8 or 10 build profile selected by the
-game manifest. D7 and D8 add 800 sprites, twelve external cast libraries, eight sound
+Structural score recovery supports the verified Director 5, 6, 7, 8, 8.5 and 10
+layouts. The native runtime uses a Director 5, 6, 7, 8 or 10 build profile selected
+by the game manifest; a Director 8.5 game (manifest version 850) builds the D10
+profile, whose 1006-channel score layout and services it shares, and its package
+header names the D10 layout. Director 8.5 files differ in
+their text Xtra payload and XMED structure (the D10 forms, with the character set
+read from each document's Paige table), zero-padded sound samples, and source
+quirks the converter repairs and records as approximations: palette references
+stored with castlib 0 or stale castlib numbers, film loops nesting loops or
+carrying comment fields, and castlibs sharing a library id and script context. D7 and D8 add 800 sprites, twelve external cast libraries, eight sound
 channels, extended score fields, and persistent script instances. The D10 profile
 shares D7's score semantics, hover cache and cast-preserving member arithmetic,
 extends the bounds to 1,000 sprites and sixteen linked cast files, and adds the

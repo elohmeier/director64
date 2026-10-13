@@ -1,4 +1,4 @@
-# Game package format (D64P, version 2)
+# Game package format (D64P, version 5)
 
 A game package carries everything the runtime needs to run a converted game
 that is not the runtime itself: every movie's handler bytecode and name
@@ -21,7 +21,7 @@ bounds-checks before building anything.
 | --- | --- | --- |
 | 0 | 4 | Magic `D64P` |
 | 4 | 2 | Format version, 2 |
-| 6 | 2 | Director version the tables are laid out for: the port's (500, 600, 700, 800, 1000) |
+| 6 | 2 | Director version the tables are laid out for: the port's (500, 600, 700, 800, 1000; a Director 8.5 port is laid out as 1000) |
 | 8 | 2 | Profile flags; bit 0 is extended D6 |
 | 10 | 2 | Section count |
 | 12 | 16 | ABI digest: the first 16 bytes of SHA-256 over `runtime/lingo/names.txt` followed by `runtime/lingo/lingo_bytecode.h` |
@@ -76,19 +76,24 @@ u32   member count, then per member:
         u32 id; u16 number, cast, type, width, height; i16 reg x, reg y;
         str name, asset, text;
         u32 samples, rate, loop start, loop end;
-        u16 shape, pattern; u8 filled, line width, looping, film count,
-        film loop, line direction; film count × str film assets
+        u16 shape, pattern; u8 filled, line width, looping; u16 film
+        count; u8 film loop, line direction; film count × str film assets
         extended: u8 editable; u32 binary text length, and when nonzero
           that many bytes plus a NUL (the member text, NULs included);
           u32 source bytes; u8 cue count, then per cue: u32 ms; str name
         modern:   u16 text style, u16 insert style (1-based, 0: none)
         D5:       str video audio; u32 video flags; u32 film sound count
                   (0, or two per film frame), then that many u32 references
-        D10:      u8 source Xtra; u8 Flash label count; u8 Flash field count;
+        D10:      u8 source Xtra (0 native, 1 Flash, 2 vectorShape, 3
+                  DirectMedia video); str video audio; u32 video flags;
+                  u8 Flash label count; u8 Flash field count;
                   labels (str name; u16 frame); fields (str name, variable,
                   text; i16 x, y, width, height, left margin, right margin,
                   indent; u8 align, word wrap, multiline; i8 leading;
-                  u16 style)
+                  u16 style); u16 text colour run count, then per run:
+                  u32 first character, u32 0xRRGGBB; u16 hyperlink count,
+                  then per link: u32 first, last character (1-based,
+                  inclusive); str data
       member count × (u32 name hash; u16 member position)
 256 × u32 palette
 u32   frame count, then per frame: u32 first delta; u16 delta count

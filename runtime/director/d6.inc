@@ -7,7 +7,12 @@ static dg_member_t *d6_new_member(dg_runtime_t *d, unsigned file, unsigned cast,
   const dg_movie_t *movie = dg_loaded(d, file);
   unsigned slot = 0;
   while (slot < d->dynamic_count && d->dynamic_members[slot].member.type) slot++;
-  if (!movie || (type != 3 && type != 7) || slot == 32) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  bool bitmap = type == 1;
+#else
+  bool bitmap = false;
+#endif
+  if (!movie || (type != 3 && type != 7 && !bitmap) || slot == 32) {
     error(d, "dynamic text cast capacity/type", "unsupported"); return NULL;
   }
   if (!number) {
@@ -16,18 +21,18 @@ static dg_member_t *d6_new_member(dg_runtime_t *d, unsigned file, unsigned cast,
         number = movie->members[i].number;
     for (unsigned i = 0; i < d->dynamic_count; i++) {
       const dg_member_t *m = &d->dynamic_members[i].member;
-      if (m->id >> 20 == file && m->cast == cast && number < m->number) number = m->number;
+      if (DG_ID_FILE(m->id) == file && m->cast == cast && number < m->number) number = m->number;
     }
     number++;
   }
-  if (number > 65535 || dg_member(d, file << 20 | cast << 16 | number)) {
+  if (number > 65535 || dg_member(d, DG_ID(file, cast, number))) {
     error(d, "dynamic member number", "invalid"); return NULL;
   }
   unsigned index = slot;
   if (slot == d->dynamic_count) d->dynamic_count++;
   d->dynamic_members[index].name[0] = 0;
   dg_member_t *m = &d->dynamic_members[index].member;
-  *m = (dg_member_t){.id=file << 20 | cast << 16 | number, .number=number,
+  *m = (dg_member_t){.id=DG_ID(file, cast, number), .number=number,
     .cast=cast, .type=type, .name=d->dynamic_members[index].name, .text="", .asset=""};
   return m;
 }
@@ -171,6 +176,10 @@ static bool d6_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
     if ((ln == LN_SELSTART) || (ln == LN_SELEND)) {
       *out = lv_num((ln == LN_SELSTART) ? d->sel_start : d->sel_end); return true;
     }
+#if DG_CAP_KEYBOARD && DG_D10
+    // A typed key, not a text-entry replay: the keyboard's own values.
+    if (((ln == LN_KEY) || (ln == LN_KEYCODE)) && !d->text_key) return false;
+#endif
     if (ln == LN_KEY) {
       char key[2] = {(char)d->text_key, 0};
       *out = lv_text(d->values, key, false); return true;
@@ -204,7 +213,7 @@ static bool d6_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
       if (movie->members[i].cast == cast->cast && movie->members[i].number > count) count = movie->members[i].number;
     for (unsigned i = 0; i < d->dynamic_count; i++) {
       const dg_member_t *m = &d->dynamic_members[i].member;
-      if (m->id >> 20 == cast->file && m->cast == cast->cast && m->number > count) count = m->number;
+      if (DG_ID_FILE(m->id) == cast->file && m->cast == cast->cast && m->number > count) count = m->number;
     }
     *out = lv_num(count); return true;
   }
@@ -280,7 +289,7 @@ static bool d6_save_cast(dg_runtime_t *d, const dg_cast_t *cast) {
   unsigned at = 8, count = 0;
   for (unsigned i = 0; i < d->field_count; i++) {
     const dg_member_t *m = dg_member(d, d->field_members[i]);
-    if (!m || m->id >> 20 != cast->file || m->cast != cast->cast || !m->type) continue;
+    if (!m || DG_ID_FILE(m->id) != cast->file || m->cast != cast->cast || !m->type) continue;
     const char *text = lv_cstr(d->values, d->values->roots[DG_FIELD_TEXT_ROOT + i]);
     unsigned n = (unsigned)strlen(m->name), length = (unsigned)strlen(text);
     if (!n || n > 63 || length > 16383 || at + 8 + n + length > 65000) { free(data); return false; }
@@ -315,7 +324,7 @@ static void d6_restore_cast_file(dg_runtime_t *d, const dg_cast_t *cast,
         if (at + 8 > length) { valid = false; break; }
         unsigned number=d6_u16(data+at),type=d6_u16(data+at+2),n=d6_u16(data+at+4),size=d6_u16(data+at+6); at+=8;
         if (!number || (type != 3 && type != 7) || !n || n > 63 || size > 16383 || at+n+size > length || memchr(data+at,0,n+size)) {valid=false;break;}
-        uint32_t id = cast->file << 20 | cast->cast << 16 | number;
+        uint32_t id = DG_ID(cast->file, cast->cast, number);
         const dg_member_t *m = dg_member(d,id);
         if (!pass) {
           for (unsigned j = 0; j < i; j++)
@@ -405,8 +414,22 @@ static bool d6_call(dg_runtime_t *d, const char *name, unsigned argc, const lv_t
   if ((ln == LN_GO) && d->ending_sprites) return true;
   if ((ln == LN_QUIT) && !argc) { d->quit_requested = true; return true; }
   if ((ln == LN_PASS) && !argc) { d->pass_event = true; return true; }
+  if ((ln == LN_DONTPASSEVENT) && !argc) { d->pass_event = false; return true; }
+  // mouseH() and mouseV() read like their the-properties (Adventskalender).
+  if (((ln == LN_MOUSEH) || (ln == LN_MOUSEV)) && !argc) {
+    *out = lv_num(ln == LN_MOUSEH ? d->mouse_x : d->mouse_y);
+    return true;
+  }
   if ((ln == LN_NEW) && argc==2 && lv_type(a[1])==LV_CASTLIB) {
     unsigned type=eq(lv_cstr(r,a[0]),"field")?7:eq(lv_cstr(r,a[0]),"text")?3:0;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // A font member stands in as a text member: Löwenzahn 6's paint box
+    // makes one only to ask its fontList, then erases it.
+    if (eq(lv_cstr(r,a[0]),"font")) type=3;
+    // A bitmap holds a stage snapshot (Birthday freezes the room behind its
+    // popups): its image comes from an image assignment (d10.inc).
+    if (eq(lv_cstr(r,a[0]),"bitmap")) type=1;
+#endif
 #if DIRECTOR64_DIRECTOR_VERSION >= 10
     const dg_cast_t *cast=d10_castlib(d,lv_id(a[1]));
     if (!cast) {error(d,"new cast library","invalid");return true;}
@@ -429,6 +452,14 @@ static bool d6_call(dg_runtime_t *d, const char *name, unsigned argc, const lv_t
     if(!ok)error(d,"cast save","failed");
     return true;
   }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // The system's installed fonts: none beyond the converted ones, so a
+  // script picking a system font takes its own fallback.
+  if ((ln == LN_FONTLIST) && argc == 1 && lv_type(a[0]) == LV_MEMBER) {
+    *out = lv_list(r, 0, NULL, false);
+    return true;
+  }
+#endif
   if ((ln == LN_ERASE) && argc == 1 && lv_type(a[0]) == LV_MEMBER) {
     for (unsigned i = 0; i < d->dynamic_count; i++)
       if (d->dynamic_members[i].member.id == (uint32_t)lv_id(a[0])) {

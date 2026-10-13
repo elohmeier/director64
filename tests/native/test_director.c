@@ -68,7 +68,7 @@ static const lv_handler_t handlers[] = {
     {.name = "callback", .kind = "MovieScript", .step = callback}};
 static const lv_movie_t code = {"SYNTHETIC.DXR", 5, handlers,NULL, NULL, NULL, NULL, 0};
 static const dg_cast_t casts[] = {{"Internal", 1, 1}, {"Other", 1, 2}};
-static const dg_member_t members[] = {{.id = 0x110001,
+static const dg_member_t members[] = {{.id = 0x210001,
                                        .number = 1,
                                        .cast = 1,
                                        .type = 1,
@@ -76,7 +76,7 @@ static const dg_member_t members[] = {{.id = 0x110001,
                                        .height = 10,
                                        .reg_x = 5,
                                        .reg_y = 5},
-                                      {.id = 0x110002,
+                                      {.id = 0x210002,
                                        .number = 2,
                                        .cast = 1,
                                        .type = 8,
@@ -102,16 +102,16 @@ static bool hit(void *ctx, const dg_member_t *m, unsigned ink, int x, int y) {
 int main(void) {
   dg_init(&director, &values, (dg_platform_t){.hit = hit}, NULL, names, 1, 1);
   assert(dg_enter(&director, &movie, 1, NULL, 0));
-  assert(dg_event(&director, "exitframe", 0x11000a));
+  assert(dg_event(&director, "exitframe", 0x21000a));
   assert(lv_run(&values, 100) && values.yielded && director.next_frame == 2);
   assert(director.frame == 1 && values.depth == 1);
   assert(dg_tick(&director, 0, 0, false, 100));
   assert(lv_number(&values, values.globals[0]) == 2);
   // Equal member numbers in different casts must dispatch independently.
-  assert(dg_event(&director, "exitframe", 0x12000a));
+  assert(dg_event(&director, "exitframe", 0x22000a));
   assert(values.frames[values.depth - 1].pc == 1);
   assert(lv_run(&values, 100));
-  director.sprites[1] = (dg_sprite_t){.value = {.member = 0x110001,
+  director.sprites[1] = (dg_sprite_t){.value = {.member = 0x210001,
                                                 .x = 15,
                                                 .y = 15,
                                                 .width = 10,
@@ -130,7 +130,7 @@ int main(void) {
   assert(director.trail_count == 1 && director.trails[0].sprite.value.x == 15);
   dg_update_stage(&director);
   assert(director.trail_count == 1);
-  director.sprites[2] = (dg_sprite_t){.value = {.member = 0x110002,
+  director.sprites[2] = (dg_sprite_t){.value = {.member = 0x210002,
                                                 .width = 100,
                                                 .height = 40,
                                                 .type = 16,
@@ -148,13 +148,13 @@ int main(void) {
   values.depth = 0;
   assert(dg_enter(&director, &movie, 1, (const dg_movie_t *[]){&external_movie},
                   1));
-  assert(dg_event(&director, "mouseup", 0x210005));
+  assert(dg_event(&director, "mouseup", 0x410005));
   assert(lv_run(&values, 100));
   assert(lv_number(&values, values.globals[0]) == 12);
   // Primary mouseUp handlers may yield before passing to the sprite handler.
   director.await_release = false;
-  director.sprites[1] = (dg_sprite_t){.value = {.member = 0x110001,
-                                                .script = 0x110014,
+  director.sprites[1] = (dg_sprite_t){.value = {.member = 0x210001,
+                                                .script = 0x210014,
                                                 .x = 15,
                                                 .y = 15,
                                                 .type = 16,

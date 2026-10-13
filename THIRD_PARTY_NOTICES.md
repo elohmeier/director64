@@ -18,7 +18,7 @@ converted from the user's own disc image on the user's machine.
 | [zlib](https://zlib.net/) 1.3.1, linked into the ProjectorRays build | Decompression inside the parser | zlib (below); Copyright (C) 1995-2024 Jean-loup Gailly and Mark Adler |
 | Director64 score decoder (`compiler/src/convert/score.rs`, from `tools/projectorrays/`) | Score recovery in `import/convert.wasm` | MPL-2.0; source in this repository |
 | Director64 Cinepak decoder (`compiler/src/convert/cinepak.rs`), derived from [FFmpeg](https://ffmpeg.org/)'s `libavcodec/cinepak.c`, Copyright (C) 2003 The FFmpeg project | Video conversion in `import/convert.wasm` | LGPL-2.1-or-later — [licenses/LGPL-2.1.txt](licenses/LGPL-2.1.txt); source in this repository |
-| Rust crates: serde_json, serde_core, indexmap, hashbrown, equivalent, itoa, sha2, digest, block-buffer, crypto-common, typenum, cfg-if, miniz_oxide, adler2 | `import/convert.wasm` | Used under Apache-2.0 (each also offers MIT) — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
+| Rust crates: serde_json, serde_core, indexmap, hashbrown, equivalent, itoa, sha2, digest, block-buffer, crypto-common, typenum, cfg-if, miniz_oxide, adler2, jpeg-decoder | `import/convert.wasm` | Used under Apache-2.0 (each also offers MIT) — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
 | Rust crates: generic-array (Copyright (c) 2015 Bartłomiej Kamiński), zmij (Copyright (c) David Tolnay) | `import/convert.wasm` | MIT (below) |
 | Rust crate: memchr | `import/convert.wasm` | Used under the Unlicense |
 | [libdragon](https://github.com/DragonMinded/libdragon) mkfont and mksprite | Font and sprite packing (`import/mkfont.wasm`, `import/mksprite.wasm`) | Unlicense |
@@ -29,6 +29,7 @@ converted from the user's own disc image on the user's machine.
 | [apultra](https://github.com/emmanuel-marty/apultra), linked into mkfont and mksprite | Asset compression | zlib (below); Copyright (C) 2019 Emmanuel Marty |
 | [libdivsufsort](https://github.com/y-256/libdivsufsort), part of apultra | Suffix sorting | MIT (below); Copyright (c) 2003-2008 Yuta Mori |
 | [Shrinkler](https://github.com/askeksa/Shrinkler) compressor, linked into mkfont and mksprite | Asset compression | Shrinkler license — [licenses/Shrinkler.txt](licenses/Shrinkler.txt); Copyright 1999-2022 Aske Simon Christensen |
+| [libwebp](https://chromium.googlesource.com/webm/libwebp) 1.5.0 (`third_party/libwebp`), unmodified | Lossless WebP images: the encoder in the importer (`import/webp.wasm`), the decoder in the runtime (`director64.wasm`, and the Android TV player) | BSD-3-Clause — [licenses/libwebp.txt](licenses/libwebp.txt), with Google's patent grant (`third_party/libwebp/PATENTS`); Copyright (c) 2010, Google Inc. |
 | [Emscripten](https://emscripten.org/) runtime support code | All C/C++ WebAssembly modules | MIT (below); Copyright (c) 2010-2014 Emscripten authors |
 | Droid Sans, from libdragon's font gallery example | Substitute for unembedded Director system fonts | Apache-2.0 — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt); Copyright © 2007 Google |
 | [monogram](https://datagoblin.itch.io/monogram) by datagoblin | Console debug font | CC0 |

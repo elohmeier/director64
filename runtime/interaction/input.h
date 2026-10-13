@@ -5,8 +5,13 @@
 #include <stdint.h>
 
 #define INPUT_ONE 65536
+#if defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE
+#define SCREEN_W 800
+#define SCREEN_H 600
+#else
 #define SCREEN_W 640
 #define SCREEN_H 480
+#endif
 /* One player per console port. A player's index is its port number less one. */
 #define INPUT_PLAYERS 4
 /* How many of those ports the ROM declares; the build passes the game policy. */

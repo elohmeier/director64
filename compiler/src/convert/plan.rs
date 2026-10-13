@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use super::dump::Dump;
 use super::files::{self, Files};
 use super::projector::projector_view;
-use super::source::{sha256, source_files};
+use super::source::{sha256, policy_source_files};
 
 /// A media file's dump key, from its path relative to the media root, so a
 /// plan does not depend on how that root was spelled.
@@ -35,7 +35,7 @@ pub fn directories(policy: &Value) -> Vec<String> {
 pub fn write_plan(fs: &mut dyn Files, media: &str, policy: &Value, dumps: &str) -> Result<Value, String> {
     fs.mkdir_all(dumps)?;
     let mut entries = Vec::new();
-    for source in source_files(fs, media, &directories(policy))? {
+    for source in policy_source_files(fs, media, policy, &directories(policy))? {
         let input = files::join(media, &source.path);
         let key = file_key(&source.path);
         entries.push(json!({"key": key, "input": input, "output": dump_path(dumps, &key)}));

@@ -144,3 +144,30 @@ fn a_tiled_fdia_puts_its_coverage_plane_after_the_padded_colour_plane() {
         assert_eq!(fdi_pixel(&data, i, 0)[3], a);
     }
 }
+
+#[test]
+fn film_poses_trim_to_their_coverage_and_keep_their_registration() {
+    use director64_aot::convert::fdi::{fdi_image, fdi_pixel, trim_image, FdiMeta};
+    let (w, h) = (8usize, 6usize);
+    let mut rgba = vec![0u8; w * h * 4];
+    for (x, y) in [(3, 2), (4, 2), (3, 3), (4, 3)] {
+        rgba[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&[200, 40, 8, 255]);
+    }
+    let meta = FdiMeta { width: w, height: h, reg_x: 4, reg_y: 3, use_alpha: true, alpha_threshold: Some(1), rgba32: false };
+    let pose = fdi_image(&meta, &rgba).unwrap();
+    let cut = trim_image(&pose).unwrap().expect("a quarter-covered pose trims");
+    let be16 = |at: usize| u16::from_be_bytes([cut[at], cut[at + 1]]) as i64;
+    assert_eq!((be16(8), be16(10)), (2, 2));
+    // The registration point moves with the cut, so the pose draws in place.
+    assert_eq!((be16(12), be16(14)), (1, 1));
+    for i in 0..4 {
+        assert_eq!(fdi_pixel(&cut, i, 8), fdi_pixel(&pose, (2 + i / 2) * w + 3 + i % 2, 8));
+    }
+    // A pose that already fills its loop stays as it is.
+    let full = fdi_image(&meta, &vec![255u8; w * h * 4]).unwrap();
+    assert!(trim_image(&full).unwrap().is_none());
+    // An empty one keeps a single transparent pixel.
+    let empty = trim_image(&fdi_image(&meta, &vec![0u8; w * h * 4]).unwrap()).unwrap().unwrap();
+    assert_eq!((u16::from_be_bytes([empty[8], empty[9]]), u16::from_be_bytes([empty[10], empty[11]])), (1, 1));
+    assert_eq!(fdi_pixel(&empty, 0, 8)[3], 0);
+}

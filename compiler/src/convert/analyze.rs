@@ -10,7 +10,7 @@ use super::dump::Dump;
 use super::files::{self, Files};
 use super::js;
 use super::plan::{directories, file_key, read_dump};
-use super::source::{active_key_entries, normalized_scripts, quoted_strings, sha256, source_files};
+use super::source::{active_key_entries, normalized_scripts, quoted_strings, sha256, policy_source_files};
 
 fn be_i16(b: &[u8], at: usize) -> Result<i64, String> {
     b.get(at..at + 2).map(|s| i16::from_be_bytes([s[0], s[1]]) as i64).ok_or_else(|| "offset is out of range".into())
@@ -175,7 +175,7 @@ fn uses_file_io(lingo: &str) -> bool {
 }
 
 pub fn analyze(fs: &mut dyn Files, media: &str, dumps: &str, output: &str, policy: &Value, now: &str) -> Result<Value, String> {
-    let sources = source_files(fs, media, &directories(policy))?;
+    let sources = policy_source_files(fs, media, policy, &directories(policy))?;
     let names: Vec<String> = sources.iter().map(|s| s.name.clone()).collect();
     let movie_names: HashSet<String> = names
         .iter()
@@ -284,8 +284,9 @@ pub fn analyze(fs: &mut dyn Files, media: &str, dumps: &str, output: &str, polic
         }
         let mut lingo_parts = Vec::new();
         let mut handler_count = 0usize;
-        for cast in script_dump["casts"].as_array().into_iter().flatten() {
-            let cast_name = cast["name"].as_str().filter(|s| !s.is_empty()).unwrap_or("Internal");
+        let cast_entries = dump.parsed("MCsL").map(|m| m["entries"].clone()).unwrap_or(json!([]));
+        for (cast_name, cast) in super::source::script_casts(&script_dump, &cast_entries) {
+            let cast_name = Some(cast_name.as_str()).filter(|s| !s.is_empty()).unwrap_or("Internal");
             for script in cast["scripts"].as_array().into_iter().flatten() {
                 handler_count += 1;
                 let member_name = script["memberName"].as_str().filter(|s| !s.is_empty()).unwrap_or("(unnamed)");

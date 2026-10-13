@@ -124,6 +124,56 @@ pub fn fdi_composite(destination: &mut [u8], offset: usize, source: [u8; 4]) {
     destination[offset + 3] = js::round(alpha / 255.0) as u8;
 }
 
+/// A flattened film-loop pose cut to the rectangle its coverage spans, its
+/// registration point moved with it so it draws where the full pose did;
+/// None when it would not shrink by a tenth or holds no alpha. An empty
+/// pose keeps one transparent pixel.
+pub fn trim_image(data: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    let magic = &data[..4];
+    if !(magic == b"FDI1" || magic == b"FDI2" || magic == b"FDIA") || data[16] & 1 == 0 {
+        return Ok(None);
+    }
+    let (w, h) = (be16(data, 8), be16(data, 10));
+    let (mut l, mut t, mut r, mut b) = (w, h, 0, 0);
+    for y in 0..h {
+        for x in 0..w {
+            if fdi_pixel(data, y * w + x, 8)[3] != 0 {
+                l = l.min(x);
+                r = r.max(x + 1);
+                t = t.min(y);
+                b = b.max(y + 1);
+            }
+        }
+    }
+    if r <= l {
+        (l, t, r, b) = (0, 0, 1, 1);
+    }
+    let (cw, ch) = (r - l, b - t);
+    if cw * ch * 10 > w * h * 9 {
+        return Ok(None);
+    }
+    let mut rgba = vec![0u8; cw * ch * 4];
+    for y in 0..ch {
+        for x in 0..cw {
+            let pixel = fdi_pixel(data, (t + y) * w + l + x, 8);
+            rgba[(y * cw + x) * 4..(y * cw + x) * 4 + 4].copy_from_slice(&pixel);
+        }
+    }
+    let reg = |at: usize| i16::from_be_bytes([data[at], data[at + 1]]) as i64;
+    Ok(Some(fdi_image(
+        &FdiMeta {
+            width: cw,
+            height: ch,
+            reg_x: reg(12) - l as i64,
+            reg_y: reg(14) - t as i64,
+            use_alpha: true,
+            alpha_threshold: Some(data[17]),
+            rgba32: magic == b"FDI2",
+        },
+        &rgba,
+    )?))
+}
+
 /// Prescales a finished image to the 640x480 stage (4/5 of 800x600);
 /// returns None when the image keeps its pixels.
 pub fn prescale_image(data: &[u8]) -> Result<Option<Vec<u8>>, String> {

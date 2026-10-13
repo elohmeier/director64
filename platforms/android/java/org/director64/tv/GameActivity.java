@@ -226,7 +226,8 @@ public final class GameActivity extends Activity implements InputManager.InputDe
     return super.dispatchGenericMotionEvent(event);
   }
 
-  // A mouse over the stage, mapped to stage pixels; a touch is a click.
+  // A mouse over the stage, in 640x480 units the runtime maps to its stage;
+  // a touch is a click.
   private boolean mouse(View view, MotionEvent event) {
     int x = (int) (event.getX() * WIDTH / view.getWidth());
     int y = (int) (event.getY() * HEIGHT / view.getHeight());
@@ -325,6 +326,12 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   }
 
   // ---- Called by the game thread ----
+
+  /** Each character's box in a text box (Text.layout). */
+  short[] layout(
+      byte[] utf8, int width, int height, int font, int size, int align, int ascent, int lineHeight) {
+    return text.layout(utf8, width, height, font, size, align, ascent, lineHeight);
+  }
 
   /** A text box's coverage plane (Text.rasterize). */
   byte[] rasterize(

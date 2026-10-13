@@ -70,7 +70,8 @@ the screen. With the keyboard lock Chrome grants there, Escape reaches the
 game, and holding it leaves fullscreen. The menu, notices, dialogs and the
 on-screen keyboard live inside the stage, so they show in fullscreen. The
 browser's own fullscreen (F11) hides the page's bars. "Sharp" scaling (the
-default) enlarges the 640×480 stage by the next whole factor without
+default) enlarges the stage (640×480, or an 800×600 game's own stage) by
+the next whole factor without
 filtering and lets the browser shrink the rest. "Smooth" filters the
 whole way.
 
@@ -138,7 +139,7 @@ Because it is one codebase, parity is byte-level.
 The independent parts of an import run on a pool of workers
 (`platforms/web/import/pool.mjs`, one per spare core up to twelve), each
 with its own converter and parser instance: parsing each Director file,
-converting each movie, the 4/5 stage prescale of each image, and encoding
+converting each movie, and encoding
 each sound and each linked movie's video. A pool needs no shared memory, so
 the site needs no cross-origin isolation. A movie job converts against
 `ProxyFiles` (`jobs.mjs`): what it writes stays on its worker, and it is sent
@@ -170,7 +171,7 @@ nothing behind.
 | `runtime/package/package.c` | Validates a game package (header, ABI digest, bounds of every string, index, table and bytecode op) and builds the engine's movie tables from it |
 | `compiler/src/package.rs`, `scene.rs` | Write the package: the compiler's bytecode units and a Rust port of `director.py`'s plain-D6 scene tables ([package-format.md](package-format.md)) |
 | `platforms/web/web_runtime.c` | Engine instance, platform callbacks, save device, the service step and the native probes' line protocol |
-| `platforms/web/compositor.c` | Software compositor into a 640×480 RGBA framebuffer: draw order, copy/matte/background-transparent inks, blend, stretching, shapes, text, film loops and the Director cursor |
+| `platforms/web/compositor.c` | Software compositor into a 640×480 (or native 800×600) RGBA framebuffer: draw order, copy/matte/background-transparent inks, blend, stretching, shapes, text, film loops and the Director cursor |
 | `platforms/web/web_main.c`, `library.js` | Emscripten glue: the runtime's imports forward to the embedder's `director64Host` object |
 | `platforms/web/node/probe.mjs` | The probe protocol over the same Wasm module, for parity and journeys |
 | `games/<slug>/web.toml` | Per-game browser profile (the save archive's file names); not a conversion input, so editing it keeps the asset receipt |
@@ -264,10 +265,19 @@ original artwork on an A4 page (`print.html`, after the console's
 console's B button does.
 
 Lernerfolg needed the most, and all of it holds for any later port:
-- **Stage prescale.** D10's authored 800x600 stage draws at the console's
-  4/5 prescale: images at the stored size, geometry, quads, hit tests and
-  font sizes scaled, and the page's pointer scaled back into authored
-  space.
+- **Native stage.** An authored 800×600 stage (the policy's
+  `stage_prescale`, which the console converts at 4/5) plays unscaled in the
+  browser and on Android TV: the importer converts it without the prescale
+  (`web.web_policy` sets `native_stage`), the runtime is built with
+  `DIRECTOR64_NATIVE_STAGE` (800×600 framebuffer, prescale helpers in
+  `ink.h` the identity) and the page sizes its canvas by
+  `d64_stage_width`/`d64_stage_height`. One-pixel line art and thin rain
+  streaks survive, which the 4/5 resampling lost.
+- **Trimmed film-loop poses.** With `native_stage` each flattened pose is cut
+  to the rectangle its coverage spans (`fdi::trim_image`); the compositor
+  loads a pose at its own size and places it by the loop's and the pose's
+  registration points. In Ghosts the poses covered 7% of their full-stage
+  area.
 - **Masks and Flash.** Mask ink takes the `_mask` partner, by the
   console's luminance rule. Flash prompt text is drawn over its card.
 - **Speech streams.** `sound playFile` speech arrives as a streams pack.
@@ -279,6 +289,12 @@ Lernerfolg needed the most, and all of it holds for any later port:
   moment the convert stage writes them (`D64Z`), and the page inflates
   one when the runtime loads it. Lernerfolg's 1.7 GB of converted images
   would otherwise have held the import at 2.3 GB.
+- **WebP images.** An embedder with an image encoder (`tools.encodeImage`;
+  the Android TV export's `webp` tool) gets an `image` stage. It stores each
+  image as lossless WebP (`D64W`) where that is smaller and the round trip
+  is exact. Every runtime decodes D64W (`platforms/web/webp_image.c`, with
+  the vendored libwebp decoder), so the format is open to the page's own
+  importer too.
 
 Each port's host corrections run in Rust as well (`compiler/src/ports.rs`):
 Willy's, Mucklas's and Lernerfolg's compatibility fixes, Willy's and
