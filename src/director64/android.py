@@ -25,6 +25,8 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from . import web
+from .build_inputs import source_image_identity
+from .iso import file_sha256
 from .project import GameSpec
 
 IMAGE = "director64-android:local"
@@ -173,8 +175,14 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
     """The game converted from its disc image into `out`, unless a complete
     conversion by the same converter and runtime ABI is there already."""
     root = game.root
-    if not game.media.is_file():
-        raise ValueError(f"{game.media}: place the game's disc image there first")
+    media = game.media
+    if not media.is_file():
+        raise ValueError(f"{media}: place the game's disc image there first")
+    image_identity = source_image_identity(game)
+    if image_identity:
+        image = image_identity["source_image"]
+        if media.stat().st_size != image["bytes"] or file_sha256(media) != image["sha256"]:
+            raise ValueError(f"{media}: source image differs from the selected repair edition")
     revision = converter_revision(root)
     abi = web.abi_digest(root).hex()
     profile = web.profile_entry(game, web.web_profile(game))
@@ -190,6 +198,7 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
             existing["converter"] == revision
             and existing["abi"] == abi
             and existing["source_sha256"] == game.source["sha256"]
+            and all(existing.get(key) == value for key, value in image_identity.items())
             and existing["profile_sha256"] == profile_hash
             and existing["export_sha256"] == export_hash
             and all((out / n).stat().st_size == existing["bytes"][n]
@@ -212,6 +221,7 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
         "renderer_target": "android",
         "schema_version": 1,
         "source_sha256": game.source["sha256"],
+        **image_identity,
     }
     (gen / "meta.json").write_text(json.dumps(meta, sort_keys=True, separators=(",", ":")) + "\n")
     (gen / "manifest.json").write_text(
@@ -220,6 +230,7 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
                 "schema_version": 1,
                 "slug": game.slug,
                 "source_sha256": game.source["sha256"],
+                **image_identity,
                 "abi": abi,
                 "converter": revision,
                 "profile_sha256": profile_hash,
@@ -228,13 +239,13 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
         )
         + "\n"
     )
-    print(f"converting {game.media.name}", file=sys.stderr)
+    print(f"converting {media.name}", file=sys.stderr)
     subprocess.run(
         [
             "node",
             root / "platforms/android/export/export.mjs",
             root / "build/web/tools",
-            game.media,
+            media,
             gen / "profile.json",
             gen / "meta.json",
             gen / "manifest.json",
@@ -242,6 +253,8 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
         ],
         check=True,
     )
+    if source_image_identity(game) != image_identity:
+        raise ValueError("selected source image changed during conversion; retry conversion")
     web.validate_package(game, out.parent, out / "game.d64p")
     return out
 
@@ -405,11 +418,13 @@ def apk_input_digest(game: GameSpec, abis: list[str]) -> str:
     paths.update(game.directory.glob("cover.*"))
     paths.update(game.directory.rglob("*.h"))
     paths.update(root / name for name in (
-        "src/director64/android.py", "src/director64/web.py", str(web.FONT),
+        "src/director64/android.py", "src/director64/build_inputs.py",
+        "src/director64/web.py", str(web.FONT),
         "tools/director/validate-package.c",
     ))
     digest = hashlib.sha256(json.dumps({
         "source": game.source["sha256"], "abis": abis,
+        **source_image_identity(game),
         "profile": web.profile_entry(game, web.web_profile(game)),
         "importer": web.import_source_digest(root),
     }, sort_keys=True).encode())
@@ -426,6 +441,8 @@ def verify_apk(game: GameSpec) -> Path:
         receipt = json.loads(apk_receipt_path(game).read_text())
         valid = (
             receipt["source_sha256"] == game.source["sha256"]
+            and all(receipt.get(key) == value
+                    for key, value in source_image_identity(game).items())
             and receipt["inputs"] == apk_input_digest(game, receipt["abis"])
             and receipt["apk_sha256"] == web.sha256(path)
         )
@@ -537,6 +554,7 @@ rm -f {w}/out/aligned.apk {out}.idsig
         raise ValueError("APK inputs changed during build; rebuild before installing")
     receipt = {
         "source_sha256": game.source["sha256"], "abis": abis, "inputs": identity,
+        **source_image_identity(game),
         "apk_sha256": web.sha256(apk), "bytes": apk.stat().st_size,
         "conversion": json.loads((data / "manifest.json").read_text()),
     }

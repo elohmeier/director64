@@ -11,6 +11,12 @@ sha256 = "221da0586845f23095c92c5c899f35a5d1f2f35a0932b996d18588559cbb6297"
 bytes = 701138944
 kind = "iso9660"
 
+[[sources.repairs]]
+file = "Optik-Mechanik-repaired.iso"
+sha256 = "88a7d48355f7d458f7489b4e0636a0e786bee750df14a523d4dea738e1205831"
+bytes = 701138944
+recipe = "host/media-repair.json"
+
 [recovery]
 director_version = 850
 media_root = "DATA"

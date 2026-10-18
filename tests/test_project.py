@@ -76,6 +76,36 @@ def test_an_alternate_rip_is_found_and_keeps_the_edition(tmp_path: Path):
     assert game.media == directory / "DISC.iso"
 
 
+def test_explicit_repaired_copy_is_preferred_without_hiding_original(tmp_path: Path):
+    root = alternate_root(tmp_path, file="CD01.img", sha256="b" * 64, bytes=2352)
+    manifest = root / "games/disc/game.toml"
+    with manifest.open("a") as handle:
+        handle.write('\n[[sources.repairs]]\nfile = "repaired.iso"\n'
+                     f'sha256 = "{"c" * 64}"\nbytes = 2048\n'
+                     'recipe = "host/media-repair.json"\n')
+    game = GameSpec.load("disc", root=root)
+    directory = root / "media/disc" / game.source["id"]
+    directory.mkdir(parents=True)
+    (directory / "DISC.iso").write_bytes(b"original")
+    assert game.media == directory / "DISC.iso"
+    (directory / "repaired.iso").write_bytes(b"separately pinned repair")
+    assert game.media == directory / "repaired.iso"
+    assert game.image["sha256"] == "c" * 64
+    assert game.source["sha256"] == "a" * 64
+    assert (directory / "DISC.iso").read_bytes() == b"original"
+    assert len(game.images) == 3
+
+
+@pytest.mark.parametrize("recipe", ["", "../elsewhere.json", "/outside/recipe.json"])
+def test_repair_recipe_must_stay_in_the_game_directory(tmp_path, recipe):
+    root = alternate_root(tmp_path, file="CD01.img", sha256="b" * 64, bytes=2352)
+    with (root / "games/disc/game.toml").open("a") as handle:
+        handle.write('\n[[sources.repairs]]\nfile = "repaired.iso"\n'
+                     f'sha256 = "{"c" * 64}"\nbytes = 2048\nrecipe = "{recipe}"\n')
+    with pytest.raises(ValueError, match="recipe"):
+        GameSpec.load("disc", root=root)
+
+
 @pytest.mark.parametrize(
     ("alternate", "message"),
     [

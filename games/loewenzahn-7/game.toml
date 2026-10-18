@@ -11,6 +11,12 @@ sha256 = "b1d146c2f036109c56dbf52b739b8571dd7681618d7ba4f5ed0906bc2a7cc15c"
 bytes = 700086272
 kind = "iso9660"
 
+[[sources.repairs]]
+file = "Loewenzahn-7-repaired.iso"
+sha256 = "508dca233dd68b96aa1b188df0c1b086867589dd4326f382507440bbc4161ffc"
+bytes = 700086272
+recipe = "host/media-repair.json"
+
 [recovery]
 director_version = 850
 media_root = "DATA"

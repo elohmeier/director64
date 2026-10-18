@@ -9,6 +9,22 @@ from types import SimpleNamespace
 import pytest
 
 from director64 import android, web
+from director64.project import GameSpec
+
+
+def repair_game(tmp_path):
+    original, repaired = b"original disc", b"repaired disc"
+    source = {
+        "id": "sha256-" + hashlib.sha256(original).hexdigest()[:12],
+        "file": "original.iso", "sha256": hashlib.sha256(original).hexdigest(),
+        "bytes": len(original), "kind": "iso9660",
+        "repairs": [{"file": "repaired.iso", "sha256": hashlib.sha256(repaired).hexdigest(),
+                     "bytes": len(repaired), "recipe": "host/media-repair.json"}],
+    }
+    game = GameSpec(tmp_path, "fixture", {"port": {"director_version": 850}}, source)
+    game.media.parent.mkdir(parents=True)
+    game.media.write_bytes(original)
+    return game, game.media.parent / "repaired.iso", repaired
 
 
 def test_stale_or_modified_tools_rebuild_before_android_conversion(tmp_path, monkeypatch):
@@ -152,6 +168,116 @@ def test_asset_reuse_checks_profile_exporter_source_and_pack_hashes(tmp_path, mo
     monkeypatch.setattr(web, "validate_package", rejected)
     with pytest.raises(ValueError, match="runtime rejected"):
         android.convert(game, out, force=True)
+
+
+def test_conversion_tracks_selected_image_in_both_directions(tmp_path, monkeypatch):
+    game, repaired, data = repair_game(tmp_path)
+    edition = game.source["sha256"]
+    out = tmp_path / "export/game"
+    monkeypatch.setattr(android, "converter_revision", lambda root: "converter")
+    monkeypatch.setattr(web, "abi_digest", lambda root: b"abi")
+    monkeypatch.setattr(web, "web_profile", lambda game: {})
+    monkeypatch.setattr(web, "profile_entry", lambda game, web: {"source": game.source})
+    monkeypatch.setattr(web, "validate_package", lambda *args: None)
+    exports = []
+
+    def export(command, **kwargs):
+        metadata = json.loads(command[5].read_text())
+        manifest = json.loads(command[6].read_text())
+        image = {key: game.image[key] for key in ("file", "sha256", "bytes")}
+        assert metadata["source_image"] == manifest["source_image"] == image
+        assert metadata["source_sha256"] == manifest["source_sha256"] == edition
+        assert command[3].name == image["file"]
+        exports.append(image["file"])
+        out.mkdir(exist_ok=True)
+        for name in android.GAME_FILES:
+            (out / name).write_bytes(image["file"].encode())
+        manifest["bytes"] = {name: (out / name).stat().st_size for name in android.GAME_FILES}
+        manifest["sha256"] = {name: web.sha256(out / name) for name in android.GAME_FILES}
+        (out / "manifest.json").write_text(json.dumps(manifest))
+
+    monkeypatch.setattr(android.subprocess, "run", export)
+    assert android.convert(game, out) == out
+    assert android.convert(game, out) == out
+    repaired.write_bytes(data)
+    assert android.convert(game, out) == out
+    assert android.convert(game, out) == out
+    repaired.unlink()
+    assert android.convert(game, out) == out
+    assert exports == ["original.iso", "repaired.iso", "original.iso"]
+    # A pre-fix receipt cannot establish which image supplied these assets.
+    manifest = json.loads((out / "manifest.json").read_text())
+    del manifest["source_image"]
+    (out / "manifest.json").write_text(json.dumps(manifest))
+    android.convert(game, out)
+    assert len(exports) == 4
+    repaired.write_bytes(data)
+    android.convert(game, out)
+    repaired.write_bytes(b"modified disc")
+    with pytest.raises(ValueError, match="source image differs"):
+        android.convert(game, out)
+    assert len(exports) == 5
+
+
+def test_conversion_rejects_source_selection_changed_during_export(tmp_path, monkeypatch):
+    game, repaired, data = repair_game(tmp_path)
+    monkeypatch.setattr(android, "converter_revision", lambda root: "converter")
+    monkeypatch.setattr(web, "abi_digest", lambda root: b"abi")
+    monkeypatch.setattr(web, "web_profile", lambda game: {})
+    monkeypatch.setattr(web, "profile_entry", lambda game, web: {})
+    monkeypatch.setattr(
+        android.subprocess, "run", lambda *args, **kwargs: repaired.write_bytes(data)
+    )
+    with pytest.raises(ValueError, match="selected source image changed"):
+        android.convert(game, tmp_path / "export/game")
+
+
+def test_apk_receipt_tracks_selected_image_without_changing_edition(tmp_path, monkeypatch):
+    game, repaired, data = repair_game(tmp_path)
+    edition = game.source["sha256"]
+    for name in (
+        "src/director64/android.py", "src/director64/build_inputs.py",
+        "src/director64/web.py", web.FONT, "tools/director/validate-package.c",
+    ):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture")
+    monkeypatch.setattr(web, "web_profile", lambda game: {})
+    monkeypatch.setattr(web, "profile_entry", lambda game, web: {"source": game.source})
+    monkeypatch.setattr(web, "import_source_digest", lambda root: "importer")
+    game.dist.mkdir(parents=True)
+    apk = android.apk_path(game)
+    apk.write_bytes(b"APK")
+    abis = ["armeabi-v7a"]
+
+    def receipt():
+        value = {
+            "source_sha256": edition, "abis": abis,
+            "inputs": android.apk_input_digest(game, abis), "apk_sha256": web.sha256(apk),
+            "source_image": {key: game.image[key] for key in ("file", "sha256", "bytes")},
+        }
+        android.apk_receipt_path(game).write_text(json.dumps(value))
+        return value
+
+    original = receipt()
+    assert android.verify_apk(game) == apk
+    repaired.write_bytes(data)
+    assert android.apk_input_digest(game, abis) != original["inputs"]
+    with pytest.raises(ValueError, match="stale build receipt"):
+        android.verify_apk(game)
+    updated = receipt()
+    assert android.verify_apk(game) == apk
+    for field in ("file", "sha256", "bytes"):
+        altered = {**updated, "source_image": {**updated["source_image"], field: "wrong"}}
+        android.apk_receipt_path(game).write_text(json.dumps(altered))
+        with pytest.raises(ValueError, match="stale build receipt"):
+            android.verify_apk(game)
+    receipt()
+    repaired.unlink()
+    assert android.apk_input_digest(game, abis) == original["inputs"]
+    with pytest.raises(ValueError, match="stale build receipt"):
+        android.verify_apk(game)
+    assert game.source["sha256"] == edition
 
 
 def test_importer_fingerprint_covers_compiler_pipeline_schema_and_vendored_decoder(

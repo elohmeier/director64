@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "source_sha256": "221da0586845f23095c92c5c899f35a5d1f2f35a0932b996d18588559cbb6297",
+  "output": {
+    "file": "Optik-Mechanik-repaired.iso",
+    "sha256": "88a7d48355f7d458f7489b4e0636a0e786bee750df14a523d4dea738e1205831",
+    "bytes": 701138944
+  },
+  "description": "Preserves healthy compressed pictures and MP2 frames; reconstructs 83 video pictures and 50 audio frames at pinned damage/dependency intervals while preserving original timing. Missing original content is not restored.",
+  "patches": [
+    {
+      "path": "DATA/VIDEOS/VLUZIFER.MPG",
+      "bytes": 11385513,
+      "source_sha256": "d7f039f5c079824ffd980dccc6b02e5e3a2f9257f75d183284d557250a5982e3",
+      "method": "salvage",
+      "recipe": {
+        "version": 1,
+        "source_sha256": "d7f039f5c079824ffd980dccc6b02e5e3a2f9257f75d183284d557250a5982e3",
+        "width": 352,
+        "height": 288,
+        "fps": 25,
+        "reference_stride": 3,
+        "first_pts": 19800,
+        "video_frames": 1639,
+        "audio_frames": 2732,
+        "audio_header": "fffdb400",
+        "audio_frame_bytes": 672,
+        "source_damage": [
+          [
+            1015808,
+            1016320
+          ],
+          [
+            3067904,
+            3084288
+          ],
+          [
+            3133440,
+            3149824
+          ],
+          [
+            3198976,
+            3215360
+          ],
+          [
+            3239936,
+            3260416
+          ],
+          [
+            3321856,
+            3338240
+          ],
+          [
+            3387392,
+            3422208
+          ],
+          [
+            3526656,
+            3547136
+          ],
+          [
+            3608576,
+            3624960
+          ]
+        ],
+        "video_replacements": [
+          [
+            145,
+            146
+          ],
+          [
+            442,
+            450
+          ],
+          [
+            451,
+            525
+          ]
+        ],
+        "max_output_bytes": 11385513,
+        "audio_replacements": [
+          [
+            729,
+            736
+          ],
+          [
+            744,
+            754
+          ],
+          [
+            761,
+            766
+          ],
+          [
+            771,
+            775
+          ],
+          [
+            789,
+            796
+          ],
+          [
+            806,
+            814
+          ],
+          [
+            839,
+            844
+          ],
+          [
+            858,
+            862
+          ]
+        ]
+      },
+      "output_sha256": "dbf9573b342512d40fe4a9e9770509cb79cf99fc9d4f42c81870762fa454f5df",
+      "expected_info": {
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1,
+        "decoded_frames": 1639,
+        "audio_frames": 2732,
+        "duration_seconds": 65.56
+      }
+    }
+  ]
+}

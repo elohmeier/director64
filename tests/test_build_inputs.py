@@ -91,6 +91,43 @@ def test_cache_rejects_same_size_source_replacement(tmp_path):
         verify(game)
 
 
+def test_cache_tracks_original_and_repaired_image_selection(tmp_path):
+    import hashlib
+
+    game = fixture_game(tmp_path)
+    assert "source_image" not in identity(game)
+    edition = game.source["sha256"]
+    repaired_bytes = b"repaired disc"
+    spec = {"file": "repaired.iso", "sha256": hashlib.sha256(repaired_bytes).hexdigest(),
+            "bytes": len(repaired_bytes), "recipe": "host/media-repair.json"}
+    game = replace(game, source={**game.source, "repairs": [spec]})
+    repaired = game.media.parent / spec["file"]
+    original = identity(game)
+    assert original["source_image"] == {
+        key: game.source[key] for key in ("file", "sha256", "bytes")
+    }
+    record(game)
+    verify(game)
+    repaired.write_bytes(repaired_bytes)
+    assert identity(game)["source_image"] == {
+        key: spec[key] for key in ("file", "sha256", "bytes")
+    }
+    with pytest.raises(ValueError, match="inputs changed"):
+        verify(game)
+    record(game)
+    verify(game)
+    repaired.unlink()
+    assert identity(game) == original
+    with pytest.raises(ValueError, match="inputs changed"):
+        verify(game)
+    assert game.source["sha256"] == edition
+    inputs = begin(game)
+    repaired.write_bytes(repaired_bytes)
+    with pytest.raises(ValueError, match="inputs changed during asset build"):
+        record(game, inputs)
+    assert not (game.work / "build-inputs.json").exists()
+
+
 def test_cache_rejects_changed_game_compatibility(tmp_path):
     game = fixture_game(tmp_path)
     game = replace(game, data={**game.data, "port": {"native_compatibility": True}})

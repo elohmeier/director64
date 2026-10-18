@@ -103,8 +103,9 @@ passed 152 streams and rejected seven source files:
 - `VI_05_01` has damaged video slices and an audio frame synchronization failure.
 - `VLUZIFER` has invalid packet synchronization in its program stream.
 
-These seven inputs remain explicit source-data failures. Producing concealed
-output would require a separately specified and validated recovery policy.
+These seven original inputs remain explicit source-data failures. The separate
+repair workflow below produces pinned derivative images without weakening this
+gate.
 
 ### Recovery investigation
 
@@ -163,8 +164,7 @@ Recovery should preserve the original images and distinguish two outcomes:
   Expected damage must never authorize unrelated decoder errors.
 
 These findings do not change the default import gate or qualify earlier APKs
-that concealed the errors. No reconstructed stream has been integrated into a
-game package or deployed to a device.
+that concealed the errors.
 
 A subsequent public-archive search recovered an intact `VI_05_01` from a raw
 2352-byte-sector MDF/MDS image. Its 21,731,332-byte file differs from the selected
@@ -182,8 +182,41 @@ the five short clips still need their separately identified 40 ms reconstruction
 or another clean source. Two ordinary LZ7 ISO uploads match the selected damaged
 ISO's size, MD5 and SHA-1. Both an Optik ISO upload and a separate 7z upload also
 match the local damaged files' respective sizes and hashes. They provide no
-replacement bytes for Optik. The recovered LZ7 clip remains separate from the
-original images and has not yet been integrated into a game package.
+replacement bytes for Optik.
+
+### Preparing separate repaired images
+
+`director64 repair-media --game loewenzahn-7 --replacement PATH` accepts the
+recovered long clip only at the full SHA-256 above. It restores that file and
+reconstructs the one malformed B picture in each of the five short clips.
+`director64 repair-media --game loewenzahn-optik` reconstructs only the audited
+damage and dependent pictures in `VLUZIFER`. Both commands retain the original
+ISO and create a separately named, full-hash-pinned copy under ignored `media/`.
+The source-free recipes live under each game's `host/media-repair.json`.
+
+Optik retains all 1,556 trustworthy compressed video pictures and 2,682 intact
+MP2 frames. It replaces 83 pictures (3.32 seconds total) with zero-motion holds
+and 50 audio frames (1.2 seconds total) with silence, retaining the complete
+1,639-picture/65.56-second timeline. Replacement intervals include pictures
+depending on damaged references; the intact I picture between damaged runs
+survives. The program stream is remultiplexed and padded within the original
+file extent, preserving ISO/Joliet/HFS catalogs and all other files.
+
+Independent FFmpeg and production PL_MPEG checks establish exact retained
+video pixels, reference-matching holds, unchanged original timestamps and
+byte-identical retained MP2 frames. Intact audio runs match FFmpeg's floating
+point decoder exactly. Integer decoders can differ by one PCM unit after
+synthesis history changes; silence has a natural 480-sample filter tail before
+zero output. This reconstruction cannot recover the missing original content.
+
+The repair command verifies the original image, every patched file, strict
+video/audio decoding, importer timeline and geometry, and the entire output
+image. Its receipt binds the recipe snapshot, original, changes and output.
+The ordinary importer accepts only catalogued hashes and still rejects the
+unrepaired damage. A present repaired image is preferred; its identity also
+invalidates conversion, native-build and APK caches when the selection changes.
+APK video uses the normal VP9 export pipeline. Device playback and complete
+gameplay remain separate qualification steps.
 
 Source-free tests cover bounded damaged slices, immutable decoder input,
 half-pel bounds, host identity and lifecycle, audio flags, decoder errors, and

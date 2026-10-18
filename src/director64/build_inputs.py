@@ -7,6 +7,18 @@ import json
 from .iso import file_sha256
 
 
+def source_image_identity(game):
+    """Distinguish repaired media while keeping the original edition/save identity.
+
+    Ordinary alternate rips have identical content, so retain their established
+    cache format. A repair changes content and must identify the selected image.
+    """
+    if not game.source.get("repairs"):
+        return {}
+    image = game.image
+    return {"source_image": {key: image[key] for key in ("file", "sha256", "bytes")}}
+
+
 def identity(game):
     paths = [
         game.directory / "game.toml",
@@ -74,6 +86,7 @@ def identity(game):
         "schema_version": 1,
         "game": game.slug,
         "source": game.source["sha256"],
+        **source_image_identity(game),
         "inputs": {str(p.relative_to(game.root)): file_sha256(p) for p in paths}
         | {
             str(p.relative_to(game.root)): file_sha256(p) if p.is_file() else None for p in optional

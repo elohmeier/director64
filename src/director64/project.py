@@ -52,9 +52,15 @@ class GameSpec:
         digest = selected["sha256"]
         if not re.fullmatch(r"[0-9a-f]{64}", digest) or source != "sha256-" + digest[:12]:
             raise ValueError("source identity must match full SHA-256")
-        images = [selected, *selected.get("alternates", [])]
-        if selected.get("alternates") and selected["kind"] != "iso9660":
-            raise ValueError("only disc image sources have alternate rips")
+        images = [selected, *selected.get("alternates", []), *selected.get("repairs", [])]
+        if selected["kind"] != "iso9660" and (
+            selected.get("alternates") or selected.get("repairs")
+        ):
+            raise ValueError("only disc image sources have alternate or repaired images")
+        for repaired in selected.get("repairs", []):
+            recipe = Path(repaired.get("recipe", ""))
+            if not str(repaired.get("recipe", "")) or recipe.is_absolute() or ".." in recipe.parts:
+                raise ValueError("repaired image needs a relative recipe path")
         for image in images:
             if Path(image["file"]).name != image["file"] or image["file"] in {".", ".."}:
                 raise ValueError("source file must be a basename")
@@ -76,17 +82,23 @@ class GameSpec:
 
     @property
     def images(self) -> list[dict]:
-        """The source's disc image and its alternate rips: other containers
-        (a raw CloneCD `.img`, a `.bin`) of the same pressing, each pinned by
-        its own SHA-256. The source id and `source["sha256"]` still name the
-        edition."""
-        return [self.source, *self.source.get("alternates", [])]
+        """Pinned images of the edition, including explicitly audited repairs.
+
+        Alternate rips preserve the pressing in another container. Repaired
+        copies change only their recipe's media; the source id still names the
+        original edition and its unchanged Director scripts.
+        """
+        return [self.source, *self.source.get("alternates", []), *self.source.get("repairs", [])]
 
     @property
     def image(self) -> dict:
         """The catalogued image present under media/, else the primary one."""
         directory = self.root / "media" / self.slug / self.source["id"]
-        return next((i for i in self.images if (directory / i["file"]).is_file()), self.source)
+        # Creating a separately pinned repair opts into its documented media
+        # changes. A present but modified repair fails the ordinary source hash
+        # check; it must never silently fall back to another image.
+        candidates = [*self.source.get("repairs", []), *self.images]
+        return next((i for i in candidates if (directory / i["file"]).is_file()), self.source)
 
     @property
     def media(self) -> Path:

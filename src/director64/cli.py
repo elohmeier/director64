@@ -255,6 +255,7 @@ def main(argv=None):
         "summercart",
         "extract",
         "recover",
+        "repair-media",
         "reference",
         "fuzz",
         "perf",
@@ -313,6 +314,10 @@ def main(argv=None):
         if args.command == "recover":
             recover(game)
             return 0
+        if args.command == "repair-media":
+            from .media_repair import main as repair_media
+
+            return repair_media(game, remaining)
         game.require_port()
         sys.argv = [f"director64 {args.command}", *remaining]
         if args.command == "assets":

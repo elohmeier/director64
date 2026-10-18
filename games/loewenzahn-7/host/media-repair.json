@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "source_sha256": "b1d146c2f036109c56dbf52b739b8571dd7681618d7ba4f5ed0906bc2a7cc15c",
+  "output": {
+    "file": "Loewenzahn-7-repaired.iso",
+    "sha256": "508dca233dd68b96aa1b188df0c1b086867589dd4326f382507440bbc4161ffc",
+    "bytes": 700086272
+  },
+  "description": "Restored VI_05_01 from an independent copy; held five non-reference pictures for 40 ms each. All Director scripts, audio outside the restored clip and other disc bytes are preserved.",
+  "patches": [
+    {
+      "path": "DATA/MPEGS/VIDEO1.MPG",
+      "bytes": 4073960,
+      "source_sha256": "7a4ac7285c1fe4bcdd15e9a2fd4f1ca18c1b18076968435dbae42eeba572f708",
+      "method": "hold-b-picture",
+      "video_sha256": "765f1782c9ce7a29c3b8401785a6ab6a3dcd8eb31a2456c074a30474b6345274",
+      "picture": {
+        "coded_index": 827,
+        "display_index": 826,
+        "temporal_reference": 0,
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1
+      },
+      "output_sha256": "93874f67ead81be378f1c625644db459cc7e0f1f94a9c5da1022e312dfd8ce36",
+      "expected_info": {
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1,
+        "decoded_frames": 828,
+        "audio_frames": 1265,
+        "duration_seconds": 33.12
+      }
+    },
+    {
+      "path": "DATA/MPEGS/VIDEO2.MPG",
+      "bytes": 4073960,
+      "source_sha256": "f6ef49906966a3b6a3a76a5e0d28cff4a01f8b0bc20d17f730acfa69f405166e",
+      "method": "hold-b-picture",
+      "video_sha256": "765f1782c9ce7a29c3b8401785a6ab6a3dcd8eb31a2456c074a30474b6345274",
+      "picture": {
+        "coded_index": 827,
+        "display_index": 826,
+        "temporal_reference": 0,
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1
+      },
+      "output_sha256": "a59d05acfa80b73daf3580a9373731962d9235b20dc3f0d8ddd33b335e0f104c",
+      "expected_info": {
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1,
+        "decoded_frames": 828,
+        "audio_frames": 1265,
+        "duration_seconds": 33.12
+      }
+    },
+    {
+      "path": "DATA/MPEGS/VIDEO3.MPG",
+      "bytes": 4073960,
+      "source_sha256": "48dda66eaba5e23f1ec62cc512c2de713ac69b41bb5d8d23e898f2951bb04866",
+      "method": "hold-b-picture",
+      "video_sha256": "765f1782c9ce7a29c3b8401785a6ab6a3dcd8eb31a2456c074a30474b6345274",
+      "picture": {
+        "coded_index": 827,
+        "display_index": 826,
+        "temporal_reference": 0,
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1
+      },
+      "output_sha256": "bd9971552a26a5211df694b1a0f4a465808ac09e3721ea470a562243ef94f287",
+      "expected_info": {
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1,
+        "decoded_frames": 828,
+        "audio_frames": 1265,
+        "duration_seconds": 33.12
+      }
+    },
+    {
+      "path": "DATA/MPEGS/VIDEO4.MPG",
+      "bytes": 4073960,
+      "source_sha256": "4d73ba554816959ab19f4c86b99a21aa660ba41be7d716c6cd53a41b3051c720",
+      "method": "hold-b-picture",
+      "video_sha256": "765f1782c9ce7a29c3b8401785a6ab6a3dcd8eb31a2456c074a30474b6345274",
+      "picture": {
+        "coded_index": 827,
+        "display_index": 826,
+        "temporal_reference": 0,
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1
+      },
+      "output_sha256": "5af56ae868337b2f50b15e31e20a11510790f0b3ae9f23aafa4a1287f78dc7c5",
+      "expected_info": {
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1,
+        "decoded_frames": 828,
+        "audio_frames": 1265,
+        "duration_seconds": 33.12
+      }
+    },
+    {
+      "path": "DATA/MPEGS/VIDEO5.MPG",
+      "bytes": 4073960,
+      "source_sha256": "129edd8a197d00de93e92d868d74f7b7454c4f0685603b611badfb52871563fc",
+      "method": "hold-b-picture",
+      "video_sha256": "765f1782c9ce7a29c3b8401785a6ab6a3dcd8eb31a2456c074a30474b6345274",
+      "picture": {
+        "coded_index": 827,
+        "display_index": 826,
+        "temporal_reference": 0,
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1
+      },
+      "output_sha256": "e528e07ef030007c5c8beec17e04a4f901e8ce5ade7f342211992e4e2b33e45c",
+      "expected_info": {
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1,
+        "decoded_frames": 828,
+        "audio_frames": 1265,
+        "duration_seconds": 33.12
+      }
+    },
+    {
+      "path": "DATA/MPEGS/VI_05_01.MPG",
+      "bytes": 21731332,
+      "source_sha256": "2ae64f015c59651cdf2d330f66aa6afa39e986af3e9d1f3de9cf23ca5468a4f5",
+      "method": "recovered-copy",
+      "replacement_sha256": "5513bc95319ec238310f694f8ad52117814f66503fe76e12f6ef44cd2bde1ead",
+      "output_sha256": "5513bc95319ec238310f694f8ad52117814f66503fe76e12f6ef44cd2bde1ead",
+      "expected_info": {
+        "width": 352,
+        "height": 288,
+        "rate": 25,
+        "scale": 1,
+        "decoded_frames": 3533,
+        "audio_frames": 5412,
+        "duration_seconds": 141.32
+      }
+    }
+  ]
+}
