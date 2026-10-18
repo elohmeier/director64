@@ -166,6 +166,25 @@ These findings do not change the default import gate or qualify earlier APKs
 that concealed the errors. No reconstructed stream has been integrated into a
 game package or deployed to a device.
 
+A subsequent public-archive search recovered an intact `VI_05_01` from a raw
+2352-byte-sector MDF/MDS image. Its 21,731,332-byte file differs from the selected
+ISO in exactly the 1,583 previously identified foreign sectors; every other
+sector is identical. The recovered clip's SHA-256 is
+`5513bc95319ec238310f694f8ad52117814f66503fe76e12f6ef44cd2bde1ead`.
+Strict FFmpeg video/audio decoding and the production browser importer pass:
+3,533 displayed pictures, 5,412 MP2 frames and 141.32 seconds after the ordinary
+initial B-picture adjustment. This is replacement from an independent copy,
+without synthesized frames or sound. Only bounded source-image ranges were
+retrieved, so this does not qualify the entire alternate disc image.
+
+The same raw image's `VIDEO1` is byte-identical to the malformed selected copy;
+the five short clips still need their separately identified 40 ms reconstruction
+or another clean source. Two ordinary LZ7 ISO uploads match the selected damaged
+ISO's size, MD5 and SHA-1. Both an Optik ISO upload and a separate 7z upload also
+match the local damaged files' respective sizes and hashes. They provide no
+replacement bytes for Optik. The recovered LZ7 clip remains separate from the
+original images and has not yet been integrated into a game package.
+
 Source-free tests cover bounded damaged slices, immutable decoder input,
 half-pel bounds, host identity and lifecycle, audio flags, decoder errors, and
 generated VP8/H.264 frames across keyframe seeks and rewinds. Native and
