@@ -106,6 +106,66 @@ passed 152 streams and rejected seven source files:
 These seven inputs remain explicit source-data failures. Producing concealed
 output would require a separately specified and validated recovery policy.
 
+### Recovery investigation
+
+An independent investigation on 2026-10-18 compared the failing extracted files
+with their pinned ISO extents, inspected MPEG packets and elementary streams,
+and checked the hybrid discs' Mac file catalogs. The damaged bytes are present
+in the source images; repeating extraction or relaxing the parser cannot
+restore them. The Mac data forks occupy the same extents as the Windows files,
+and their empty resource forks provide no alternate copy.
+
+| Input | Confirmed defect | Recovery implication |
+| --- | --- | --- |
+| LZ7 `VIDEO1`–`VIDEO5` | The identical video streams contain one malformed non-reference B picture, display frame 826 at 33.040 seconds, lasting 40 ms. | A bounded one-picture reconstruction is possible without changing other pictures, audio or timing. It is not recovered original artwork. |
+| LZ7 `VI_05_01` | 1,583 sectors across 29 runs contain byte-identical material from `VI_04_02`: 3,241,984 overwritten bytes. Their clocks jump ahead by 87.946667 seconds. | Sorting packets cannot replace the missing sectors; it creates duplicate clocks. MP2 CRC protection is disabled in this source. A clean copy is needed for exact restoration. |
+| Optik `VLUZIFER` | A valid-checksum HFS+ journal header and eight valid transaction records overwrite at least 158,208 bytes of MPEG data. | This is foreign filesystem data, not MPEG padding. The separate local 7z archive expands to the same damaged ISO. Exact restoration needs another copy. |
+
+The journal identification follows Apple's
+[HFS Plus Volume Format](https://developer.apple.com/library/archive/technotes/tn/tn1150.html).
+It establishes the type of the overwriting data, not when or how it entered the
+image. The containing hybrid disc itself uses classic HFS. Hash and slice-anchor
+searches across 271 local MPEG files, including the other Löwenzahn and Lexikon
+discs, found no clean compressed duplicate of either affected clip.
+
+Intact LZ7 timestamps establish 3,535 original coded pictures, including two
+ordinary initial open-GOP B pictures that cannot be presented. The playable
+timeline is therefore 3,533 pictures, or 141.32 seconds. Foreign footage inflates
+the damaged stream's picture count, so counting its remaining picture headers
+cannot establish the original duration. Source-byte and reference-chain checks
+identify 624 untrusted original picture slots (24.96 seconds), separately from
+the initial B pictures. Optik's intact endpoints establish a 65.56-second video
+timeline. Its 34 missing video slots and 65 missing MP2 slots understate the
+damage because additional pictures are concealed or depend on bad references.
+
+A separate local proof reconstructs each short clip's damaged B picture by
+holding its preceding P picture for 40 ms. Both the production PL_MPEG adapter
+and independent FFmpeg frame hashes establish that the other 827 displayed
+pictures are unchanged. All packet metadata, timestamps and elementary audio
+bytes are retained; the replacement matches its preceding picture exactly.
+Strict FFmpeg video/audio decoding and browser importing accept the result.
+All five program-stream copies independently pass strict video/audio decoding,
+frame-hash comparison and packet/audio preservation checks.
+This qualifies a bounded reconstruction, not recovery of the original picture.
+
+Recovery should preserve the original images and distinguish two outcomes:
+
+- Exact recovery uses another verified read or copy. Re-reading physical media
+  with a persistent error map and retries, as documented by
+  [GNU ddrescue](https://www.gnu.org/software/ddrescue/manual/ddrescue_manual.html#Optical-media),
+  can establish which sectors are readable; the new source must then pass the
+  same packet, audio, picture-count and strict decoder checks.
+- Reconstruction creates a separate, explicitly identified derivative. Its
+  receipt must bind the original hash, recipe, changed regions and output hash.
+  It must preserve the timeline and distinguish replaced pictures or sound from
+  recovered original data. Changes to a reference picture must account for
+  dependent P/B pictures until an independently intact reference is reached.
+  Expected damage must never authorize unrelated decoder errors.
+
+These findings do not change the default import gate or qualify earlier APKs
+that concealed the errors. No reconstructed stream has been integrated into a
+game package or deployed to a device.
+
 Source-free tests cover bounded damaged slices, immutable decoder input,
 half-pel bounds, host identity and lifecycle, audio flags, decoder errors, and
 generated VP8/H.264 frames across keyframe seeks and rewinds. Native and
