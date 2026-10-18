@@ -346,3 +346,13 @@ strict MIPS warnings and the synthetic render-probe ROM builds with a valid
 header. Its new target pixel fixtures have not been executed in an emulator or
 on hardware. Independent review also reproduced and fixed a null-palette
 prefix crash and a transformed-film sampling discrepancy before integration.
+
+All twelve buildable games have fresh exports and signed ARM32 APKs built from
+clean runtime commit `9c78b32`. Package loading, current source and conversion
+receipts, embedded version names and signing certificates pass verification.
+Each game's production runtime and adapter completes a local 6,000-tick startup
+smoke: 72,000 ticks total, with zero failures or runtime alerts. These erased-save,
+no-input runs render every 300 ticks, use blank font coverage and nominal audio
+lifetimes, and omit video decoding. They establish startup/package compatibility,
+not full gameplay coverage. Löwenzahn 7 and Optik retain their source-media
+blockers. No follow-up APK was installed or launched on the projector.

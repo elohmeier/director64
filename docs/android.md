@@ -98,6 +98,14 @@ The follow-up also adds standard tool cursors and a bounded background cache.
 Projector interaction stopped at the user's request while it was being used
 for a movie. Further installation and physical checks remain pending.
 
+All twelve buildable ARM32 APKs are rebuilt from clean runtime commit
+`9c78b32`, with fresh conversions, matching source receipts and a common verified
+signing certificate. Each passes a local 6,000-tick startup smoke without a
+runtime failure or alert. These checks use blank font coverage, nominal audio
+lifetimes and no video decoding; they do not qualify full gameplay or device
+performance. None of these follow-up APKs has been installed or launched on the
+projector. Löwenzahn 7 and Optik retain their source-media blockers.
+
 ## Building
 
 Requirements are the browser player's (Node with the locked dev
