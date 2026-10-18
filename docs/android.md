@@ -77,16 +77,31 @@ adds conversion-time source coverage, retained film/mask planes and equivalent
 picture detection, together with input, UI, audio and video fixes. The fresh
 Birthday replay matches all 300 frames byte-for-byte against the original
 renderer while reducing redraws to 28. Host, sanitizer and browser evidence
-passes; the paired EF-62N is currently unreachable, so updated installation,
-physical pacing, input and lifecycle checks remain pending.
+passes. A later EF-62N reconnection allowed an in-place Birthday update and a
+short physical run of repair `be06bbd`.
 All twelve buildable ARM32 APKs have fresh exports and verified current-source
 receipts for repair `be06bbd`; Löwenzahn 7 and Optik retain the source blockers
-above. These repair APKs have not yet been installed on the projector.
+above. Birthday was the only repair APK installed during that reconnection.
+
+That run delivered 1,039 service ticks in 17.913 active seconds, about 58 Hz.
+Animated windows generally reached 11–12 redraws/second, with costly frames
+and 0.506 seconds of dropped time. The run ended after an unsupported standard
+cursor, leaving only 17 measurement windows; the 60-second qualification gate
+correctly failed for insufficient data. It does not qualify performance,
+visual correctness or lifecycle behavior.
+
+The subsequent offline investigation found native film-container effects
+incorrectly fading the animals and missing XML aliases selecting the wrong
+animation state. Original Director 8.5.1 probes establish both behaviors; see
+the [follow-up evidence](performance-audit.md#visibility-and-cursor-follow-up).
+The follow-up also adds standard tool cursors and a bounded background cache.
+Projector interaction stopped at the user's request while it was being used
+for a movie. Further installation and physical checks remain pending.
 
 ## Building
 
 Requirements are the browser player's (Node with the locked dev
-dependencies, Rust, Docker for the importer's tools) plus FFmpeg with libvpx
+dependencies, Rust, a host C17 compiler, Docker for the importer's tools) plus FFmpeg with libvpx
 (Löwenzahn's video; MPEG-1 decoding for Löwenzahn 6–8, Optik and the
 Adventskalender) and the Android toolchain image:
 
@@ -128,6 +143,9 @@ A build:
    recorded size and SHA-256. `--reconvert` forces a new one. Importer tools are
    rebuilt when their source fingerprint or any generated tool hash changes;
    an old browser-site manifest cannot authorize stale conversion tools.
+   Both fresh and reused packages must also load successfully with the actual
+   profile-specific C package loader. This validates member records, styles,
+   palettes and bytecode against the runtime ABI before APK assembly.
 2. **Compiles the game's runtime** with the NDK: the browser runtime's sources
    and flags (`platforms/web/web_runtime.c`, its software compositor, the
    engine, the game's adapter, package mode) without its Emscripten glue,

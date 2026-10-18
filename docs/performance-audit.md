@@ -247,3 +247,102 @@ headless-browser WebCodecs test uses synthetic VP9 with output delayed by
 50 ms: the baseline presents zero frames, while the repair presents 34 over
 1.2 seconds and successfully rewinds, without decoder errors. This tests real
 decoding with controlled delivery latency, not projector codec performance.
+
+## Visibility and cursor follow-up
+
+The first physical run of repair `be06bbd` delivered 1,039 service ticks over
+17.913 active seconds (58.00 Hz). Animated bedroom windows generally reached
+11–12 redraws/second, with individual slow windows and 0.506 seconds of dropped
+time. Rendering still consumed most of the worker's active time. An unsupported
+standard cursor stopped the run before its required 50 measurement windows;
+only 17 were captured. The pacing gate failed for insufficient measurements.
+Further device work stopped while the user watched a movie.
+
+Offline startup checks also exposed five invalid exported package layouts:
+the D5, plain and extended D6, D7 and D8 families. The Rust writer tested
+`profile.version >= 10` for a D10-only member field, although those version
+values are 500, 600, 700, 800 and 1000. That inserted an extra byte into every
+older member record. Headers and build receipts remained valid while the
+production loader rejected the misaligned bodies. The writer now uses its
+existing `d10()` capability predicate. Seven source-free Rust-to-C roundtrips
+exercise nonempty data around profile-dependent member tails, palettes and
+following records. Android builds load both fresh and reused packages with
+the actual profile-specific C loader before assembling an APK. Header-preserving
+body corruption is rejected by that production gate.
+
+Original-player checks then exposed two shared baseline defects that exact
+old/new renderer comparisons had preserved:
+
+- Birthday's four animal film containers retain score blend 15 at frame 470.
+  The original engine displays their children fully. A controlled probe using
+  an independently generated solid bitmap preserved its pixels across parent
+  inks 0, 8, 9, 32 and 36 and blends 0, 15 and 100. Changing the child's blend
+  to 0, 15 and 100 produced three different expected pictures. The containing
+  native film supplies geometry; its children supply ink and blend effects.
+  The correction selects the verified 8.5 profile and preserves Flash's
+  separate compositing rules, numeric property getters and film-instance
+  identity. Nested visibility, bounds, preloading and trails use the same rule.
+  Child effects that depend on the destination retain the real stage backdrop;
+  independently rendered films keep the cached-plane path. Controlled Darkest,
+  Lightest and Add probes establish this distinction, and nested transforms
+  are checked against an independent inverse-mapping reference.
+- Original `integer(VOID)` and `float(VOID)` return `VOID`. The runtime had
+  returned numeric zero, turning missing XML `aliasID` attributes into explicit
+  aliases to state 0. Login items whose current state was 1 consequently used
+  state 0 animation catalogs. Preserving absent numeric values restores the
+  intended selection while retaining explicit alias zero.
+
+These observations used the selected original DIRAPI/IML32 8.5.1r104 modules
+under Wine 8.0. Their hashes were recorded from loaded modules. A private
+Utilities bootstrap enabled the Message window and invoked initialization;
+local INI settings disabled disc checks and display-mode changes. Original
+room scripts and rendering modules were retained. A temporary observer logged
+root and child members during playback. This is original-engine evidence under
+Wine, with separate physical Android and N64 qualification still required.
+The clean local ScummVM reference at
+`41ac2b31847622d0662d22c03fe6979e3b43cfbc` corroborates direct child rendering;
+the original engine supplies the numeric-conversion contract.
+
+Independent evaluators also checked eight recovered sparse animation catalogs:
+18,680 carry-forward/member checks passed. All 3,181 sampled live animation
+instances matched an authored current or immediately preceding pose. Those
+checks establish data expansion and assignment, while the original-player
+probes establish the missing rendering and conversion behavior. Findus also
+has an authored film-to-bitmap replacement at frame 432 and returns to a film
+at frame 466; a film-only inventory misses that static replacement.
+
+The cursor provider now implements all 37 verified standard tool roles,
+including Birthday's finger, open hand, closed hand and no-drop hand. The
+16-pixel glyphs are independently authored target artwork. Shared accepted-ID
+and glyph lookup preserves numeric identity and observed hotspots; unknown
+resource errors include the actual ID. Seven runtime profiles exercise these
+contracts. A separate primitive-film regression preserves authored width and
+height changes when an unstretched child has no member supplying its size.
+
+The renderer also retains a substantial immutable leading background stack
+within the existing derived-image budget. Exact ordered geometry, member and
+mask metadata, palette and background determine its key. Mutable images, live
+Flash content, text, video, linked movies, trails and offscreen contexts keep
+their live rendering paths. Source-free tests cover cached/recomposed pixel
+equivalence, mutation, cursor updates and eviction pressure. Timings and pixel
+comparisons against earlier runtime revisions describe their baseline scene
+semantics.
+
+A fresh replay uses the corrected state selection and film effects, including
+all four fully visible, awake animals. With identical seed and click input,
+cache-disabled and cache-enabled runs produce 687 redraws over 3,000 service
+ticks and match all 1,920,000 scene bytes at every tick. Desktop rendering CPU
+time falls from 4,612.059 to 2,157.375 ms (2.14 times faster). The prefix has
+662 hits and 19 builds; decoded images and derived planes total 33.87 MB.
+The reference disables optional derived-plane/prefix caches while retaining
+the same renderer arithmetic, runtime and base decoded-image cache. Sequential
+service timings do not establish a service improvement. Blank font coverage,
+nominal host audio and separate device timing remain qualification limits.
+
+The final full check passes 812 Python, 72 Node and 237 Rust tests, portable
+native contracts and Android Java/JNI/threading checks. Additional focused
+sanitizer tests cover the new behavior. All seven N64 profiles compile with
+strict MIPS warnings and the synthetic render-probe ROM builds with a valid
+header. Its new target pixel fixtures have not been executed in an emulator or
+on hardware. Independent review also reproduced and fixed a null-palette
+prefix crash and a transformed-film sampling discrepancy before integration.

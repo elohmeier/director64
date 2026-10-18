@@ -141,7 +141,24 @@ int main(void) {
   loop->flip_h = false; loop->value.blend = 50; loop->value.thickness = DG_HAS_BLEND;
   director.visual_revision++; render();
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-  assert(pixel(40,40) == 0x807e7e); // parent blend applies after child composition
+  assert(pixel(40,40) == 0xffff); // Native containers do not blend their children.
+  // Original Birthday engine: native film children remain visible even when
+  // the parent getter reports blend0. Keep child coverage and effects intact.
+  for (unsigned ink = 0; ink <= 9; ink++) {
+    loop->value.blend = 0;
+    loop->value.ink = ink;
+    loop->value.flags |= 48;
+    loop->value.fore_rgb = 0xff0000;
+    loop->value.back_rgb = 0;
+    director.visual_revision++;
+    render();
+    assert(lv_numeric(lv_get(&values, NULL, "blend", lv_make(LV_SPRITE, 1))) == 0);
+    assert(pixel(40,40) == 0xffff);
+    assert(pixel(42,40) == 0x7f8080);
+    assert(pixel(52,44) == 0xff00);
+  }
+  loop->value.ink = 0;
+  loop->value.flags = 0;
   loop->value.blend = 100;
   lv_t child = lv_make(LV_SPRITE, DG_CHILD_SPRITE | (1 << DG_CHILD_SHIFT) | 2);
   lv_set(&values, NULL, "member", child, lv_make(LV_MEMBER, DG_ID(1,1,2)));

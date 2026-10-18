@@ -66,6 +66,16 @@ int main(void) {
   lv_set(&r,NULL,"text",lv_make(LV_MEMBER,ID(3)),lv_text(&r,"longer live text\rsecond line",false));
   expect(80,80,32,16); // text capture clips to its live sprite plane
   layer.value.member=ID(4);layer.value.x=210;layer.value.y=220;expect(152,144,80,40);
+  // Original 8.5 native containers ignore their own blend, while bitmap and
+  // Flash layers still disappear at blend0. Crop must match the draw path.
+  layer.value.blend=0;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  expect(152,144,80,40);
+#else
+  expect(0,0,0,0);
+#endif
+  layer.value.member=ID(7);expect(0,0,0,0);
+  layer.value.member=ID(4);layer.value.blend=100;
   layer.value.rotation=4500;layer.value.skew=1700;transformed_coverage();
   layer.value.rotation=layer.value.skew=0;
   layer.asset="synthetic.fdi";layer.value.member=0;layer.value.x=100;layer.value.y=200;

@@ -155,6 +155,10 @@ static uint32_t read_asset(void *ctx, const char *name, uint8_t *out,
            h = parent || empty ? 32
                : trim          ? 2
                                : 8;
+  if (!strcmp(name, "large.fdi")) {
+    w = WC_WIDTH;
+    h = WC_HEIGHT;
+  }
   unsigned bytes = 32 + w * h * 4;
   if (!out)
     return bytes;
@@ -170,7 +174,9 @@ static uint32_t read_asset(void *ctx, const char *name, uint8_t *out,
   for (unsigned y = 0; y < h; y++)
     for (unsigned x = 0; x < w; x++) {
       uint8_t *p = out + 32 + (y * w + x) * 4;
-      p[0] = mask ? (x * 17 + y * 9) % 256 : 230;
+      // Binary masks qualify for an isolated plane. Fractional Mask9 coverage
+      // is tested against the stage in test_web_film_backdrop instead.
+      p[0] = mask ? ((x + y) & 1) * 255 : 230;
       p[1] = mask ? p[0] : 31;
       p[2] = mask ? p[0] : 83;
       p[3] = empty || (pose && (x >= 2 || y >= 2)) ? 0 : 255;
@@ -180,6 +186,15 @@ static uint32_t read_asset(void *ctx, const char *name, uint8_t *out,
 static bool read_pixels(void *ctx, uint32_t member, dg_pixel_image_t *out) {
   (void)ctx;
   return wc_read_image(&actual, &director, member, out);
+}
+static bool text_pixels(void *ctx, const char *text, int width, int height,
+                        const wc_text_style_t *style, uint8_t *coverage) {
+  (void)ctx;
+  (void)style;
+  memset(coverage, 0, (size_t)width * height);
+  if (width > 1 && height > 0)
+    coverage[text[0] == 'B' ? 1 : 0] = 255;
+  return true;
 }
 static void invalidate(void) {
   director.visual_revision++;
@@ -202,13 +217,13 @@ static void compare(unsigned a, unsigned b) {
   render(&actual);
   assert(!memcmp(actual.scene, reference.scene, sizeof(actual.scene)));
 }
-static void changed_compare(void) {
+static void changed_compare(bool cacheable) {
   // Check the actual cached instance before switching to the independent
   // full-plane reference. A fresh instance would hide a missing dependency.
   unsigned builds = actual.plane_builds;
   invalidate();
   render(&actual);
-  assert(actual.plane_builds > builds);
+  if (cacheable) assert(actual.plane_builds > builds);
   compare(1, 3);
 }
 static void place(unsigned member) {
@@ -253,6 +268,150 @@ static void check_solid_shapes(void) {
             }
         }
 }
+static void prefix_compare(void) {
+  invalidate();
+  render(&actual);
+  render(&reference);
+  assert(!memcmp(actual.scene, reference.scene, sizeof(actual.scene)));
+}
+static void check_prefix(void) {
+  wc_init(&actual, (wc_host_t){.read = read_asset, .text = text_pixels},
+          2u * 1024u * 1024u);
+  // No optional derived admissions: every reference pixel is recomposited.
+  wc_init(&reference, (wc_host_t){.read = read_asset, .text = text_pixels}, 1);
+  dg_init(&director, &values, (dg_platform_t){.read_image = read_pixels}, NULL,
+          NULL, 0, 1);
+  assert(dg_enter(&director, &movie, 1, NULL, 0));
+  // An empty RGB stage needs no palette. Optional prefix discovery must not
+  // dereference one before it discovers that there are no source providers.
+  dg_movie_t empty = movie;
+  empty.palette = NULL;
+  director.movie = &empty;
+  prefix_compare();
+  assert(!actual.prefix_builds && actual.scene[0] == 0xff9a4c17);
+  director.movie = &movie;
+  members[4].reg_x = members[5].reg_x = 0;
+  members[7].pattern = 1;
+  members[7].shape = 1;
+  members[7].filled = 1;
+  place(5);
+  director.sprites[1].value.x = director.sprites[1].value.y = 0;
+  director.sprites[1].value.width = WC_WIDTH;
+  director.sprites[1].value.height = WC_HEIGHT;
+  director.sprites[1].value.ink = 9;
+  director.sprites[2] = (dg_sprite_t){
+      .value = LAYER(8, 40, 50, 300, 200), .visible = true, .stretch = true};
+  director.sprites[3] = (dg_sprite_t){
+      .value = LAYER(1, 80, 70, 63, 49), .visible = true, .stretch = true};
+  dg_sprite_changed(&director, 2);
+  dg_sprite_changed(&director, 3);
+  prefix_compare();
+  assert(actual.prefix_builds == 1 && !reference.prefix_builds);
+  unsigned hits = actual.prefix_hits, builds = actual.prefix_builds;
+  prefix_compare();
+  assert(actual.prefix_hits == hits + 1 && actual.prefix_builds == builds);
+  director.sprites[3].value.x++;
+  dg_sprite_changed(&director, 3);
+  prefix_compare();
+  assert(actual.prefix_builds == builds);
+  // Eviction under pressure is safe after a cached backdrop was consumed.
+  assert(wc_image(&actual, &values, "large.fdi", WC_WIDTH, WC_HEIGHT, 8));
+  assert(actual.image_bytes <= actual.image_budget);
+  prefix_compare();
+  assert(actual.prefix_builds > builds);
+  builds = actual.prefix_builds;
+  unsigned scenes = actual.scene_renders;
+  wc_render(&actual, &director, 123, 87, true, 0);
+  assert(actual.scene_renders == scenes);
+  members[4].reg_x++;
+  prefix_compare();
+  assert(actual.prefix_builds > builds);
+  builds = actual.prefix_builds;
+  members[5].reg_x--;
+  prefix_compare();
+  assert(actual.prefix_builds > builds);
+  builds = actual.prefix_builds;
+  palette[1] ^= 0x382917;
+  prefix_compare();
+  assert(actual.prefix_builds > builds);
+  builds = actual.prefix_builds;
+  director.sprites[2].value.blend = 37;
+  director.sprites[2].value.thickness |= DG_HAS_BLEND;
+  prefix_compare();
+  assert(actual.prefix_builds > builds);
+  builds = actual.prefix_builds;
+  director.stage_color ^= 0x102030;
+  prefix_compare();
+  assert(actual.prefix_builds > builds);
+  builds = actual.prefix_builds;
+  lv_set(&values, NULL, "pattern", lv_make(LV_MEMBER, ID(8)), lv_num(39));
+  prefix_compare();
+  assert(actual.prefix_builds > builds);
+  builds = actual.prefix_builds;
+  director.trail_count = 1;
+  director.trails[0] =
+      (dg_trail_t){.channel = 2, .sprite = director.sprites[2]};
+  director.trails[0].sprite.value.x += 12;
+  prefix_compare();
+  assert(actual.prefix_builds == builds);
+  director.trail_count = 0;
+  // Flattened bitmap providers can retain live Flash text. Neither their
+  // static raster nor an unchanged field-descriptor pointer makes them safe
+  // to retain in the immutable prefix.
+  static const dg_text_style_t style = {
+      .font_name = "CacheFont", .font_id = 2, .size = 10, .color = 0x00ff00};
+  static const dg_flash_field_t field = {.name = "label", .text = "A",
+      .x = 6, .y = 4, .width = 6, .height = 4, .style = &style};
+  members[4].reg_x = members[5].reg_x = 0;
+  members[4].flash_fields = &field;
+  members[4].flash_field_count = 1;
+  director.flash_object_count = 1;
+  director.flash_objects[0].sprite = 1;
+  director.flash_objects[0].member = ID(5);
+  strcpy(director.flash_objects[0].name, "label");
+  lv_t pairs[] = {lv_text(&values, "_visible", true), lv_num(1),
+                  lv_text(&values, "text", true), lv_text(&values, "A", false)};
+  lv_t bag = lv_list(&values, 4, pairs, true);
+  values.roots[DG_FLASH_ROOT] = bag;
+  hits = actual.prefix_hits;
+  prefix_compare();
+  assert(actual.prefix_hits == hits && actual.prefix_builds == builds);
+  assert(actual.scene[302 * WC_WIDTH + 402] == 0xff00ff00);
+  lv_set(&values, NULL, "text", bag, lv_text(&values, "B", false));
+  prefix_compare();
+  assert(actual.prefix_hits == hits && actual.prefix_builds == builds);
+  assert(actual.scene[302 * WC_WIDTH + 402] != 0xff00ff00);
+  assert(actual.scene[302 * WC_WIDTH + 403] == 0xff00ff00);
+  members[4].flash_fields = NULL;
+  members[4].flash_field_count = 0;
+  director.flash_object_count = 0;
+  values.roots[DG_FLASH_ROOT] = 0;
+  members[4].flash_clip_count = 1;
+  prefix_compare();
+  assert(actual.prefix_hits == hits && actual.prefix_builds == builds);
+  members[4].flash_clip_count = 0;
+  members[4].flash_direct_to_stage = 1;
+  prefix_compare();
+  assert(actual.prefix_hits == hits && actual.prefix_builds == builds);
+  members[4].flash_direct_to_stage = 0;
+  // Mutable sources and mutable neighboring masks stop prefix eligibility.
+  lv_t image = lv_get(&values, NULL, "image", lv_make(LV_MEMBER, ID(6)));
+  lv_frame_t frame = {.movie = &code};
+  lv_call(&values, &frame, "setpixel", 4,
+          (lv_t[]){image, lv_num(2), lv_num(2), lv_make(LV_COLOR, 0xffffff)});
+  hits = actual.prefix_hits;
+  prefix_compare();
+  assert(actual.prefix_hits == hits && actual.prefix_builds == builds);
+  image = lv_get(&values, NULL, "image", lv_make(LV_MEMBER, ID(5)));
+  lv_call(&values, &frame, "setpixel", 4,
+          (lv_t[]){image, lv_num(3), lv_num(3), lv_make(LV_COLOR, 0x00ff00)});
+  prefix_compare();
+  assert(actual.prefix_hits == hits && actual.prefix_builds == builds);
+  wc_release(&actual);
+  wc_release(&reference);
+  dg_films_dispose(&director);
+  dg_images_dispose(&director);
+}
 int main(void) {
   wc_init(&actual, (wc_host_t){.read = read_asset}, 4u * 1024u * 1024u);
   wc_init(&reference, (wc_host_t){.read = read_asset}, 4u * 1024u * 1024u);
@@ -275,6 +434,8 @@ int main(void) {
         compare(1, 3);
       }
   place(1);
+  director.sprites[1].value.width = 40;
+  director.sprites[1].value.height = 32;
   compare(1, 3);
   unsigned hits = actual.plane_hits, builds = actual.plane_builds,
            reads = asset_reads;
@@ -287,23 +448,23 @@ int main(void) {
     wc_render(&actual, &director, 100 + i, 100, true, 0);
   assert(actual.scene_renders == scenes);
   members[4].reg_x = 3;
-  changed_compare(); // Same-address source geometry mutation.
+  changed_compare(true); // Same-address source geometry mutation.
   members[5].reg_x = -2;
-  changed_compare(); // Same-address mask registration mutation.
+  changed_compare(true); // Same-address mask registration mutation.
   palette[1] = 0x1851b7;
-  changed_compare();
+  changed_compare(true);
   lv_t shape = lv_make(LV_MEMBER, ID(7));
   lv_set(&values, NULL, "pattern", shape, lv_num(2));
-  changed_compare();
+  changed_compare(true);
   lv_t source = lv_get(&values, NULL, "image", lv_make(LV_MEMBER, ID(5)));
   lv_frame_t frame = {.movie = &code};
   lv_call(&values, &frame, "setpixel", 4,
           (lv_t[]){source, lv_num(4), lv_num(3), lv_make(LV_COLOR, 0x00ff00)});
-  changed_compare();
+  changed_compare(false); // Mutable providers bypass isolated film planes.
   lv_t mask = lv_get(&values, NULL, "image", lv_make(LV_MEMBER, ID(6)));
   lv_call(&values, &frame, "setpixel", 4,
           (lv_t[]){mask, lv_num(4), lv_num(3), lv_make(LV_COLOR, 0xffffff)});
-  changed_compare();
+  changed_compare(false);
   // Trimmed representations preserve the full source mapping under transforms.
   place(10);
   director.sprites[1].value.width = 13;
@@ -339,6 +500,7 @@ int main(void) {
   wc_release(&actual);
   dg_films_dispose(&director);
   dg_images_dispose(&director);
+  check_prefix();
   puts("web render cache: cropped/full pixels, transforms, masks, palette/live "
        "edits, cursor and budgets passed");
 }

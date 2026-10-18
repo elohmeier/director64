@@ -40,7 +40,7 @@ static void image_pending_add(const dg_member_t *member, const char *asset,
 static void image_pending_sprite(dg_runtime_t *d, unsigned channel, const dg_sprite_t *sprite,
                                  const dg_film_layer_t *layer, unsigned depth,
                                  int left, int top, int right, int bottom, uint64_t temporary) {
-  if (values->failed || !sprite->visible || !sprite->value.type || !dg_opacity(sprite)) return;
+  if (values->failed || !sprite->visible || !sprite->value.type) return;
   int l, t, r, b; dg_sprite_bounds(d, sprite, &l, &t, &r, &b);
   if (r <= left || b <= top || l >= right || t >= bottom || r <= l || b <= t) return;
   const dg_member_t *member = dg_member(d, sprite->value.member);
@@ -52,6 +52,13 @@ static void image_pending_sprite(dg_runtime_t *d, unsigned channel, const dg_spr
   }
   if (!member || dg_member_image(d, member->id)) return;
   bool driven = channel < DG_SPRITES && sprite == &d->sprites[channel] && dg_film_driven(d, channel);
+  const dg_sprite_t *film_source = sprite;
+  dg_sprite_t container;
+  if (dg_film_container_effects(member)) {
+    dg_film_container_sprite(&container, sprite);
+    sprite = &container;
+  }
+  if (!dg_opacity(sprite)) return;
   if (member->type == 2 && member->flash_clip_count) {
     // AVM1 display lists can grow independently of authored poses. Their
     // asset provider copies each decoded leaf before requesting the next.
@@ -62,7 +69,7 @@ static void image_pending_sprite(dg_runtime_t *d, unsigned channel, const dg_spr
     unsigned width, height; dg_prescale_plane_dims(member->width, member->height, &width, &height);
     dg_film_frame_t resolved;
     bool resolve = driven || member->film_track_count;
-    dg_film_layer_t *owned = resolve ? dg_film_frame_resolve(d, channel, sprite, member, &resolved) : NULL;
+    dg_film_layer_t *owned = resolve ? dg_film_frame_resolve(d, channel, film_source, member, &resolved) : NULL;
     if (resolve && !owned) return;
     const dg_film_frame_t *frame = resolve ? &resolved : &member->film_frames[dg_film_storage_pose(member, sprite)];
     n64_film_crop_t crop = n64_film_crop(d, channel, member, frame, width, height);

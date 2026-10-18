@@ -50,6 +50,16 @@ player owns a cursor, and each draws in its own colour — red, blue, gold and
 green by port. The colour tints the glyph's black ink only; its white
 contrast pixels stay white, so a cursor still reads against the art under it.
 
+Numeric cursors include Director's standard tool roles: finger 280, open hand
+260, closed hand 290, no-drop hand 291, drawing tools, resize arrows and zoom
+tools. The shared provider preserves the numeric ID and documented role;
+its independently drawn 16-pixel target glyphs are not copies of the engine's
+cursor artwork. The 37 tool IDs and hotspots are corroborated by the selected
+Birthday 8.5.1 engine's cursor resource directory and the
+[Macromedia MX 2004 Scripting Reference, pages 720–722](https://www.manualslib.com/manual/389808/Macromedia-Director-Mx-2004-Director-Scripting.html?page=720).
+Unrecognized resource IDs fail with the actual ID in the error. Cast bitmap
+and Cursor Xtra artwork continues to come from the user's converted media.
+
 Director has one mouse, so one player drives it at a time and the rest point
 alongside. A press claims the mouse; failing that, the player who is actually
 moving takes it, which keeps rollover under the cursor that is pointing. The

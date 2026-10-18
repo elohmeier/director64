@@ -20,6 +20,17 @@ for budget in hosted n64 override; do
     compile "runtime_budget_$budget" "${options[@]}" tests/native/test_runtime_budget.c
 done
 compile lingo tests/native/test_lingo.c runtime/lingo/lingo_runtime.c
+for profile in 5 6 6e 7 8 10 85; do
+    version="$profile"
+    options=()
+    if [ "$profile" = 6e ]; then version=6; options+=(-DDIRECTOR64_EXTENDED_D6=1); fi
+    if [ "$profile" = 10 ]; then options+=(-DDIRECTOR64_EXTENDED_D6=1); fi
+    if [ "$profile" = 85 ]; then version=10; options+=(-DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1); fi
+    compile "lingo_numeric_d$profile" "${options[@]}" -DDIRECTOR64_DIRECTOR_VERSION="$version" \
+        tests/native/test_lingo_numeric.c runtime/lingo/lingo_runtime.c
+done
+compile xml_optional_alias_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 \
+    tests/native/test_xml_optional_alias.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile audio_release tests/native/test_audio_release.c
 compile android_decode -Itests/native/android_stubs tests/native/test_android_decode.c
 compile android_input tests/native/test_android_input.c
@@ -54,6 +65,8 @@ for profile in d10 d85; do
     if [ "$profile" = d85 ]; then options+=(-DDIRECTOR64_D85=1); fi
     compile "n64_film_crop_$profile" "${options[@]}" tests/native/test_n64_film_crop.c \
         runtime/director/director.c runtime/lingo/lingo_runtime.c
+    compile "n64_film_backdrop_$profile" "${options[@]}" tests/native/test_n64_film_backdrop.c \
+        runtime/director/director.c runtime/lingo/lingo_runtime.c
 done
 compile lingo_d8 -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_lingo_d8.c runtime/lingo/lingo_runtime.c
 compile lingo_collect tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
@@ -87,6 +100,15 @@ for version in 5 6 8; do
     compile "cursor_d$version" -DDIRECTOR64_DIRECTOR_VERSION="$version" tests/native/test_cursor.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 done
 compile cursor_extended_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_cursor.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+for profile in 5 6 6e 7 8 10 85; do
+    version="$profile"
+    options=()
+    if [ "$profile" = 6e ]; then version=6; options+=(-DDIRECTOR64_EXTENDED_D6=1); fi
+    if [ "$profile" = 10 ]; then options+=(-DDIRECTOR64_EXTENDED_D6=1); fi
+    if [ "$profile" = 85 ]; then version=10; options+=(-DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1); fi
+    compile "cursor_roles_d$profile" "${options[@]}" -DDIRECTOR64_DIRECTOR_VERSION="$version" \
+        tests/native/test_cursor_roles.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
 compile loewenzahn_printing -DDIRECTOR64_DIRECTOR_VERSION=5 -Igames/loewenzahn-1/runtime -Igames/loewenzahn-1/tests/printing-fixtures games/loewenzahn-1/tests/test_printing.c games/loewenzahn-1/runtime/printing.c runtime/lingo/lingo_runtime.c
 compile director_d8_events -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_director_d8_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile director_d8_controls -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_director_d8_controls.c runtime/director/director.c runtime/lingo/lingo_runtime.c
@@ -183,6 +205,11 @@ for profile in d10 d85; do
     compile "web_film_frames_$profile" "${options[@]}" -Iplatforms/web \
         tests/native/test_web_film_frames.c platforms/web/compositor.c \
         runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+    if [ "$profile" = d85 ]; then
+        compile web_film_backdrop_d85 "${options[@]}" -Iplatforms/web \
+            tests/native/test_web_film_backdrop.c platforms/web/compositor.c \
+            runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+    fi
     compile "web_render_cache_$profile" "${options[@]}" -Iplatforms/web \
         tests/native/test_web_render_cache.c platforms/web/compositor.c \
         runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c

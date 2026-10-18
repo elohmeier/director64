@@ -203,26 +203,36 @@ bool dg_film_child_layer(dg_runtime_t *d, unsigned parent, unsigned channel, dg_
   }
   return true;
 }
-static bool film_layer_visible(const dg_film_layer_t *layer) {
+static bool film_layer_visible(dg_runtime_t *d,const dg_film_layer_t *layer) {
   const dg_spec_t *v=&layer->value;
   dg_sprite_t sprite={.value=*v};
-  return v->type&&dg_opacity(&sprite)&&
+  bool direct=layer->asset&&*layer->asset;
+  return v->type&&(dg_opacity(&sprite)||
+      (!direct&&dg_film_container_effects(dg_member(d,v->member))))&&
       (v->member||v->type<16||(layer->asset&&*layer->asset)||(layer->name&&*layer->name));
 }
 static bool film_string_equal(const char *a,const char *b) {
   return a==b||!strcmp(a?a:"",b?b:"");
 }
-static bool film_visual_equal(const dg_film_layer_t *a,const dg_film_layer_t *b) {
+static bool film_visual_equal(dg_runtime_t *d,const dg_film_layer_t *a,const dg_film_layer_t *b) {
   const dg_spec_t *x=&a->value,*y=&b->value;
-  bool visible=film_layer_visible(a);
-  if(visible!=film_layer_visible(b))return false;
+  bool visible=film_layer_visible(d,a);
+  if(visible!=film_layer_visible(d,b))return false;
   if(!visible)return true;
   dg_sprite_t sx={.value=*x},sy={.value=*y};
   // Explicit fields avoid C structure padding and exclude score-only data.
 #define SAME(field) (x->field==y->field)
   if(!(SAME(member)&&SAME(x)&&SAME(y)&&SAME(ink)&&SAME(type)&&SAME(flags)&&
        SAME(fore)&&SAME(back)&&SAME(stretch)&&SAME(rotation)&&SAME(skew)))return false;
-  if(x->stretch&&!(SAME(width)&&SAME(height)))return false;
+  // sprite_rect ignores spec size only when an unstretched member supplies
+  // its own dimensions. Primitive shapes and direct planes have no such
+  // source: their authored width/height remain visible even without stretch.
+  if(!(SAME(width)&&SAME(height))) {
+    if(x->stretch||(a->asset&&*a->asset))return false;
+    const dg_member_t *member=dg_member(d,x->member);
+    bool member_size=member&&((member->width&&member->height)||member->type==1);
+    if(!member_size)return false;
+  }
 #undef SAME
   if(dg_opacity(&sx)!=dg_opacity(&sy)||(x->thickness&15)!=(y->thickness&15))return false;
   if((x->flags&16)&&x->fore_rgb!=y->fore_rgb)return false;
@@ -259,7 +269,7 @@ static bool film_visual_refresh(dg_runtime_t *d,film_node_t *node) {
     if(!dg_film_child_layer(d,parent,channel,&state.layer))continue;
     dg_spec_t *value=&state.layer.value;
     // Empty template channels are addressable, but do not contribute pixels.
-    if(!film_layer_visible(&state.layer))continue;
+    if(!film_layer_visible(d,&state.layer))continue;
     if(film_native_member(d,value->member)) {
       film_node_t *child=film_node(d,state.layer.placement_generation);
       if(child) {
@@ -270,7 +280,7 @@ static bool film_visual_refresh(dg_runtime_t *d,film_node_t *node) {
         if(nested->film_tracks||nested->film_frames)state.layer.film_frame=0;
       }
     }
-    if(count>=node->visual_count||!film_visual_equal(&node->visuals[count].layer,&state.layer)||
+    if(count>=node->visual_count||!film_visual_equal(d,&node->visuals[count].layer,&state.layer)||
         node->visuals[count].generation!=state.generation||node->visuals[count].revision!=state.revision)
       changed=true;
     node->visuals[count++]=state;
@@ -426,7 +436,7 @@ static void film_child_set(dg_runtime_t *d, unsigned ln, lv_t sprite, lv_t value
     film_sync_node(d,film_node_id(d,node),false,0);
   dg_film_layer_t after;
   dg_film_child_layer(d,parent,channel,&after);
-  if(!film_visual_equal(&layer,&after)||layer.placement_generation!=after.placement_generation) {
+  if(!film_visual_equal(d,&layer,&after)||layer.placement_generation!=after.placement_generation) {
     film_visual_touch(d,node);
     film_visual_changed(d,node ? node->root : parent);
   }

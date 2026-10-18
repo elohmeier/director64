@@ -77,6 +77,19 @@ int main(void) {
   assert(!wc_flash_field_hit(&compositor, &d, instance, (start + 1.1f) / scale,
                              (start + 1.1f) / scale));
   assert(!wc_flash_field_hit(&compositor, &d, instance, 0, 0));
+  // The callback may rasterize a Flash field while its final picture is being
+  // drawn inside a transformed native film. Its local glyph plane must not
+  // inherit that outer mapping, and the caller's stack must survive intact.
+  compositor.film_transform_count = 1;
+  compositor.film_transform[0] = (dg_film_transform_t){
+      .quad = {100, 100, 120, 100, 120, 120, 100, 120},
+      .width = 10, .height = 10};
+  assert(wc_flash_field_hit(&compositor, &d, instance, (start + .1f) / scale,
+                            (start + .1f) / scale));
+  assert(!wc_flash_field_hit(&compositor, &d, instance, (start + 1.1f) / scale,
+                             (start + 1.1f) / scale));
+  assert(compositor.film_transform_count == 1 &&
+         compositor.film_transform[0].quad[0] == 100);
   assert(rasters > 0 && !values.failed);
   for (unsigned n = 0; n < WC_WIDTH * WC_HEIGHT; n++)
     assert(compositor.pixels[n] == 0x12345678);

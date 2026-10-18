@@ -37,6 +37,12 @@ static const char *const baked_assets[]={"pose-a","pose-b"};
 static const dg_film_layer_t baked_child={.channel=1,
  .value={.member=ID(12),.type=16,.blend=100}};
 static const dg_film_frame_t baked_parent={1,&baked_child};
+static const dg_film_layer_t primitive_layers[]={
+ {.channel=1,.value={.type=1,.width=4,.height=4,.x=10,.y=10,.blend=100}},
+ {.channel=1,.value={.type=1,.width=8,.height=4,.x=10,.y=10,.blend=100}},
+ {.channel=1,.value={.type=1,.width=8,.height=6,.x=10,.y=10,.blend=100}}};
+static const dg_film_frame_t primitive_frames[]={
+ {1,&primitive_layers[0]},{1,&primitive_layers[1]},{1,&primitive_layers[2]}};
 static const dg_member_t members[]={
   {.id=ID(1),.number=1,.cast=1,.type=2,.width=8,.height=8,.film_count=4,.film_loop=1,
    .film_track_count=1,.film_tracks=&track},
@@ -61,6 +67,8 @@ static const dg_member_t members[]={
    .film_assets=baked_assets},
   {.id=ID(13),.number=13,.cast=1,.type=2,.width=8,.height=8,.film_count=1,
    .film_frames=&baked_parent},
+  {.id=ID(14),.number=14,.cast=1,.type=2,.width=32,.height=32,.film_count=3,
+   .film_frames=primitive_frames},
 };
 static const dg_movie_t movie={.id=1,.code=&code,.cast_count=1,.casts=&cast,
  .member_count=sizeof(members)/sizeof(members[0]),.members=members,.frame_count=1,.frames=&score};
@@ -217,6 +225,59 @@ static void test_effective_visual_state(lv_t root) {
   dg_films_present(&d,true);dg_update_stage(&d);
   assert(dg_film_visual_state(&d,1,&d.sprites[1],&members[12],&instance,&visual));
   assert(visual!=original_visual&&d.visual_revision>revision);
+  // Memberless primitives use their authored size even with stretch clear.
+  lv_set(&r,NULL,"member",root,lv_make(LV_MEMBER,ID(14)));
+  call("updatestage",0,NULL);
+  for(unsigned n=1;n<3;n++) {
+    revision=d.visual_revision;
+    assert(dg_film_visual_state(&d,1,&d.sprites[1],&members[13],&instance,&visual));
+    original_visual=visual;
+    dg_films_present(&d,true);dg_update_stage(&d);
+    assert(dg_film_visual_state(&d,1,&d.sprites[1],&members[13],&instance,&visual));
+    assert(visual!=original_visual&&d.visual_revision>revision);
+    dg_film_layer_t layer;dg_sprite_t primitive;
+    assert(dg_film_child_layer(&d,1,1,&layer));
+    assert(dg_film_layer_sprite(&d,1,&layer,&primitive)&&!primitive.stretch);
+    int left,top,right,bottom;
+    dg_sprite_bounds(&d,&primitive,&left,&top,&right,&bottom);
+    assert(right-left==8&&bottom-top==(n==1?4:6));
+  }
+}
+static void test_zero_blend_container(lv_t root) {
+  lv_set(&r,NULL,"member",root,lv_make(LV_MEMBER,ID(6)));
+  call("updatestage",0,NULL);
+  call("stop",1,&root);
+  lv_t child=dg_film_tell(&d,root,1);
+  lv_set(&r,NULL,"blend",child,lv_num(0));
+  lv_set(&r,NULL,"ink",child,lv_num(9));
+  dg_update_stage(&d);
+  uint32_t instance,before,after;
+  assert(dg_film_visual_state(&d,1,&d.sprites[1],&members[5],&instance,&before));
+  unsigned pose=dg_film_frame(&d,child,false);
+  dg_films_present(&d,true);dg_update_stage(&d);
+  assert(dg_film_frame(&d,child,false)!=pose);
+  assert(lv_integer(&r,lv_get(&r,NULL,"blend",child))==0);
+  assert(lv_integer(&r,lv_get(&r,NULL,"ink",child))==9);
+  assert(dg_film_visual_state(&d,1,&d.sprites[1],&members[5],&instance,&after));
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // This child still contributes its own moving bitmap to the parent's key.
+  assert(after!=before);
+#else
+  assert(after==before);
+#endif
+  // The same visible container contributes its previous picture to trails,
+  // even though the script-facing blend getter continues returning zero.
+  call("stop",1,&child);
+  lv_set(&r,NULL,"blend",root,lv_num(0));
+  d.sprites[1].trails=true;dg_sprite_changed(&d,1);dg_update_stage(&d);
+  d.trail_count=0;
+  lv_set(&r,NULL,"loch",root,lv_num(30));dg_update_stage(&d);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  assert(d.trail_count==1&&d.trails[0].sprite.value.blend==0);
+#else
+  assert(!d.trail_count);
+#endif
+  assert(lv_integer(&r,lv_get(&r,NULL,"blend",root))==0);
 }
 int main(void) {
   dg_init(&d,&r,(dg_platform_t){0},NULL,NULL,0,1);assert(dg_enter(&d,&movie,1,NULL,0));
@@ -285,6 +346,7 @@ int main(void) {
   free(owned);assert(!r.failed);
   test_visual_revision(root,other);
   test_effective_visual_state(root);
+  test_zero_blend_container(root);
   dg_films_dispose(&d);
   puts("native film playback: temporal recursion, clocks, seek, lifetime and subtree cache invalidation passed");
 }

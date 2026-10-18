@@ -129,7 +129,7 @@ static wc_film_key_t film_key(dg_runtime_t *d, unsigned parent,
   if (palette)
     film_key_add(&key, palette, 256 * sizeof(*palette));
   film_key_frame(&key, d, parent, sprite, member, frame, 0);
-  bool masked = sprite->value.ink == 9;
+  bool masked = sprite->value.ink == 9 && !dg_film_container_effects(member);
   film_key_add(&key, &masked, sizeof(masked));
   if (masked) {
     const dg_member_t *mask = dg_member(d, member->id + 1);

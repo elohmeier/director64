@@ -35,10 +35,11 @@ static inline dg_film_bounds_t dg_film_bounds(dg_runtime_t *d, unsigned channel,
         return full;
       continue; // The renderer also skips an unresolved cast slot.
     }
-    if (!child.visible || !dg_opacity(&child))
-      continue;
     const dg_member_t *source = dg_member(d, child.value.member);
     bool direct = layer->asset && *layer->asset;
+    if (!child.visible || (!dg_opacity(&child) &&
+        (direct || !dg_film_container_effects(source))))
+      continue;
     if (!direct && source) {
       if (source->type == 4 || source->type == 6 || source->type == 11 ||
           source->type == 14)

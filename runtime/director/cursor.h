@@ -122,6 +122,7 @@ static inline uint32_t dg_cursor_bitmap_hash(const dg_cursor_bitmap_t *bitmap) {
 
 // Independently drawn target glyphs for Director's standard cursor roles.
 // Original game artwork is loaded from the user's recovered cast assets.
+#include "cursor_tools.h"
 static inline bool dg_cursor_builtin(dg_cursor_bitmap_t *out, int resource) {
   static const uint16_t arrow[16] = {
     0x8000,0xc000,0xe000,0xf000,0xf800,0xfc00,0xfe00,0xff00,
@@ -147,7 +148,7 @@ static inline bool dg_cursor_builtin(dg_cursor_bitmap_t *out, int resource) {
   case 3: shape = plus; out->hot_x = out->hot_y = 7; break;
   case 4: shape = watch; out->hot_x = out->hot_y = 7; break;
   case 200: return true;
-  default: return false;
+  default: return dg_cursor_tool_draw(out,resource);
   }
   memcpy(out->black, shape, sizeof(out->black));
   // One white pixel of contrast around the glyph, plus the watch's face.

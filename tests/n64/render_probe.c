@@ -9,7 +9,7 @@ void d5_video_draw(const dg_runtime_t *d,unsigned i,int l,int t,int r,int b){(vo
 static const lv_movie_t test_code={.name="SYNTHETIC.DXR"};
 static const dg_cast_t test_cast={.name="Internal",.file=1,.cast=1};
 static const dg_text_style_t test_style={.color=0xff0000,.size=12,.ascent=12,.line_height=12};
-static const dg_film_layer_t test_layers[]={{.channel=1,.value={.member=DG_ID(1,1,1),.type=16,.width=4,.height=4,.ink=8,.blend=100,.thickness=DG_HAS_BLEND,.flags=48,.back_rgb=0xffffff,.stretch=1}}};
+static dg_film_layer_t test_layers[]={{.channel=1,.value={.member=DG_ID(1,1,1),.type=16,.width=4,.height=4,.ink=8,.blend=100,.thickness=DG_HAS_BLEND,.flags=48,.back_rgb=0xffffff,.stretch=1}}};
 static const dg_film_frame_t test_film={1,test_layers};
 static const dg_film_frame_t flash_frame={0,NULL};
 static const dg_flash_clip_t flash_clip={.id=0,.frame_count=1,.local_bounds={0,0,327680,327680}};
@@ -82,6 +82,33 @@ int main(void){
  check_pixel("overlapping_glyph_coverage",((uint32_t*)captured.buffer)[0],0xff0000bf);
  surface_free(&captured);surface_free(&glyph);
  font=rdpq_font_load_builtin(FONT_BUILTIN_DEBUG_MONO);rdpq_text_register_font(1,font);
+ // Legacy Flash edit fields must follow the same inverse parent transform as
+ // their card, including when the native film draws against the stage.
+ const dg_flash_field_t overlay_field={.name="label",.text="A",.width=40,.height=24,.style=&test_style};
+ const dg_member_t overlay_member={.type=1,.width=40,.height=24,
+     .flash_field_count=1,.flash_fields=&overlay_field};
+ const dg_sprite_t overlay_sprite={.value={.type=16,.blend=100,.thickness=DG_HAS_BLEND},
+     .visible=true,.custom_quad=true,.quad={0,0,40,0,40,24,0,24}};
+ surface_t overlay_reference=surface_alloc(FMT_RGBA16,64,40),overlay_shifted=surface_alloc(FMT_RGBA16,64,40);
+ memset(overlay_reference.buffer,0,overlay_reference.stride*overlay_reference.height);
+ memset(overlay_shifted.buffer,0,overlay_shifted.stride*overlay_shifted.height);
+ rdpq_attach(&overlay_reference,NULL);
+ draw_transformed_flash_overlays(&overlay_reference,1,&overlay_sprite,&overlay_member,0,0,32,20);
+ rdpq_detach_wait();
+ film_transform_context=(n64_film_transform_context_t){.target=&overlay_shifted,.count=1,
+     .stack={{.quad={8,4,40,4,40,23.2f,8,23.2f},.width=32,.height=19.2f}}};
+ rdpq_attach(&overlay_shifted,NULL);
+ draw_transformed_flash_overlays(&overlay_shifted,1,&overlay_sprite,&overlay_member,0,0,32,20);
+ rdpq_detach_wait();film_transform_context=(n64_film_transform_context_t){0};
+ unsigned overlay_errors=0,overlay_pixels=0;
+ for(unsigned y=0;y<40;y++)for(unsigned x=0;x<64;x++) {
+   uint16_t expected=x>=8&&y>=4?((uint16_t*)overlay_reference.buffer)[(y-4)*64+x-8]:0;
+   if(expected)overlay_pixels++;
+   if(((uint16_t*)overlay_shifted.buffer)[y*64+x]!=expected)overlay_errors++;
+ }
+ check_pixel("native_film_legacy_flash_overlay_translation",overlay_errors,0);
+ check_pixel("native_film_legacy_flash_overlay_nonempty",overlay_pixels>0,1);
+ surface_free(&overlay_reference);surface_free(&overlay_shifted);
  surface_t source=surface_alloc(FMT_RGBA32,4,4),film=surface_alloc(FMT_RGBA32,4,4),fb=surface_alloc(FMT_RGBA16,4,4);
  for(unsigned i=0;i<16;i++)((uint32_t*)source.buffer)[i]=0xff000080;
  memset(film.buffer,0,film.stride*film.height);
@@ -123,6 +150,28 @@ int main(void){
  debugf("DIRECTOR64 FILM_COST us=%llu heap_before=%d heap_after=%d\n",(unsigned long long)elapsed,before.free,after.free);
  assertf(!values->failed,"synthetic film: %s",values->error);
  check_pixel("actual_film_child_over_blue",((uint16_t*)fb.buffer)[0],0x801f);
+ // Native film children compose against the same target as ordinary leaves.
+ // Parent blend/ink are ignored; child arithmetic and partial blend remain.
+ lv_call(values,&frame,"fill",3,(lv_t[]){img,lv_rect(values,0,0,4,4),lv_make(LV_COLOR,0x11c753)});
+ lv_call(values,&frame,"setalpha",2,(lv_t[]){img,lv_num(255)});
+ const unsigned film_inks[]={0,8,9,32,36,37,39,40,41},film_blends[]={0,15,100};
+ unsigned backdrop_errors=0;
+ for(unsigned ink=0;ink<sizeof(film_inks)/sizeof(*film_inks);ink++)
+ for(unsigned blend=0;blend<sizeof(film_blends)/sizeof(*film_blends);blend++) {
+   test_layers[0].value.ink=film_inks[ink];test_layers[0].value.blend=film_blends[blend];
+   director->sprites[1]=(dg_sprite_t){.value=test_layers[0].value,.visible=true,.stretch=true};
+   director->stage_color=0xd2a475;dg_sprite_changed(director,1);
+   rdpq_attach(&fb,NULL);draw_scene(&fb,director,0,0);rdpq_detach_wait();
+   uint16_t expected[16];memcpy(expected,fb.buffer,sizeof(expected));
+   director->sprites[1].value.member=DG_ID(1,1,3);
+   director->sprites[1].value.ink=9;director->sprites[1].value.blend=0;
+   dg_sprite_changed(director,1);
+   rdpq_attach(&fb,NULL);draw_scene(&fb,director,0,0);rdpq_detach_wait();
+   for(unsigned pixel=0;pixel<16;pixel++)if(((uint16_t*)fb.buffer)[pixel]!=expected[pixel])backdrop_errors++;
+ }
+ check_pixel("native_film_child_backdrop_matches_direct_432_pixels",backdrop_errors,0);
+ test_layers[0].value.ink=8;test_layers[0].value.blend=100;
+ director->sprites[1]=sprite;director->stage_color=0x0000ff;
  director->sprites[1].value.member=DG_ID(1,1,4);
  director->sprites[1].value.width=director->sprites[1].value.height=5;
  dg_sprite_changed(director,1);dg_flash_sync(director);

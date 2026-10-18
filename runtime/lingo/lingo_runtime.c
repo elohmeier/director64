@@ -2405,6 +2405,12 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
       (ln == LN_COS) || (ln == LN_ATAN) || (ln == LN_TAN) ||
       (ln == LN_LOG) || (ln == LN_EXP)) {
     ARITY(1);
+    // Explicit numeric conversion preserves a missing value. In particular,
+    // an optional XML alias must remain absent, not become an alias to zero.
+    if ((ln == LN_INTEGER || ln == LN_FLOAT) && lv_type(args[0]) == LV_VOID) {
+      *result = (lv_t){0};
+      return true;
+    }
     if (lv_type(args[0]) == LV_LIST && (ln == LN_FLOAT)) {
       lv_object_t *shape = object(r, args[0]);
       if (shape && shape->geometry) {

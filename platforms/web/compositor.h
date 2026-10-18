@@ -6,6 +6,7 @@
 // images as the console, so a difference between the two is a compositor
 // difference, not a different game.
 #include "director.h"
+#include "film_transform.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -60,6 +61,7 @@ typedef struct {
   unsigned source_width, source_height;
   int source_x, source_y;
   bool follow_alpha, force_opaque, rgb555, rich_text, palette_brush;
+  bool coverage_scanned, binary_coverage;
 #if DG_D10
   const dg_member_t *linked_member; // crop/center mapping for a nested scene
 #endif
@@ -132,12 +134,15 @@ typedef struct {
   unsigned externals;
   // Counters for the page's diagnostics.
   unsigned loads, evictions, renders, scene_renders, plane_hits, plane_builds;
+  unsigned prefix_hits, prefix_builds;
   // The last composited scene without its cursors, and the snapshot of it a
   // script kept as a member's image (`member.image = (the stage).image`).
   uint32_t scene[WC_WIDTH * WC_HEIGHT];
 #if DG_D10
   uint32_t *film_scratch[8];
   unsigned film_depth;
+  dg_film_transform_t film_transform[8];
+  unsigned film_transform_count;
   wc_image_t stage_snapshot;
   uint32_t snapshot_member;
 #endif

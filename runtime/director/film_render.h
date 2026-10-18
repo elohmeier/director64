@@ -6,6 +6,28 @@
 #include <stdlib.h>
 
 #if DG_D10
+static inline bool dg_film_container_effects(const dg_member_t *member) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // Original Birthday DIRAPI/IML32 8.5.1r104: native film children remain
+  // visible when their containing sprite has blend0. The container supplies
+  // geometry; the children's own inks/blends supply their picture effects.
+  // Flash Xtras keep their separate authored compositing behavior.
+  return member && member->type == 2 && !member->source_xtra;
+#else
+  (void)member;
+  return false;
+#endif
+}
+static inline void dg_film_container_sprite(dg_sprite_t *out,
+                                             const dg_sprite_t *source) {
+  *out = *source;
+  out->value.ink = 0;
+  out->value.blend = 100;
+  out->value.thickness |= DG_HAS_BLEND;
+  out->value.fore_rgb = 0;
+  out->value.back_rgb = 0xffffff;
+  out->value.flags |= 48;
+}
 static inline bool dg_film_name_equal(const char *a, const char *b) {
   if (!a || !b) return false;
   while (*a && *b && ((*a | 32) == (*b | 32))) { a++; b++; }

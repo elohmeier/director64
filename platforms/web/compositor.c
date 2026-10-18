@@ -15,6 +15,7 @@
 #include <string.h>
 #include "compositor_cache.h"
 #include "compositor_film.h"
+#include "compositor_prefix.h"
 
 static uint32_t *target(wc_t *c) { return c->target ? c->target : c->pixels; }
 
@@ -179,17 +180,22 @@ static uint8_t *read_image(wc_t *c, const char *asset, uint32_t *length) {
   return data;
 }
 static void image_coverage(wc_image_t *image) {
+  image->coverage_scanned = true;
+  image->binary_coverage = true;
   image->cover_l = image->width;
   image->cover_t = image->height;
   image->cover_r = image->cover_b = 0;
   for (unsigned y = 0; y < image->height; y++)
-    for (unsigned x = 0; x < image->width; x++)
-      if (image->pixels[(size_t)y * (image->stride ? image->stride : image->width) + x] >> 24) {
+    for (unsigned x = 0; x < image->width; x++) {
+      unsigned alpha = image->pixels[(size_t)y * (image->stride ? image->stride : image->width) + x] >> 24;
+      if (alpha && alpha != 255) image->binary_coverage = false;
+      if (alpha) {
         if (x < image->cover_l) image->cover_l = x;
         if (x >= image->cover_r) image->cover_r = x + 1;
         if (y < image->cover_t) image->cover_t = y;
         image->cover_b = y + 1;
       }
+    }
 }
 
 const wc_image_t *wc_image(wc_t *c, lv_runtime_t *values, const char *asset,
@@ -437,6 +443,63 @@ static const wc_image_t *masked_image(wc_t *c, dg_runtime_t *d, const dg_member_
   }
   return temporary;
 }
+static bool film_leaf_safe(void *context, dg_runtime_t *d,
+    const dg_sprite_t *sprite, const dg_member_t *member,
+    const dg_film_layer_t *layer) {
+  wc_t *c = context;
+  dg_member_t direct;
+  if (layer->asset && *layer->asset) {
+    direct = (dg_member_t){.type = 1, .asset = layer->asset,
+        .width = layer->value.width, .height = layer->value.height};
+    member = &direct;
+  }
+  if (!member) return sprite->value.type < 16;
+  if (member->source_xtra || member->flash_field_count || member->flash_clip_count ||
+      dg_member_image(d, member->id)) return false;
+  if (member->type == 4 || member->type == 6 || member->type == 11 || member->type == 14)
+    return true;
+  unsigned ink = sprite->value.ink, width, height;
+  const char *asset = member->asset;
+  if (member->type == 8) {
+    asset = dg_shape_texture(d, member, dg_member_pattern(d, member));
+    if (!asset || !*asset) return true;
+    width = height = ink = 0;
+  } else if (member->type == 1 || member->type == 5 || member->type == 12) {
+    stored_dims(member, &width, &height);
+    if (ink == 36 && member->type != 12) ink = 0;
+  } else if (member->type == 2) {
+    asset = dg_film_asset(member, sprite);
+    width = height = 0;
+  } else return false;
+  // Mask starts from the same matte-decoded bitmap as the actual draw path.
+  if (ink == 9) ink = 8;
+  const wc_image_t *source = wc_image(c, d->values, asset, width, height, ink);
+  if (!source) return false;
+  wc_image_t temporary = {0};
+  if (sprite->value.ink == 9) {
+    const dg_member_t *mask = dg_member(d, member->id + 1);
+    if (mask && mask->type == 1 && mask_pair(member, mask)) {
+      if (dg_member_image(d, mask->id)) return false;
+      source = masked_image(c, d, member, mask, source, &temporary);
+      if (!source) return false;
+    }
+  }
+  // These records are owned mutable cache entries, even when returned through
+  // a const view. Coverage hints avoid the initial scan; qualify binary alpha
+  // once if a native-film composition needs this stronger property.
+  if (!source->coverage_scanned) image_coverage((wc_image_t *)source);
+  bool safe = source->binary_coverage;
+  free(temporary.pixels);
+  return safe;
+}
+static void film_destination_bounds(const wc_t *c, int *l, int *t, int *r, int *b) {
+  if (c->film_transform_count)
+    dg_film_transform_bounds(c->film_transform, l, t, r, b);
+  if (*l < 0) *l = 0;
+  if (*t < 0) *t = 0;
+  if (*r > WC_WIDTH) *r = WC_WIDTH;
+  if (*b > WC_HEIGHT) *b = WC_HEIGHT;
+}
 #endif
 
 // ---- Drawing ----
@@ -502,6 +565,9 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
 #endif
   int cl = l < 0 ? 0 : l, ct = t < 0 ? 0 : t;
   int cr = r > WC_WIDTH ? WC_WIDTH : r, cb = b > WC_HEIGHT ? WC_HEIGHT : b;
+#if DG_D10
+  film_destination_bounds(c, &cl, &ct, &cr, &cb);
+#endif
   unsigned w = image->source_width ? image->source_width : image->width;
   unsigned h = image->source_height ? image->source_height : image->height;
   unsigned stride = image->stride ? image->stride : image->width;
@@ -520,6 +586,7 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
   bool plain = !transformed;
 #endif
 #if DG_D10
+  if (c->film_transform_count) plain = false;
   if (image->linked_member && !(image->linked_member->linked_flags & 2)) plain = false;
 #endif
   if (plain) {
@@ -569,7 +636,7 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
   unsigned columns[WC_WIDTH];
   bool mapped = !transformed;
 #if DG_D10
-  if (image->linked_member) mapped = false;
+  if (image->linked_member || c->film_transform_count) mapped = false;
 #endif
   if (mapped) {
     int first = cr, last = cl;
@@ -603,8 +670,19 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
     for (int x = cl; x < cr; x++) {
       unsigned sx = mapped ? columns[x] : 0, sy = row_source;
       float u = 0, v = 0;
+      float sample_x = x + 0.5f, sample_y = y + 0.5f;
+#if DG_D10
+      if (c->film_transform_count &&
+          !dg_film_transform_point(c->film_transform, c->film_transform_count,
+                                   sample_x, sample_y, &sample_x, &sample_y)) continue;
+      if (c->film_transform_count && !transformed) {
+        if (sample_x < l || sample_y < t || sample_x >= r || sample_y >= b) continue;
+        u = (sample_x - l) / span_x; v = (sample_y - t) / span_y;
+        sx = (unsigned)(u * w); sy = (unsigned)(v * h);
+      }
+#endif
       if (transformed) {
-        if (!dg_quad_uv(q, x + 0.5f, y + 0.5f, &u, &v))
+        if (!dg_quad_uv(q, sample_x, sample_y, &u, &v))
           continue;
 #if DG_MODERN
         if (s->flip_h) u = 1 - u;
@@ -614,7 +692,7 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
       }
 #if DG_D10
       if (image->linked_member) {
-        if (!transformed) { u = (float)(x - l + 0.5f) / span_x; v = (float)(y - t + 0.5f) / span_y; }
+        if (!transformed) { u = (sample_x - l) / span_x; v = (sample_y - t) / span_y; }
         if (!dg_linked_uv(image->linked_member, s, &u, &v)) continue;
         sx = (unsigned)(u * w); sy = (unsigned)(v * h);
       }
@@ -779,6 +857,24 @@ static bool draw_text(wc_t *c, const char *text, const wc_text_style_t *style,
     }
   }
   slot->last = c->serial;
+#if DG_D10
+  if (c->film_transform_count) {
+    int cl=l, ct=t, cr=r, cb=b;
+    film_destination_bounds(c, &cl, &ct, &cr, &cb);
+    for (int y=ct; y<cb; y++) for (int x=cl; x<cr; x++) {
+      float px,py;
+      if (!dg_film_transform_point(c->film_transform,c->film_transform_count,
+                                  x+0.5f,y+0.5f,&px,&py) ||
+          px<l || py<t || px>=r || py>=b) continue;
+      unsigned sx=(unsigned)(px-l), sy=(unsigned)(py-t)+scroll;
+      unsigned coverage=slot->coverage[(size_t)sy*width+sx];
+      unsigned run=slot->runs ? slot->runs[(size_t)sy*width+sx] : 0;
+      if (coverage) blend(&target(c)[(size_t)y*WC_WIDTH+x],
+          run && run<=run_count ? runs[run-1].rgb : color, coverage*alpha/255);
+    }
+    return true;
+  }
+#endif
   for (int y = 0; y < visible_height; y++) {
     if (t + y < 0 || t + y >= WC_HEIGHT)
       continue;
@@ -1059,6 +1155,10 @@ static void draw_flash_field(wc_t *c, dg_runtime_t *d, unsigned parent,
   uint32_t *saved = malloc(sizeof(c->pixels));
   if (!plane || !saved) { free(plane); free(saved); lv_fail(d->values, "Flash field framebuffer allocation"); return; }
   memcpy(saved, target(c), sizeof(c->pixels));
+#if DG_D10
+  unsigned transforms=c->film_transform_count;
+  c->film_transform_count=0;
+#endif
   dg_member_t local_member = *member;
   local_member.width = (uint16_t)layout.width; local_member.height = (uint16_t)layout.height;
   dg_sprite_t local_sprite = {.value = {.width = layout.width, .height = layout.height,
@@ -1076,6 +1176,9 @@ static void draw_flash_field(wc_t *c, dg_runtime_t *d, unsigned parent,
                target(c) + (size_t)y * WC_WIDTH, columns * sizeof(*plane));
     }
   memcpy(target(c), saved, sizeof(c->pixels)); free(saved);
+#if DG_D10
+  c->film_transform_count=transforms;
+#endif
   if (!d->values->failed) {
     wc_image_t image = {.width = width, .height = height, .pixels = plane, .follow_alpha = true};
     image_coverage(&image);
@@ -1110,6 +1213,8 @@ static bool wc_flash_text(void *context,dg_flash_instance_t *instance,const dg_f
   uint32_t *saved=malloc(sizeof(c->pixels));
   if(!saved){free(out->pixels);out->pixels=NULL;lv_fail(d->values,"Flash text stage preservation allocation");return false;}
   memcpy(saved,target(c),sizeof(c->pixels));
+  unsigned transforms=c->film_transform_count;
+  c->film_transform_count=0;
   dg_member_t member=*view.member;member.width=effective.width;member.height=effective.height;
   member.flash_fields=&effective;member.flash_field_count=1;
   dg_sprite_t sprite={.value={.type=16,.width=effective.width,.height=effective.height,.blend=100},
@@ -1122,7 +1227,9 @@ static bool wc_flash_text(void *context,dg_flash_instance_t *instance,const dg_f
       unsigned rows=height-y<WC_HEIGHT?height-y:WC_HEIGHT,cols=width-x<WC_WIDTH?width-x:WC_WIDTH;
       for(unsigned row=0;row<rows;row++)memcpy(out->pixels+(size_t)(y+row)*width+x,target(c)+(size_t)row*WC_WIDTH,cols*4);
     }
-  memcpy(target(c),saved,sizeof(c->pixels));free(saved);return !d->values->failed;
+  memcpy(target(c),saved,sizeof(c->pixels));free(saved);
+  c->film_transform_count=transforms;
+  return !d->values->failed;
 }
 bool wc_flash_field_hit(wc_t *c, dg_runtime_t *d, struct dg_flash_instance *instance,
                         float x, float y) {
@@ -1161,10 +1268,19 @@ static void draw_video(wc_t *c, dg_runtime_t *owner, unsigned sprite, const dg_s
 #endif
   int cl = l < 0 ? 0 : l, ct = t < 0 ? 0 : t;
   int cr = r > WC_WIDTH ? WC_WIDTH : r, cb = b > WC_HEIGHT ? WC_HEIGHT : b;
+#if DG_D10
+  film_destination_bounds(c, &cl, &ct, &cr, &cb);
+#endif
   for (int y = ct; y < cb; y++) {
     for (int x = cl; x < cr; x++) {
       float u,v;
-      if (!dg_quad_uv(quad,x + 0.5f,y + 0.5f,&u,&v)) continue;
+      float px=x+0.5f,py=y+0.5f;
+#if DG_D10
+      if (c->film_transform_count &&
+          !dg_film_transform_point(c->film_transform,c->film_transform_count,
+                                   px,py,&px,&py)) continue;
+#endif
+      if (!dg_quad_uv(quad,px,py,&u,&v)) continue;
       if (s->flip_h) u = 1 - u;
       if (s->flip_v) v = 1 - v;
       unsigned sx = (unsigned)(u*w), sy = (unsigned)(v*h);
@@ -1178,7 +1294,7 @@ static void draw_video(wc_t *c, dg_runtime_t *owner, unsigned sprite, const dg_s
 #endif
 
 // One sprite (or trail), as the scene draws it in channel order.
-static void draw_scene(wc_t *, dg_runtime_t *, int, int);
+static void draw_scene(wc_t *, dg_runtime_t *, int, int, bool);
 
 static void draw_sprite(wc_t *, dg_runtime_t *, unsigned, const dg_sprite_t *, int, int);
 #if DG_MODERN
@@ -1205,6 +1321,10 @@ static void draw_transformed_text(wc_t *c, dg_runtime_t *d, unsigned channel,
   }
   memcpy(saved, target(c), sizeof(c->pixels));
   flat.value.x -= left; flat.value.y -= top;
+#if DG_D10
+  unsigned transforms=c->film_transform_count;
+  c->film_transform_count=0;
+#endif
   for (unsigned y = 0; y < height && !d->values->failed; y += WC_HEIGHT)
     for (unsigned x = 0; x < width && !d->values->failed; x += WC_WIDTH) {
       memset(target(c), 0, sizeof(c->pixels));
@@ -1220,6 +1340,9 @@ static void draw_transformed_text(wc_t *c, dg_runtime_t *d, unsigned channel,
                columns * sizeof(*plane));
     }
   memcpy(target(c), saved, sizeof(c->pixels)); free(saved);
+#if DG_D10
+  c->film_transform_count=transforms;
+#endif
   if (!d->values->failed) {
     unsigned opacity = dg_opacity(sprite);
     for (size_t at = 0; at < (size_t)width * height; at++)
@@ -1231,6 +1354,47 @@ static void draw_transformed_text(wc_t *c, dg_runtime_t *d, unsigned channel,
     draw_bitmap(c,d,&parent,&image,l,t,r,b,8,100,ox,oy);
   }
   free(plane);
+}
+#endif
+
+#if DG_D10
+static void draw_film_direct(wc_t *c, dg_runtime_t *d, unsigned parent,
+    const dg_sprite_t *sprite, const dg_member_t *member,
+    const dg_film_frame_t *frame, int ox, int oy) {
+  if (c->film_transform_count >= 8 || c->film_depth >= 8) {
+    lv_fail(d->values,"film loop direct transform nesting exceeded"); return;
+  }
+  dg_film_transform_t transform;
+  dg_film_transform_init(d,sprite,member,ox,oy,
+      dg_prescale_coord(1000)/1000.0f,&transform);
+  unsigned previous=c->film_transform_count;
+  // The common authored800x600 container contributes no mapping or clipping
+  // beyond the stage itself, so its children retain their ordinary fast paths.
+  if (previous || !dg_film_transform_full_identity(&transform,WC_WIDTH,WC_HEIGHT))
+    c->film_transform[c->film_transform_count++]=transform;
+  c->film_depth++;
+  for (unsigned i=0; i<frame->count && !d->values->failed; i++) {
+    const dg_film_layer_t *layer=&frame->layers[i];
+    dg_sprite_t child;
+    if (!dg_film_layer_sprite(d,parent,layer,&child)) continue;
+    if (layer->asset && *layer->asset) {
+      unsigned width,height;
+      dg_prescale_dims(layer->value.width,layer->value.height,&width,&height);
+      const wc_image_t *image=wc_image(c,d->values,layer->asset,width,height,child.value.ink);
+      if (!image) continue;
+      int l,t,r,b;dg_sprite_bounds(d,&child,&l,&t,&r,&b);
+      draw_bitmap(c,d,&child,image,dg_prescale_coord(l),dg_prescale_coord(t),
+          dg_prescale_coord(r),dg_prescale_coord(b),child.value.ink,dg_opacity(&child),0,0);
+    } else if (!layer->value.member && layer->name && *layer->name) {
+      dg_sprite_t field_parent={.value={.member=member->id,.type=16,
+          .x=member->reg_x,.y=member->reg_y,.width=member->width,.height=member->height,
+          .blend=100},.visible=true,.stretch=true};
+      if (layer->affine) draw_flash_field(c,d,parent,member,layer,0,0);
+      else draw_flash_overlays(c,d,parent,&field_parent,member,0,0,layer->name,false);
+    } else draw_sprite(c,d,DG_SPRITES,&child,0,0);
+  }
+  c->film_depth--;
+  c->film_transform_count=previous;
 }
 #endif
 
@@ -1249,6 +1413,12 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     direct_stage.value.flags|=48;
   }
   bool driven = m && m->type == 2 && s == &d->sprites[i] && dg_film_driven(d, i);
+  const dg_sprite_t *film_source = s;
+  dg_sprite_t film_container;
+  if (dg_film_container_effects(m)) {
+    dg_film_container_sprite(&film_container, s);
+    s = &film_container;
+  }
 #endif
   // Palettes, sounds and script casts have no visual widget in Director.
   if (m && (m->type == 4 || m->type == 6 || m->type == 11 || m->type == 14))
@@ -1283,7 +1453,11 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
   l = dg_prescale_coord(l); t = dg_prescale_coord(t);
   r = dg_prescale_coord(r); b = dg_prescale_coord(b);
 #endif
-  if (r <= 0 || b <= 0 || l >= WC_WIDTH || t >= WC_HEIGHT || r <= l || b <= t)
+  if (r <= l || b <= t || (
+#if DG_D10
+      !c->film_transform_count &&
+#endif
+      (r <= 0 || b <= 0 || l >= WC_WIDTH || t >= WC_HEIGHT)))
     return;
 #if DG_MODERN
   if (m && (m->type == 3 || m->type == 7) &&
@@ -1312,10 +1486,18 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     }
     dg_film_frame_t driven_frame;
     bool resolve = driven || m->film_track_count;
-    dg_film_layer_t *driven_layers = resolve ? dg_film_frame_resolve(d, i, s, m, &driven_frame) : NULL;
+    dg_film_layer_t *driven_layers = resolve ? dg_film_frame_resolve(d, i, film_source, m, &driven_frame) : NULL;
     if (resolve && !driven_layers) return;
     const dg_film_frame_t *frame = resolve ? &driven_frame : &m->film_frames[dg_film_storage_pose(m, s)];
-    wc_film_key_t key=film_key(d,i,s,m,frame);
+    dg_film_transform_t placement;
+    dg_film_transform_init(d,s,m,ox,oy,dg_prescale_coord(1000)/1000.0f,&placement);
+    if (dg_film_container_effects(m) &&
+        (c->film_transform_count || !dg_film_transform_raster_aligned(&placement) ||
+         !dg_film_isolated_safe(d,i,m,frame,film_leaf_safe,c,0))) {
+      if (!values->failed) draw_film_direct(c,d,i,s,m,frame,ox,oy);
+      free(driven_layers); return;
+    }
+    wc_film_key_t key=film_key(d,i,film_source,m,frame);
     const wc_image_t *cached=key.valid ? plane_find(c,2,key.data,key.count) : NULL;
     if (cached) {
       draw_bitmap(c,d,s,cached,l,t,r,b,s->value.ink,opacity,ox,oy);
@@ -1330,6 +1512,8 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
       lv_fail(values,"film loop framebuffer allocation"); return;
     }
     uint32_t *previous=c->target;
+    unsigned previous_transforms=c->film_transform_count;
+    c->film_transform_count=0;
     c->target=c->film_scratch[c->film_depth++];
     for (unsigned top = 0; top < crop.height && !values->failed; top += WC_HEIGHT)
       for (unsigned left = 0; left < crop.width && !values->failed; left += WC_WIDTH) {
@@ -1371,6 +1555,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
                  target(c) + (size_t)y * WC_WIDTH, columns * sizeof(*plane));
       }
     c->film_depth--; c->target=previous;
+    c->film_transform_count=previous_transforms;
     if (!values->failed) {
       wc_image_t image = {.width = crop.width, .height = crop.height, .pixels = plane, .follow_alpha = true,
           .source_width=width, .source_height=height, .source_x=(int)crop.left, .source_y=(int)crop.top};
@@ -1415,7 +1600,10 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
       lv_fail(values, "linked movie runtime unavailable");
       return;
     }
-    draw_scene(c, child, -m->linked_left, -m->linked_top);
+    unsigned transforms=c->film_transform_count;
+    c->film_transform_count=0;
+    draw_scene(c, child, -m->linked_left, -m->linked_top, false);
+    c->film_transform_count=transforms;
     dg_linked_end(d);
     // The temporary plane now keeps the child while the parent's stage
     // returns to the live framebuffer. Shared decoded assets stay cached.
@@ -1621,7 +1809,11 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
 #endif
     }
 #endif
-    if (!transformed && !tile && pattern <= 1) {
+    if (!transformed && !tile && pattern <= 1
+#if DG_D10
+        && !c->film_transform_count
+#endif
+    ) {
       if (!dg_shape_ink_visible(true, s->value.ink, opacity, foreground, background)) return;
       uint32_t channels[3][256];
       for (unsigned component = 0; component < 3; component++)
@@ -1647,9 +1839,17 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
       }
       return;
     }
-    for (int y = t < 0 ? 0 : t; y < b && y < WC_HEIGHT; y++) {
-      int spans[4] = {0, r - l};
-      unsigned n = transformed ? 1 : dg_shape_spans(kind, r - l, b - t, y - t, line, filled,
+    int shape_l=l,shape_t=t,shape_r=r,shape_b=b;
+#if DG_D10
+    film_destination_bounds(c,&shape_l,&shape_t,&shape_r,&shape_b);
+#endif
+    for (int y = shape_t < 0 ? 0 : shape_t; y < shape_b && y < WC_HEIGHT; y++) {
+      int spans[4] = {shape_l-l, shape_r-l};
+      bool mapped_shape=transformed;
+#if DG_D10
+      mapped_shape=mapped_shape || c->film_transform_count;
+#endif
+      unsigned n = mapped_shape ? 1 : dg_shape_spans(kind, r - l, b - t, y - t, line, filled,
                                   m && m->line_direction == 6, spans);
       for (unsigned k = 0; k < n; k++) {
         int left = l + spans[k * 2], right = l + spans[k * 2 + 1];
@@ -1657,9 +1857,21 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
         if (right > WC_WIDTH) right = WC_WIDTH;
         for (int x = left; x < right; x++) {
           int shape_x = x - l, shape_y = y - t;
+          float sample_x=x+0.5f,sample_y=y+0.5f;
+#if DG_D10
+          if (c->film_transform_count &&
+              !dg_film_transform_point(c->film_transform,c->film_transform_count,
+                  sample_x,sample_y,&sample_x,&sample_y)) continue;
+          if (c->film_transform_count && !transformed) {
+            if (sample_x<l || sample_y<t || sample_x>=r || sample_y>=b) continue;
+            shape_x=(int)(sample_x-l);shape_y=(int)(sample_y-t);
+            if (!dg_shape_contains(kind,shape_width,shape_height,shape_x,shape_y,
+                line,filled,m && m->line_direction==6)) continue;
+          }
+#endif
           if (transformed) {
             float u, v;
-            if (!dg_quad_uv(shape_quad, x + 0.5f, y + 0.5f, &u, &v)) continue;
+            if (!dg_quad_uv(shape_quad, sample_x, sample_y, &u, &v)) continue;
 #if DG_MODERN
             if (s->flip_h) u = 1 - u;
             if (s->flip_v) v = 1 - v;
@@ -1673,7 +1885,8 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
           }
 
 #if DG_D10
-          int stage_x = dg_stage_coord(x) - ox, stage_y = dg_stage_coord(y) - oy;
+          int stage_x = dg_stage_coord((int)floorf(sample_x)) - ox,
+              stage_y = dg_stage_coord((int)floorf(sample_y)) - oy;
 #else
           int stage_x = x - ox, stage_y = y - oy;
 #endif
@@ -1709,7 +1922,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
 
 // Draws a scene; `ox, oy` shift it (D5's source dialog draws its movie at
 // the dialog window's place over the suspended stage).
-static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy) {
+static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy, bool retained) {
 #if DG_D10
   const dg_pixel_image_t *stage = dg_stage_image(d);
   if (stage) {
@@ -1726,15 +1939,30 @@ static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy) {
   }
 #endif
   lv_runtime_t *values = d->values;
+  const uint16_t *order;
+  unsigned count = dg_draw_order(d, &order);
+  unsigned first = 0;
+#if DG_D10
+  unsigned prefix_end = 0;
+  wc_film_key_t prefix = {0};
+  if (retained && !ox && !oy && !c->target)
+    prefix = prefix_key(c, d, order, count, &prefix_end);
+  const wc_image_t *cached = prefix.valid ? plane_find(c, 3, prefix.data, prefix.count) : NULL;
+  if (cached) {
+    memcpy(target(c), cached->pixels, sizeof(c->pixels));
+    c->prefix_hits++;
+    first = prefix_end;
+  } else
+#else
+  (void)retained;
+#endif
 #if DG_MODERN
   fill(c, 0, 0, WC_WIDTH, WC_HEIGHT, opaque_rgb(d->stage_color));
 #else
   fill(c, 0, 0, WC_WIDTH, WC_HEIGHT, 0xffffffffu);
 #endif
-  const uint16_t *order;
-  unsigned count = dg_draw_order(d, &order);
   for (unsigned direct=0;direct<2;direct++)
-  for (unsigned draw = 0; draw < count && !values->failed; draw++) {
+  for (unsigned draw = direct ? 0 : first; draw < count && !values->failed; draw++) {
     unsigned i = order[draw];
 #if DG_D10
     const dg_member_t *member=dg_member(d,d->sprites[i].value.member);
@@ -1749,7 +1977,14 @@ static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy) {
                                                    : &d->sprites[i];
       draw_sprite(c, d, i, s, ox, oy);
     }
+#if DG_D10
+    if (!direct && !cached && prefix.valid && draw + 1 == prefix_end && !values->failed)
+      prefix_capture(c, &prefix, target(c));
+#endif
   }
+#if DG_D10
+  free(prefix.data);
+#endif
 }
 
 // ---- Pointer ----
@@ -1922,16 +2157,16 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
   if (d->native_dialog && d->suspended_stage) {
     // The source dialog window (416x240) over the suspended stage.
     static uint32_t stage[WC_WIDTH * WC_HEIGHT];
-    draw_scene(c, d->suspended_stage, 0, 0);
+    draw_scene(c, d->suspended_stage, 0, 0, false);
     memcpy(stage, target(c), sizeof(stage));
-    draw_scene(c, d, 112, 100);
+    draw_scene(c, d, 112, 100, false);
     for (int y = 0; y < WC_HEIGHT; y++)
       for (int x = 0; x < WC_WIDTH; x++)
         if (x < 112 || x >= 528 || y < 100 || y >= 340)
           target(c)[y * WC_WIDTH + x] = stage[y * WC_WIDTH + x];
   } else
 #endif
-    draw_scene(c, d, 0, 0);
+    draw_scene(c, d, 0, 0, true);
 #if DG_D5
   if (d->ticks < d->alert_until && !d->values->failed) {
     // A recovered script alert, in the console's builtin font.

@@ -6,6 +6,7 @@
 #include "game.h"
 #include "ink.h"
 #include "film_render.h"
+#include "film_transform.h"
 #include "film_crop.h"
 #include "flash_render.h"
 #include "linked_geometry.h"
@@ -561,6 +562,9 @@ typedef struct {
   // The record is a pinned bundle row: its pixels live at the bottom of the
   // scene's block and are never freed or evicted on their own.
   bool bundled;
+  // Binary source/mask coverage facts, derived once from immutable pixels.
+  // This occupies existing alignment padding, not another image allocation.
+  uint8_t coverage_flags;
   // Offset of data within the block's dynamic area, plus one; 0 means the
   // pixels came from the malloc arena.
   uint32_t region_offset;
@@ -2566,6 +2570,7 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
   data_cache_hit_writeback(data, (size_t)stored);
   snprintf(slot->name, sizeof(slot->name), "%s", member->asset);
   slot->bundled = bundled;
+  slot->coverage_flags = 0;
   slot->data = data;
   slot->bytes = (unsigned)stored;
   slot->last = render_serial;
@@ -2840,6 +2845,24 @@ static unsigned sprite_mask_alpha(const sprite_mask_t *mask, unsigned x, unsigne
 }
 #endif
 typedef struct { unsigned full_width, full_height, left, top; } bitmap_region_t;
+#if DG_D10
+typedef struct {
+  const surface_t *target;
+  unsigned count;
+  dg_film_transform_t stack[8];
+} n64_film_transform_context_t;
+static n64_film_transform_context_t film_transform_context;
+static bool film_transform_active(const surface_t *target) {
+  return film_transform_context.count && film_transform_context.target == target;
+}
+static bool film_transform_point(const surface_t *target,float x,float y,
+                                  float *local_x,float *local_y) {
+  if (film_transform_active(target))
+    return dg_film_transform_point(film_transform_context.stack,
+        film_transform_context.count,x,y,local_x,local_y);
+  *local_x=x;*local_y=y;return true;
+}
+#endif
 static void ink_bitmap_region(surface_t *fb, const surface_t *texture,
                         const surface_t *alpha, const cached_image_t *image,
                         const dg_sprite_t *s, int l, int t, int r, int b,
@@ -2864,6 +2887,8 @@ static void ink_bitmap_region(surface_t *fb, const surface_t *texture,
   // in already-prescaled screen coordinates.
   for (unsigned i = 0; i < 8; i++)
     q[i] *= 0.8f;
+  if (film_transform_active(fb))
+    dg_film_transform_bounds(&film_transform_context.stack[0],&l,&t,&r,&b);
 #endif
   if (l < 0)
     l = 0;
@@ -2888,7 +2913,11 @@ static void ink_bitmap_region(surface_t *fb, const surface_t *texture,
       (ink == 0 || ink == 8 || ink == 9 || ink == 32 || ink == 36);
   const float qw = q[2] - q[0], qh = q[7] - q[1], determinant = qw * qh;
   const bool axis = q[0] == q[6] && q[2] == q[4] && q[1] == q[3] && q[5] == q[7] &&
-      fabsf(determinant) >= 0.0001f;
+      fabsf(determinant) >= 0.0001f
+#if DG_D10
+      && !film_transform_active(fb)
+#endif
+      ;
   int sample_x[640];
   const int sample_left = l;
   bool axis_samples = axis && r - l <= (int)(sizeof(sample_x) / sizeof(*sample_x));
@@ -2946,10 +2975,14 @@ static void ink_bitmap_region(surface_t *fb, const surface_t *texture,
         sx = (unsigned)mapped; sy = row_sy;
       } else {
         float u, v;
+        float px=x+0.5f,py=y+0.5f;
+#if DG_D10
+        if (!film_transform_point(fb,px,py,&px,&py)) continue;
+#endif
         if (axis) {
           u = ((x + 0.5f - q[0]) * qh) / determinant; v = row_v;
           if (u < 0 || u >= 1 || v < 0 || v >= 1) continue;
-        } else if (!dg_quad_uv(q, x + 0.5f, y + 0.5f, &u, &v)) continue;
+        } else if (!dg_quad_uv(q, px, py, &u, &v)) continue;
         if (s->flip_h) u = 1 - u;
         if (s->flip_v) v = 1 - v;
 #if DG_D10
@@ -3078,6 +3111,8 @@ static void mutable_bitmap(surface_t *fb, const dg_pixel_image_t *image,
   float q[8];
   dg_sprite_quad(director, sprite, q);
   for (unsigned i = 0; i < 8; i++) q[i] *= 0.8f;
+  if (film_transform_active(fb))
+    dg_film_transform_bounds(&film_transform_context.stack[0],&l,&t,&r,&b);
   if (l < 0) l = 0;
   if (t < 0) t = 0;
   if (r > fb->width) r = fb->width;
@@ -3094,8 +3129,9 @@ static void mutable_bitmap(surface_t *fb, const dg_pixel_image_t *image,
   for (int y = t; y < b; y++) {
     uint16_t *row = (uint16_t *)((uint8_t *)fb->buffer + y * fb->stride);
     for (int x = l; x < r; x++) {
-      float u, v;
-      if (!dg_quad_uv(q, x + 0.5f, y + 0.5f, &u, &v)) continue;
+      float u, v,px,py;
+      if (!film_transform_point(fb,x+0.5f,y+0.5f,&px,&py) ||
+          !dg_quad_uv(q, px, py, &u, &v)) continue;
       if (sprite->flip_h) u = 1 - u;
       if (sprite->flip_v) v = 1 - v;
       unsigned sx = u * image->width, sy = v * image->height;
@@ -3409,6 +3445,32 @@ static void paint_flash_text_plane(void *ctx,int x,int y) {
   p->sprite.value.x=dg_stage_coord(x); p->sprite.value.y=dg_stage_coord(y);
   draw_flash_overlays(p->parent,&p->sprite,p->member,p->name,true);
 }
+static void paint_flash_overlay_plane(void *ctx,int x,int y) {
+  flash_text_plane_t *p=ctx;
+  p->sprite.value.x=dg_stage_coord(x); p->sprite.value.y=dg_stage_coord(y);
+  draw_flash_overlays(p->parent,&p->sprite,p->member,NULL,false);
+}
+static void draw_transformed_flash_overlays(surface_t *fb,unsigned channel,
+    const dg_sprite_t *sprite,const dg_member_t *member,int l,int t,int r,int b) {
+  if (!member || !member->flash_field_count) return;
+  unsigned width,height;
+  dg_prescale_plane_dims(member->width,member->height,&width,&height);
+  dg_sprite_t local={.value={.type=16,.blend=100,.thickness=DG_HAS_BLEND},
+      .visible=true,.custom_quad=true,
+      .quad={0,0,member->width,0,member->width,member->height,0,member->height}};
+  flash_text_plane_t paint={channel,local,member,NULL};
+  rdpq_detach_wait();
+  surface_t plane=capture_text_plane(width,height,paint_flash_overlay_plane,&paint);
+  rdpq_attach(fb,NULL);
+  if (!values->failed && plane.buffer) {
+    uint8_t header[32]={0};
+    cached_image_t texture={.data=header,.format=IMAGE_RGBA32,.follow_alpha=true};
+    dg_sprite_t parent=*sprite;
+    parent.value.fore_rgb=0;parent.value.back_rgb=0xffffffu;parent.value.flags|=48;
+    ink_bitmap(fb,&plane,NULL,&texture,&parent,l,t,r,b,8,dg_opacity(sprite),false,NULL);
+  }
+  if (plane.buffer) surface_free(&plane);
+}
 static void draw_flash_field(surface_t *fb, unsigned parent, const dg_member_t *member,
     const dg_film_layer_t *layer, int ox, int oy) {
   const dg_flash_field_t *field = dg_flash_field_find(member, layer->name);
@@ -3490,6 +3552,7 @@ static bool flash_field_hit(void *context, dg_runtime_t *owner,
   return hit;
 }
 #endif
+#include "film_backdrop.inc"
 #include "image_preload.inc"
 #include "scene_prefix.inc"
 static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int offset_y);
@@ -3499,6 +3562,7 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
 #endif
 ) {
 #if DG_D10
+  bool direct_film=film_frame&&film_transform_active(fb);
   const dg_pixel_image_t *stage = film_frame ? NULL : dg_stage_image(scene);
   if (stage) {
     rdpq_detach_wait();
@@ -3531,7 +3595,13 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
 #if DG_D10
   if (film_frame) rdpq_set_mode_fill(RGBA32(0, 0, 0, 0));
 #endif
-  rdpq_fill_rectangle(0, 0, fb->width, fb->height);
+  if (
+#if DG_D10
+      !direct_film
+#else
+      true
+#endif
+  ) rdpq_fill_rectangle(0, 0, fb->width, fb->height);
   const uint16_t *order = NULL;
   uint64_t order_started = get_ticks_us();
   unsigned count =
@@ -3792,7 +3862,7 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
             .x = film_parent->reg_x + offset_x, .y = film_parent->reg_y + offset_y,
             .width = film_parent->width, .height = film_parent->height, .blend = 100},
             .visible = true, .stretch = true};
-        if (layer->affine || surface_get_format(fb)==FMT_RGBA32)
+        if (layer->affine || surface_get_format(fb)==FMT_RGBA32 || film_transform_active(fb))
           draw_flash_field(fb, film_channel, film_parent, layer, offset_x, offset_y);
         else draw_flash_overlays(film_channel, &field_parent, film_parent, layer->name, false);
         continue;
@@ -3819,6 +3889,9 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
           film_frame ? &recorded :
 #endif
           pass < trail_count ? &director->trails[pass].sprite : &director->sprites[i];
+#if DG_D10
+      const dg_sprite_t *film_source = s;
+#endif
       dg_sprite_t shifted;
       if(offset_x || offset_y) {
         shifted=*s;shifted.value.x+=offset_x;shifted.value.y+=offset_y;s=&shifted;
@@ -3840,7 +3913,12 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
             .width = layer->value.width, .height = layer->value.height};
         m = &direct_asset;
       }
-      bool driven = m && m->type == 2 && s == &director->sprites[i] && dg_film_driven(director, i);
+      bool driven = m && m->type == 2 && film_source == &director->sprites[i] && dg_film_driven(director, i);
+      dg_sprite_t container;
+      if (dg_film_container_effects(m)) {
+        dg_film_container_sprite(&container, s);
+        s = &container;
+      }
 #endif
       // Palettes, sounds and script casts have no visual widget in Director.
       if (m && (m->type == 4 || m->type == 6 || m->type == 11 || m->type == 14))
@@ -3870,12 +3948,18 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
       // Authored 800x600 geometry rasterizes onto the 640x480 screen.
       l = dg_prescale_coord(l); t = dg_prescale_coord(t);
       r = dg_prescale_coord(r); b = dg_prescale_coord(b);
+      if (film_transform_active(fb))
+        dg_film_transform_bounds(&film_transform_context.stack[0],&l,&t,&r,&b);
 #endif
       if (r <= 0 || b <= 0 || l >= fb->width || t >= fb->height || r <= l || b <= t)
         continue;
 #if DG_D5 || DG_D10
       if (dg_is_video(m)) {
-        if (s->value.rotation || s->value.skew || s->flip_h || s->flip_v || s->custom_quad || opacity < 100 || surface_get_format(fb)==FMT_RGBA32)
+        if (s->value.rotation || s->value.skew || s->flip_h || s->flip_v || s->custom_quad || opacity < 100 || surface_get_format(fb)==FMT_RGBA32
+#if DG_D10
+            || film_transform_active(fb)
+#endif
+        )
           draw_transformed_video(fb,i,s,l,t,r,b);
         else d5_video_draw(director, i, l, t, r, b);
         continue;
@@ -3911,9 +3995,25 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
         uint64_t film_started = get_ticks_us();
         dg_film_frame_t driven_frame;
         bool resolve = driven || m->film_track_count;
-        dg_film_layer_t *driven_layers = resolve ? dg_film_frame_resolve(director, i, s, m, &driven_frame) : NULL;
+        dg_film_layer_t *driven_layers = resolve ? dg_film_frame_resolve(director, i, film_source, m, &driven_frame) : NULL;
         if (resolve && !driven_layers) break;
         const dg_film_frame_t *frame = resolve ? &driven_frame : &m->film_frames[dg_film_storage_pose(m, s)];
+        dg_film_transform_t transform;
+        dg_film_transform_init(director,s,m,0,0,0.8f,&transform);
+        if (dg_film_container_effects(m) &&
+            (film_transform_active(fb) || !dg_film_transform_raster_aligned(&transform) ||
+             !dg_film_isolated_safe(director,i,m,frame,film_leaf_safe,NULL,0))) {
+          n64_film_transform_context_t saved=film_transform_context;
+          if (!film_transform_active(fb)) film_transform_context=(n64_film_transform_context_t){.target=fb};
+          if (film_transform_context.count==8) {
+            film_transform_context=saved;free(driven_layers);
+            lv_fail(values,"film loop backdrop transform nesting exceeded");break;
+          }
+          film_transform_context.stack[film_transform_context.count++]=transform;
+          draw_scene_frame(fb,director,0,0,frame,m,i);
+          film_transform_context=saved;free(driven_layers);
+          continue;
+        }
         n64_film_crop_t crop = n64_film_crop(director, i, m, frame, width, height);
         if (!crop.width || !crop.height) { free(driven_layers); continue; }
         unsigned tw=crop.width<256?crop.width:256,th=crop.height<128?crop.height:128;
@@ -4056,7 +4156,7 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
         }
         bool cpu_ink = dg_ink_arithmetic(ink) || ink == 36 || surface_get_format(fb)==FMT_RGBA32;
 #if DG_D10
-        cpu_ink = cpu_ink || ink == 9;
+        cpu_ink = cpu_ink || ink == 9 || film_transform_active(fb);
 #endif
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
         color_t fore = sprite_color(s, false), back = sprite_color(s, true);
@@ -4196,7 +4296,11 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
 #endif
       } else if (m && (m->type == 3 || m->type == 7)) {
 #if DG_MODERN
-        if (s->value.rotation || s->value.skew || s->flip_h || s->flip_v || s->custom_quad || surface_get_format(fb)==FMT_RGBA32)
+        if (s->value.rotation || s->value.skew || s->flip_h || s->flip_v || s->custom_quad || surface_get_format(fb)==FMT_RGBA32
+#if DG_D10
+            || film_transform_active(fb)
+#endif
+        )
           draw_transformed_text(fb,s,m,l,t,r,b);
         else
 #endif
@@ -4240,6 +4344,9 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
         int shape_width = r - l, shape_height = b - t;
 #if DG_MODERN
         transformed = s->value.rotation || s->value.skew || s->flip_h || s->flip_v || s->custom_quad;
+#if DG_D10
+        transformed = transformed || film_transform_active(fb);
+#endif
         if (transformed) {
           dg_sprite_t flat = *s;
           flat.value.rotation = flat.value.skew = 0;
@@ -4303,9 +4410,13 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
             }
             for (int x = left; x < right; x++) {
               int shape_x = x - l, shape_y = y - t;
+              float sample_x=x+0.5f,sample_y=y+0.5f;
+#if DG_D10
+              if (!film_transform_point(fb,sample_x,sample_y,&sample_x,&sample_y)) continue;
+#endif
               if (transformed) {
                 float u, v;
-                if (!dg_quad_uv(shape_quad, x + 0.5f, y + 0.5f, &u, &v)) continue;
+                if (!dg_quad_uv(shape_quad, sample_x, sample_y, &u, &v)) continue;
 #if DG_MODERN
                 if (s->flip_h) u = 1 - u;
                 if (s->flip_v) v = 1 - v;
@@ -4319,7 +4430,8 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
               }
 
 #if DG_D10
-              int stage_x = dg_stage_coord(x) - offset_x, stage_y = dg_stage_coord(y) - offset_y;
+              int stage_x = dg_stage_coord((int)floorf(sample_x)) - offset_x;
+              int stage_y = dg_stage_coord((int)floorf(sample_y)) - offset_y;
 #else
               int stage_x = x - offset_x, stage_y = y - offset_y;
 #endif
@@ -4376,7 +4488,9 @@ static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, i
       // Prompt overlays draw above their card in this sprite's own order,
       // so a later cover sprite still hides them.
       uint64_t flash_started = get_ticks_us();
-      draw_flash_overlays(i, s, m, NULL, false);
+      if (film_transform_active(fb))
+        draw_transformed_flash_overlays(fb,i,s,m,l,t,r,b);
+      else draw_flash_overlays(i, s, m, NULL, false);
       phase_flash_us += get_ticks_us() - flash_started;
 #endif
     }

@@ -8,6 +8,7 @@
 #include <string.h>
 #if DG_D10
 #include "flash_runtime.h"
+#include "film_render.h"
 #endif
 
 static void apply(dg_sprite_t *, const dg_spec_t *, unsigned);
@@ -1089,7 +1090,11 @@ void dg_update_stage(dg_runtime_t *d) {
     if (!picture_changed(d, s, old))
       continue;
     d->visual_revision++;
-    if (old->trails && old->visible && old->value.type && dg_opacity(old)) {
+    if (old->trails && old->visible && old->value.type && (dg_opacity(old)
+#if DG_D10
+        || dg_film_container_effects(dg_member(d, old->value.member))
+#endif
+    )) {
       if (d->trail_count == DG_TRAILS) {
         error(d, "sprite trail capacity", "exceeded");
         break;
@@ -1359,8 +1364,10 @@ static void cursor_set(dg_runtime_t *d, dg_cursor_t *target, lv_t value) {
     }
     next.resource = lv_integer(r, value);
     if (r->failed) return;
-    if ((next.resource < -1 || next.resource > 4) && next.resource != 200) {
-      error(d, "unsupported cursor resource", "expected built-in ID or Cursor Xtra member");
+    if (!dg_cursor_supported(next.resource)) {
+      char detail[96];
+      snprintf(detail,sizeof(detail),"%d: expected standard cursor ID or Cursor Xtra member",(int)next.resource);
+      error(d, "unsupported cursor resource", detail);
       return;
     }
   }
