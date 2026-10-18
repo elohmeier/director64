@@ -621,6 +621,34 @@ def game_defines(game: GameSpec) -> list[str]:
     return defines
 
 
+def validate_package(game: GameSpec, output: Path, package: Path) -> dict:
+    """Load every package record with the production, profile-specific loader."""
+    folder = output / "gen"
+    folder.mkdir(parents=True, exist_ok=True)
+    tool = folder / "package-validate"
+    subprocess.run(
+        [
+            os.environ.get("CC", "cc"),
+            "-std=c17", "-O1", "-Wall", "-Wextra", "-Werror", "-pedantic",
+            *family_defines(game),
+            *(f"-I{p}" for p in (
+                "runtime/director", "runtime/lingo", "runtime/interaction",
+                "runtime/storage", "runtime/package",
+            )),
+            "tools/director/validate-package.c", "runtime/package/package.c",
+            "-o", str(tool),
+        ],
+        cwd=game.root,
+        check=True,
+    )
+    result = subprocess.run(
+        [tool, package, abi_digest(game.root).hex()], capture_output=True, text=True, check=False
+    )
+    if result.returncode:
+        raise ValueError(f"{package}: runtime rejected converted package:\n{result.stderr}")
+    return json.loads(result.stdout)
+
+
 def check_package(game: GameSpec, output: Path, package: Path) -> dict:
     """Loader parity: the package, loaded, equals the generated C field by
     field (tests/package/compare.c)."""

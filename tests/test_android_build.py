@@ -101,6 +101,10 @@ def test_asset_reuse_checks_profile_exporter_source_and_pack_hashes(tmp_path, mo
     monkeypatch.setattr(web, "abi_digest", lambda root: b"abi")
     monkeypatch.setattr(web, "web_profile", lambda game: {})
     monkeypatch.setattr(web, "profile_entry", lambda game, web: profile)
+    validated = []
+    monkeypatch.setattr(
+        web, "validate_package", lambda game, output, package: validated.append(package)
+    )
     out = tmp_path / "game"
     out.mkdir()
     for name in android.GAME_FILES:
@@ -124,6 +128,18 @@ def test_asset_reuse_checks_profile_exporter_source_and_pack_hashes(tmp_path, mo
 
     monkeypatch.setattr(android.subprocess, "run", run)
     assert android.convert(game, out) == out
+    assert validated == [out / "game.d64p"]
+
+    def rejected(*args):
+        raise ValueError("runtime rejected converted package")
+
+    # Matching manifest hashes cannot bypass the actual loader contract.
+    monkeypatch.setattr(web, "validate_package", rejected)
+    with pytest.raises(ValueError, match="runtime rejected"):
+        android.convert(game, out)
+    monkeypatch.setattr(
+        web, "validate_package", lambda game, output, package: validated.append(package)
+    )
     for changed in ["profile", "export", "source", "asset"]:
         profile["policy"]["stage_prescale"] = changed == "profile"
         export.write_text("changed exporter" if changed == "export" else "exporter")
@@ -131,6 +147,11 @@ def test_asset_reuse_checks_profile_exporter_source_and_pack_hashes(tmp_path, mo
         (out / "game.d64p").write_bytes(b"WRONG" if changed == "asset" else b"asset")
         with pytest.raises(ConversionStarted):
             android.convert(game, out)
+    # Fresh conversion must pass the same gate before APK assembly too.
+    monkeypatch.setattr(android.subprocess, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(web, "validate_package", rejected)
+    with pytest.raises(ValueError, match="runtime rejected"):
+        android.convert(game, out, force=True)
 
 
 def test_importer_fingerprint_covers_compiler_pipeline_schema_and_vendored_decoder(

@@ -217,7 +217,7 @@ pub fn write(
             for v in [m.film_loop, m.line_direction] {
                 movies.u8(v);
             }
-            if profile.version >= 10 {
+            if profile.d10() {
                 movies.u8(m.flash_variant_count);
             }
             for asset in &m.film_assets {

@@ -198,6 +198,7 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
     except OSError, KeyError, ValueError:
         current = False
     if current and not force:
+        web.validate_package(game, out.parent, out / "game.d64p")
         return out
     gen = out.parent / "gen"
     gen.mkdir(parents=True, exist_ok=True)
@@ -241,6 +242,7 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
         ],
         check=True,
     )
+    web.validate_package(game, out.parent, out / "game.d64p")
     return out
 
 
@@ -404,6 +406,7 @@ def apk_input_digest(game: GameSpec, abis: list[str]) -> str:
     paths.update(game.directory.rglob("*.h"))
     paths.update(root / name for name in (
         "src/director64/android.py", "src/director64/web.py", str(web.FONT),
+        "tools/director/validate-package.c",
     ))
     digest = hashlib.sha256(json.dumps({
         "source": game.source["sha256"], "abis": abis,
