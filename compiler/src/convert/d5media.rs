@@ -2,12 +2,14 @@
 //! implemented from the pinned local ScummVM engines/director/{sound.cpp,
 //! cast.cpp,fonts.cpp,castmember/digitalvideo.cpp}.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::js::{hex, latin1, mac_roman};
 
 fn be16(b: &[u8], at: usize) -> Result<usize, String> {
-    b.get(at..at + 2).map(|s| u16::from_be_bytes([s[0], s[1]]) as usize).ok_or_else(|| "read outside resource".into())
+    b.get(at..at + 2)
+        .map(|s| u16::from_be_bytes([s[0], s[1]]) as usize)
+        .ok_or_else(|| "read outside resource".into())
 }
 fn be32(b: &[u8], at: usize) -> Result<usize, String> {
     b.get(at..at + 4)
@@ -15,9 +17,11 @@ fn be32(b: &[u8], at: usize) -> Result<usize, String> {
         .ok_or_else(|| "read outside resource".into())
 }
 
-pub fn cast_strings(cast: &[u8]) -> Result<Vec<String>, String> {
+pub(super) fn cast_info_entries(cast: &[u8]) -> Result<Vec<&[u8]>, String> {
     let length = be32(cast, 4)?;
-    let info = cast.get(12..12 + length).unwrap_or(&cast[cast.len().min(12)..]);
+    let info = cast
+        .get(12..12 + length)
+        .unwrap_or(&cast[cast.len().min(12)..]);
     if info.len() != length || length < 22 {
         return Err("truncated cast info".into());
     }
@@ -30,24 +34,40 @@ pub fn cast_strings(cast: &[u8]) -> Result<Vec<String>, String> {
     if count > 64 || base > length {
         return Err("invalid cast info string count".into());
     }
-    let mut strings = Vec::new();
+    let mut entries = Vec::new();
     for i in 0..count {
         let start = base + be32(info, table + 2 + i * 4)?;
         let end = base + be32(info, table + 6 + i * 4)?;
         if start > end || end > length {
             return Err("cast string outside info".into());
         }
-        if start == end {
-            strings.push(String::new());
-            continue;
-        }
-        let n = info[start] as usize;
-        if n > end - start - 1 {
-            return Err("truncated cast Pascal string".into());
-        }
-        strings.push(latin1(&info[start + 1..start + 1 + n]));
+        entries.push(&info[start..end]);
     }
-    Ok(strings)
+    Ok(entries)
+}
+
+fn pascal_string(bytes: &[u8]) -> Result<String, String> {
+    let Some(&length) = bytes.first() else {
+        return Ok(String::new());
+    };
+    let payload = bytes
+        .get(1..1 + length as usize)
+        .ok_or("truncated cast Pascal string")?;
+    Ok(latin1(payload))
+}
+
+pub fn cast_strings(cast: &[u8]) -> Result<Vec<String>, String> {
+    cast_info_entries(cast)?
+        .iter()
+        .map(|entry| pascal_string(entry))
+        .collect()
+}
+
+/// Later cast-info slots contain dates and NUL-terminated author strings,
+/// not Pascal strings. Read only the specified string slot for linked media.
+pub fn cast_string(cast: &[u8], index: usize) -> Result<String, String> {
+    let entries = cast_info_entries(cast)?;
+    pascal_string(entries.get(index).copied().unwrap_or_default())
 }
 
 pub struct Sound {
@@ -113,7 +133,15 @@ pub fn sound_resource(b: &[u8]) -> Result<Sound, String> {
         return Err("invalid snd sample bounds".into());
     }
     let samples = h[data_offset..data_offset + bytes as usize].to_vec();
-    Ok(Sound { rate, frames: frames as u32, channels, bits, loop_start, loop_end, samples })
+    Ok(Sound {
+        rate,
+        frames: frames as u32,
+        channels,
+        bits,
+        loop_start,
+        loop_end,
+        samples,
+    })
 }
 
 /// STXT: a 12-byte header and bounded 20-byte FontStyle records.

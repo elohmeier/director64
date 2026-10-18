@@ -27,9 +27,12 @@ fn behavior_details_and_initializer_records_use_their_distinct_indices() {
     });
     let model = score_model(&score, Some(&json!({"labels": []}))).unwrap();
     let channel = &model["frames"][0]["channels"][0];
-    assert_eq!(channel["behaviors"], json!([
-        {"cast": 2, "member": 19, "parameters": parameters}, {"cast": 1, "member": 4, "missingInitializer": 99},
-    ]));
+    assert_eq!(
+        channel["behaviors"],
+        json!([
+            {"cast": 2, "member": 19, "parameters": parameters}, {"cast": 1, "member": 4, "missingInitializer": 99},
+        ])
+    );
     assert_eq!(model["unknown_tail_bytes"], 7);
     assert_eq!(channel["changed"], json!(vec![1; 24]));
 }

@@ -49,7 +49,7 @@ static lv_flow_t delayed(lv_runtime_t *r, lv_frame_t *f) {
   if (!f->pc++) return lv_invoke(r, f, "delay", 1, (lv_t[]){lv_num(60)});
   return LV_RETURN;
 }
-static const dg_cast_t cast = {"Internal", 1, 1};
+static const dg_cast_t cast = {.name="Internal",.file=1,.cast=1};
 static const dg_delta_t script = {.channel=0, .value={.script=0x210001}};
 static const dg_frame_t plain[] = {{0,0},{0,0}};
 static const dg_frame_t scripted[] = {{0,1},{1,0}};

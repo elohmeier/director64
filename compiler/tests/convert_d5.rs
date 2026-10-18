@@ -6,10 +6,15 @@ use common::*;
 use director64_aot::convert::bitmap::{bitmap_metadata, score_model};
 use director64_aot::convert::d5media::{cast_strings, sound_resource, styled_text};
 use director64_aot::convert::js::hex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn channel(frame: &Value, index: i64) -> &Value {
-    frame["channels"].as_array().unwrap().iter().find(|c| c["channel"] == index).unwrap()
+    frame["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["channel"] == index)
+        .unwrap()
 }
 fn first(value: &Value, n: usize) -> Value {
     Value::Array(value.as_array().unwrap()[..n].to_vec())
@@ -37,16 +42,25 @@ fn direct_scripts_two_main_records_and_byte_ownership_normalize_independently() 
         "deltas": [{"channel_offset": 0, "payload": {"length": 24}}, {"channel_offset": 48, "payload": {"length": 24}}]}]});
     let model = score_model(&score, None).unwrap();
     let frame = &model["frames"][0];
-    assert_eq!(channel(frame, 0)["behaviors"], json!([{"cast": 1, "member": 17}]));
+    assert_eq!(
+        channel(frame, 0)["behaviors"],
+        json!([{"cast": 1, "member": 17}])
+    );
     assert_eq!(channel(frame, 1)["tempoRaw"], 137);
     assert_eq!(first(&channel(frame, 4)["bytes"], 4), json!([0, 2, 0, 44]));
     assert_eq!(first(&channel(frame, 3)["bytes"], 4), json!([0, 1, 0, 55]));
     let normalized = channel(frame, 6);
-    assert_eq!(Value::Array(normalized["bytes"].as_array().unwrap()[2..8].to_vec()), json!([255, 7, 0, 2, 0, 5]));
+    assert_eq!(
+        Value::Array(normalized["bytes"].as_array().unwrap()[2..8].to_vec()),
+        json!([255, 7, 0, 2, 0, 5])
+    );
     assert_eq!(normalized["behaviors"], json!([{"cast": 1, "member": 9}]));
     score["frames"][0]["deltas"] = json!([{"channel_offset": 58, "payload": {"length": 1}}]);
     let changed: Vec<i64> = (0..24).map(|i| i64::from(i == 2)).collect();
-    assert_eq!(score_model(&score, None).unwrap()["frames"][0]["channels"][0]["changed"], json!(changed));
+    assert_eq!(
+        score_model(&score, None).unwrap()["frames"][0]["channels"][0]["changed"],
+        json!(changed)
+    );
 }
 
 #[test]

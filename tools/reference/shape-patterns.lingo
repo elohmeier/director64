@@ -1,0 +1,42 @@
+-- Synthetic shape pixels only; no game assets or recovered scripts.
+global out, pm, snapshot, patternId, origin, row, column, bits, pixel
+out=new(xtra("fileio"))
+out.createFile("C:\shape-patterns.txt")
+out.openFile("C:\shape-patterns.txt",2)
+pm=new(#shape)
+pm.shapeType=#rect
+pm.filled=1
+pm.lineSize=0
+pm.rect=rect(0,0,32,32)
+puppetSprite(149,1)
+sprite(149).member=pm
+sprite(149).visible=1
+sprite(149).ink=0
+sprite(149).blend=100
+sprite(149).color=rgb(0,0,0)
+sprite(149).bgColor=rgb(255,255,255)
+repeat with origin in [point(0,0),point(3,5)]
+ sprite(149).rect=rect(origin.locH,origin.locV,origin.locH+32,origin.locV+32)
+ repeat with patternId=1 to 64
+  pm.pattern=patternId
+  updateStage
+  snapshot=(the stage).image
+  repeat with row=0 to 31
+   bits=""
+   repeat with column=0 to 31
+    pixel=snapshot.getPixel(point(origin.locH+column,origin.locV+row))
+    if pixel=rgb(0,0,0) then
+     bits=bits&"1"
+    else
+     if pixel=rgb(255,255,255) then
+      bits=bits&"0"
+     else
+      bits=bits&"?"
+     end if
+    end if
+   end repeat
+   out.writeString(string([patternId,origin,row,bits])&RETURN)
+  end repeat
+ end repeat
+end repeat
+out.closeFile()

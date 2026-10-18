@@ -7,7 +7,7 @@ static dg_runtime_t d;
 static lv_runtime_t r;
 static const lv_t sprite = lv_make(LV_SPRITE, 1);
 static const lv_movie_t code = {"STATE.DXR",0,NULL,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t cast = {"Internal",1,1};
+static const dg_cast_t cast = {.name="Internal",.file=1,.cast=1};
 static const dg_member_t members[] = {
   {.id=0x210001,.number=1,.cast=1,.type=3,.text="First"},
   {.id=0x210002,.number=2,.cast=1,.type=3,.text="Second"},

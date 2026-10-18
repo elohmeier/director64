@@ -191,6 +191,29 @@ def packed_dfs_names(packed: dict) -> set[str]:
     return names
 
 
+def overlay_symbol_names(manifest: dict) -> set[str]:
+    """Only native C functions require the SDK's optional DSO symbol file.
+
+    Bytecode blocks are constant data. Older compiler manifests mislabeled
+    their count as native_functions; reject those with a rebuild instruction.
+    """
+    names = set()
+    for movie in manifest["movies"]:
+        kind = movie.get("code_kind")
+        if kind is None and "bytecode_bytes" in movie:
+            raise RomError("stale bytecode overlay manifest; regenerate aot/c with the compiler")
+        if kind not in (None, "native", "bytecode"):
+            raise RomError(f"unknown overlay code kind: {kind}")
+        functions = movie["native_functions"]
+        if not isinstance(functions, int) or isinstance(functions, bool) or functions < 0:
+            raise RomError("invalid native overlay function count")
+        if kind == "bytecode" and functions:
+            raise RomError("bytecode overlay declares native functions")
+        if functions:
+            names.add("code/" + movie["movie"].replace(".", "_").lower() + ".dso.sym")
+    return names
+
+
 def validate_image_pack(files: dict[str, bytes], packed: dict) -> None:
     """The embedded pack is the one the manifest recorded and indexes every
     manifested image under its authored key."""

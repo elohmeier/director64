@@ -61,14 +61,9 @@ static pointer_control_t pointer;
 static wc_t compositor;
 static web_host_t host;
 static bool booted;
+static bool probe_render;
+EMSCRIPTEN_KEEPALIVE void d64_probe_render(int enabled) { probe_render = enabled != 0; }
 static unsigned seed;
-// Sounds started since the module loaded; like the native probe's, it
-// survives a reboot.
-static unsigned sound_count;
-static unsigned busy_until[DG_SOUND_CHANNELS];
-#if DG_EXTENDED
-static unsigned sound_started[DG_SOUND_CHANNELS];
-#endif
 static float served_gain[DG_SOUND_CHANNELS];
 // The console's FlashRAM, erased. The page fills it from durable storage
 // before boot and persists it after every committed save.
@@ -123,47 +118,7 @@ static bool write_file(void *ctx, const char *name, const char *data,
   flash_dirty = false;
   return ok;
 }
-// Channel lifetime follows the service clock, as the native probe's does: a
-// sound is busy for its authored length in ticks, looping sounds until they
-// are replaced. The score's waits on a sound therefore end on the same tick
-// here as on the probe, and the page's audio plays alongside that clock.
-static void sound(void *ctx, unsigned channel, const dg_member_t *m) {
-  (void)ctx;
-  if (channel >= DG_SOUND_CHANNELS) {
-    lv_fail(&values, "native audio channel");
-    return;
-  }
-  busy_until[channel] =
-      director.ticks +
-      (m && m->rate ? (m->samples * 60u + m->rate - 1) / m->rate : 0);
-  if (m && m->looping)
-    busy_until[channel] = UINT32_MAX;
-#if DG_EXTENDED
-  sound_started[channel] = director.ticks;
-#endif
-  sound_count++;
-  if (!host.sound)
-    return;
-  if (!m || !m->asset || !*m->asset)
-    host.sound(host.ctx, channel, NULL, 0, 0, 0);
-  else
-    host.sound(host.ctx, channel, m->asset, m->looping, m->loop_start,
-               m->loop_end);
-}
-static bool sound_busy(void *ctx, unsigned channel) {
-  (void)ctx;
-  return channel < DG_SOUND_CHANNELS && director.ticks < busy_until[channel];
-}
-#if DG_EXTENDED
-// How far a channel's sound has played, in milliseconds, for cue points. Like
-// channel lifetime it follows the service clock, as on the native probe.
-static unsigned sound_position(void *ctx, unsigned channel) {
-  (void)ctx;
-  if (channel >= DG_SOUND_CHANNELS || director.ticks <= sound_started[channel])
-    return 0;
-  return (director.ticks - sound_started[channel]) * 1000u / 60u;
-}
-#endif
+#include "audio.inc"
 static void trace(void *ctx, const char *text) {
   (void)ctx;
   if (host.trace)
@@ -176,6 +131,9 @@ static void play_file(void *ctx, unsigned channel, const char *name) {
   (void)ctx;
   if (channel >= DG_SOUND_CHANNELS)
     return;
+  sound_loops[channel].looping = false;
+  sound_loops[channel].rate = 0;
+  sound_paused[channel] = false;
   unsigned milliseconds = host.stream ? host.stream(host.ctx, channel, name) : 0;
   busy_until[channel] = director.ticks + (milliseconds * 60u + 999u) / 1000u;
   sound_started[channel] = director.ticks;
@@ -231,9 +189,10 @@ static uint32_t read_asset(void *ctx, const char *name, uint8_t *out,
   (void)ctx;
   return host.asset ? host.asset(host.ctx, name, out, cap) : 0;
 }
-static bool video_frame(void *ctx, unsigned sprite, uint32_t *out, uint32_t cap,
+static bool video_frame(void *ctx, const dg_runtime_t *owner, unsigned sprite, uint32_t *out, uint32_t cap,
                         unsigned *width, unsigned *height) {
   (void)ctx;
+  sprite = dg_video_player_id(owner, sprite);
   return host.video_frame &&
          host.video_frame(host.ctx, sprite, out, cap, width, height);
 }
@@ -244,23 +203,36 @@ static bool video_frame(void *ctx, unsigned sprite, uint32_t *out, uint32_t cap,
 // rectangle or the member's own size.
 static int text_char_at(void *ctx, uint32_t member, unsigned sprite, int x, int y) {
   (void)ctx;
-  const dg_member_t *m = dg_member(&director, member);
+  dg_runtime_t *active = (dg_runtime_t *)values.context;
+  const dg_member_t *m = dg_member(active, member);
   if (!m)
     return -1;
   const char *text = m->text;
-  for (unsigned j = 0; j < director.field_count; j++)
-    if (director.field_members[j] == m->id)
+  for (unsigned j = 0; j < active->field_count; j++)
+    if (active->field_members[j] == m->id)
       text = lv_cstr(&values, values.roots[DG_FIELD_TEXT_ROOT + j]);
   int width = m->width, height = m->height;
   if (sprite && sprite < DG_SPRITES) {
+    dg_sprite_t flat = active->sprites[sprite];
+    flat.value.rotation = flat.value.skew = 0;
+    flat.custom_quad = flat.flip_h = flat.flip_v = false;
     int l, t, r, b;
-    dg_sprite_bounds(&director, &director.sprites[sprite], &l, &t, &r, &b);
+    dg_sprite_bounds(active, &flat, &l, &t, &r, &b);
     width = r - l;
     height = b - t;
   }
-  return wc_text_char_at(&compositor, m, text, width, height, x, y);
+  return wc_text_char_at(&compositor, active, m, text, width, height, x, y);
 }
 #endif
+static bool read_image(void *ctx, uint32_t member, dg_pixel_image_t *out) {
+  (void)ctx;
+  return wc_read_image(&compositor, (dg_runtime_t *)values.context, member, out);
+}
+static bool flash_field_hit(void *ctx, dg_runtime_t *owner,
+                            struct dg_flash_instance *field, float x, float y) {
+  (void)ctx;
+  return wc_flash_field_hit(&compositor, owner, field, x, y);
+}
 static void capture_stage(void *ctx, uint32_t member) {
   (void)ctx;
   wc_capture_stage(&compositor, member);
@@ -461,41 +433,12 @@ EMSCRIPTEN_KEEPALIVE const char *d64_package_error(void) { return package_error;
 #endif
 
 #if DG_D5 || DG_D10
-// Digital video players, one per sprite channel showing a video member, run
-// by the page (d5_video.c runs the console's): opened when a sprite shows a
-// video, told its time every step, closed when the sprite moves on.
-static uint32_t video_member[DG_SPRITES];
-static void close_videos(void) {
-  for (unsigned i = 0; i < DG_SPRITES; i++)
-    if (video_member[i] && host.video)
-      host.video(host.ctx, i, NULL, "", 0, 0, 0, 0);
-  memset(video_member, 0, sizeof(video_member));
-}
-static void update_videos(void) {
-  if (!host.video)
-    return;
-  float volume = director.sound_level <= 0   ? 0.0f
-                 : director.sound_level >= 7 ? 1.0f
-                                             : director.sound_level / 7.0f;
-  for (unsigned i = 1; i < DG_SPRITES; i++) {
-    const dg_sprite_t *s = &director.sprites[i];
-    const dg_member_t *m = s->value.type ? dg_member(&director, s->value.member) : NULL;
-    if (!dg_is_video(m)) {
-      if (video_member[i])
-        host.video(host.ctx, i, NULL, "", 0, 0, 0, 0);
-      video_member[i] = 0;
-      continue;
-    }
-    if (video_member[i] && video_member[i] != m->id)
-      host.video(host.ctx, i, NULL, "", 0, 0, 0, 0);
-    video_member[i] = m->id;
-    const char *video = m->asset && !(m->video_flags & 512) ? m->asset : "";
-    const char *audio = m->video_audio && (m->video_flags & 8) ? m->video_audio : "";
-    host.video(host.ctx, i, video, audio, s->video_time, s->video_rate, s->video_serial,
-               volume * s->video_volume / 255.0f);
-  }
-}
+#include "video.inc"
+#if DG_D10
+#include "flash_audio.inc"
 #endif
+#endif
+#include "lifecycle.inc"
 // A console power-on: volatile state resets, only the flash image persists.
 // Returns the save status; anything but valid or blank has already failed the
 // runtime without touching the flash image.
@@ -506,21 +449,12 @@ EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
     return -1;
   }
 #endif
-  if (booted)
-    wc_release(&compositor);
-#if DG_D5
-  // A reboot with the source dialog open releases the suspended stage.
-  if (director.suspended_stage) {
-    free(director.suspended_stage);
-    director.suspended_stage = NULL;
-  }
-#endif
-#if DG_D5 || DG_D10
-  close_videos();
-#endif
+  release_runtime();
   booted = true;
   seed = random_seed;
   memset(busy_until, 0, sizeof(busy_until));
+  memset(sound_paused, 0, sizeof(sound_paused));
+  memset(sound_loops, 0, sizeof(sound_loops));
 #if DG_EXTENDED
   memset(sound_started, 0, sizeof(sound_started));
 #endif
@@ -533,14 +467,15 @@ EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
   dg_init(&director, &values,
           (dg_platform_t){.nth_file = game_nth_file, .long_date = game_long_date,
                           .read_file = read_file, .write_file = write_file,
-                          .sound = sound, .sound_busy = sound_busy,
+                          .sound = sound, .sound_pause = sound_pause, .sound_busy = sound_busy,
+                          .sound_break_loop = sound_break_loop,
 #if DG_EXTENDED
                           .sound_position = sound_position,
 #endif
 #if DG_D10
                           .play_file = play_file, .find_movie = find_movie,
                           .movie_path = game_movie_path, .data_folder = game_data_folder,
-                          .read_data = read_data, .capture_stage = capture_stage,
+                          .read_data = read_data, .capture_stage = capture_stage, .read_image = read_image, .flash_field_hit = flash_field_hit,
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
                           .text_char_at = text_char_at,
 #endif
@@ -633,6 +568,9 @@ EMSCRIPTEN_KEEPALIVE int d64_step(int x, int y, int buttons) {
   serve_gain();
 #if DG_D5 || DG_D10
   update_videos();
+#if DG_D10
+  update_flash_audio();
+#endif
 #endif
   return values.failed ? 1 : director.quit ? 2 : 0;
 }
@@ -1159,8 +1097,9 @@ EMSCRIPTEN_KEEPALIVE const char *d64_rpc(const char *command) {
     for (unsigned i = 0; i < ticks && !values.failed && !director.quit; i++) {
       pointer_update(&pointer, &director, &sample);
       const input_state_t *in = &pointer_driver(&pointer)->input;
-      if (!step(in->x / INPUT_ONE, in->y / INPUT_ONE, !!(in->held & INPUT_A)))
-        break;
+      bool ok = step(in->x / INPUT_ONE, in->y / INPUT_ONE, !!(in->held & INPUT_A));
+      if (probe_render) d64_render(0, 0, 0);
+      if (!ok || values.failed) break;
     }
   } else if (sscanf(command, "point %u", &sprite) == 1 && sprite > 0 &&
              sprite < DG_SPRITES) {
@@ -1168,9 +1107,11 @@ EMSCRIPTEN_KEEPALIVE const char *d64_rpc(const char *command) {
     return output;
   } else if (sscanf(command, "step %u %d %d %d", &ticks, &x, &y, &down) == 4 &&
              ticks <= 100000) {
-    for (unsigned i = 0; i < ticks && !values.failed && !director.quit; i++)
-      if (!step(x, y, (unsigned)down))
-        break;
+    for (unsigned i = 0; i < ticks && !values.failed && !director.quit; i++) {
+      bool ok = step(x, y, (unsigned)down);
+      if (probe_render) d64_render(0, 0, 0);
+      if (!ok || values.failed) break;
+    }
 #if DG_CAP_KEYBOARD
   } else if (sscanf(command, "key %u %d %d", &ticks, &x, &down) == 3) {
     dg_key(&director, ticks, (unsigned)x, down != 0);

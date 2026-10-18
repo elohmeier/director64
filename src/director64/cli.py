@@ -26,6 +26,32 @@ def director_stage(game, *args):
     run(binary, "director", *args)
 
 
+def prepared_policy(game):
+    """Carry disc-proven long names into conversion without changing IDs."""
+    from .iso import inventory_report
+
+    policy = json.loads((game.directory / "host/source-policy.json").read_text())
+    aliases = {}
+    if game.source["kind"] == "iso9660":
+        with game.media.open("rb") as handle:
+            aliases = inventory_report(handle).get("aliases", {})
+    recovery = game.data.get("recovery", game.data.get("port"))
+    root = recovery["media_root"].strip("/")
+    prefix = root + "/" if root else ""
+    depth = len(root.split("/")) if root else 0
+    policy["source_path_aliases"] = {
+        "/".join(long.split("/")[depth:]): short[len(prefix):]
+        for long, short in aliases.items() if short.startswith(prefix)
+    }
+    if policy.get("system_font_resources"):
+        from .system_fonts import prepare
+
+        prepare(game.root, game.work / "extracted" / root, policy)
+    output = game.work / "source-policy.json"
+    output.write_text(json.dumps(policy, indent=2) + "\n")
+    return output
+
+
 def recover(game):
     from .iso import file_sha256
     from .media import extract_source
@@ -40,7 +66,7 @@ def recover(game):
     extract_source(game)
     analysis = game.work / "analysis"
     media = game.work / "extracted" / recovery["media_root"]
-    policy = game.directory / "host/source-policy.json"
+    policy = prepared_policy(game)
     dumps = analysis / "dumps"
     # ProjectorRays parses every Director file once (tools/director/dump.mjs);
     # every stage after it is the Rust converter reading those dumps.
@@ -66,9 +92,13 @@ def assets(game):
 
 
 def _assets(game, image):
+    from .build_inputs import begin, record
     from .full_assets import pack
+    from .video import MPEG_PORTS
+    from .video import prepare as prepare_video
 
     game.require_port()
+    inputs = begin(game)
     recover(game)
     analysis = game.work / "analysis"
     media = game.work / "extracted" / game.data["port"]["media_root"]
@@ -78,11 +108,17 @@ def _assets(game, image):
         game.work / "director",
         analysis / "score-recovery",
         media,
-        game.directory / "host/source-policy.json",
+        game.work / "source-policy.json",
         analysis / "dumps",
-        *(["--defer-video"] if game.data["port"].get("asset_postprocessor") else []),
+        *(
+            ["--defer-video"]
+            if game.data["port"].get("asset_postprocessor") or game.slug in MPEG_PORTS
+            else []
+        ),
     )
-    if module := game.data["port"].get("asset_postprocessor"):
+    if game.slug in MPEG_PORTS:
+        prepare_video(game, image)
+    elif module := game.data["port"].get("asset_postprocessor"):
         game.host(module).main()
     from .aot import executable_program, generator_command
 
@@ -97,11 +133,16 @@ def _assets(game, image):
         "--program",
         program,
     )
-    game.host("full_accountability").main()
-    pack(game.root, image)
-    from .build_inputs import record
+    if (game.directory / "host/full_accountability.py").is_file():
+        game.host("full_accountability").main()
+    else:
+        from .accountability import write
 
-    record(game)
+        write(game, program)
+    from .web import port_plan
+
+    pack(game.root, image, data_folders=port_plan(game).get("data", []))
+    record(game, inputs)
 
 
 def build(game, profile="release", replay_scenario=1):
@@ -137,6 +178,7 @@ def _build(game, sdk, profile, replay_scenario):
         f"ROM_TITLE={port['rom_title']}",
         f"ENTRY_MOVIE={port['entry_movie']}",
         f"DIRECTOR_VERSION={family_version(port['director_version'])}",
+        f"DIRECTOR85={int(port['director_version'] == 850)}",
         f"EXTENDED_D6={int(port.get('extended_d6', False))}",
         f"CONTROLLER_COUNT={port.get('controller_count', 1)}",
         f"-j{min(24, os.cpu_count() or 8)}",
@@ -158,7 +200,12 @@ def _build(game, sdk, profile, replay_scenario):
     from .rom_inputs import record as record_rom_inputs
 
     record_rom_inputs(game, profile, game.work / "n64" / f"{name}.z64")
-    result = game.host("full_validation").validate_rom(game.root, profile)
+    if port.get("host_package"):
+        result = game.host("full_validation").validate_rom(game.root, profile)
+    else:
+        from .rom_validation import validate_rom
+
+        result = validate_rom(game, profile)
     game.dist.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(game.work / "n64" / f"{name}.z64", game.dist / f"{name}.z64")
     (game.dist / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -342,3 +389,7 @@ def main(argv=None):
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"director64: {error}\n")
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

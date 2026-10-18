@@ -1,6 +1,9 @@
 #include "compositor.h"
+#include "linked_geometry.h"
 #include "bitmap_tiles.h"
 #include "ink.h"
+#include "film_render.h"
+#include "flash_render.h"
 #include "shape.h"
 #include <stdio.h>
 #ifdef DIRECTOR64_DEV_LENIENT
@@ -49,11 +52,13 @@ bool wc_decode(const uint8_t *data, uint32_t length, unsigned width,
   if (!valid)
     return false;
   bool follow = dg_fdi_follow_alpha(data);
+  bool rich = dg_fdi_rich_text(data);
 #if !DG_MODERN
   // Coverage-carrying images are a D7-and-later form; plain D6 reads the
   // matte bit only, as the console's loader does for this family.
   follow = false;
 #endif
+  if (rich) follow = ink == 36;
   *follow_alpha = follow;
   bool tiled = bitmap_needs_tiles(width, height);
   for (unsigned y = 0; y < height; y++)
@@ -61,20 +66,27 @@ bool wc_decode(const uint8_t *data, uint32_t length, unsigned width,
       uint64_t i = tiled ? bitmap_tile_index(width, x, y)
                          : (uint64_t)y * width + x;
       uint32_t pixel;
-      if (indexed) {
+      if (indexed && dg_fdi_palette_brush(data)) {
+        pixel=0xff000000u|dg_fdic_index(data,bits,index_offset,width,height,x,y);
+      } else if (indexed) {
         uint16_t word = dg_fdic_texel(data, bits, index_offset, width, height,
                                       x, y);
-        pixel = from5551(dg_bitmap_ink16(word, ink, follow));
+        pixel = from5551(rich ? word : dg_bitmap_ink16(word, ink, follow));
       } else if (rgba32) {
-        pixel = from8888(dg_bitmap_ink32(dg_fdi_be32(data + 32 + i * 4), ink,
-                                         follow));
+        uint32_t raw = dg_fdi_be32(data + 32 + i * 4);
+        pixel = from8888(rich ? raw : dg_bitmap_ink32(raw, ink, follow));
       } else if (planes) {
         uint16_t word = (uint16_t)dg_fdi_be16(data + 32 + i * 2);
-        uint8_t alpha = dg_bitmap_alpha16(word, data[alpha_offset + i], ink);
+        uint8_t alpha = rich ? data[alpha_offset + i] : dg_bitmap_alpha16(word, data[alpha_offset + i], ink);
         pixel = (from5551(word) & 0xffffffu) | (uint32_t)alpha << 24;
       } else {
         uint16_t word = (uint16_t)dg_fdi_be16(data + 32 + i * 2);
-        pixel = from5551(dg_bitmap_ink16(word, ink, follow));
+        pixel = from5551(rich ? word : dg_bitmap_ink16(word, ink, follow));
+      }
+      if (rich) {
+        uint32_t packed = (pixel & 255) << 24 | (pixel & 0xff00) << 8 |
+                          (pixel >> 16 & 255) << 8 | pixel >> 24;
+        pixel = from8888(dg_rich_pixel32(packed, data, ink));
       }
       out[(size_t)y * width + x] = pixel;
     }
@@ -146,6 +158,20 @@ static uint8_t *read_image(wc_t *c, const char *asset, uint32_t *length) {
   *length = n;
   return data;
 }
+static void image_coverage(wc_image_t *image) {
+  image->cover_l = image->width;
+  image->cover_t = image->height;
+  image->cover_r = image->cover_b = 0;
+  for (unsigned y = 0; y < image->height; y++)
+    for (unsigned x = 0; x < image->width; x++)
+      if (image->pixels[(size_t)y * (image->stride ? image->stride : image->width) + x] >> 24) {
+        if (x < image->cover_l) image->cover_l = x;
+        if (x >= image->cover_r) image->cover_r = x + 1;
+        if (y < image->cover_t) image->cover_t = y;
+        image->cover_b = y + 1;
+      }
+}
+
 const wc_image_t *wc_image(wc_t *c, lv_runtime_t *values, const char *asset,
                            unsigned width, unsigned height, unsigned ink) {
   if (!asset || !*asset || strlen(asset) >= sizeof(c->images[0].name)) {
@@ -201,6 +227,10 @@ const wc_image_t *wc_image(wc_t *c, lv_runtime_t *values, const char *asset,
   bool follow = false;
   bool ok = data && pixels && wc_decode(data, length, width, height, ink, pixels, &follow);
   int reg_x = ok ? (int16_t)dg_fdi_be16(data + 12) : 0, reg_y = ok ? (int16_t)dg_fdi_be16(data + 14) : 0;
+  unsigned depth = ok ? dg_fdi_depth(data) : 0;
+  bool rgb555 = ok && memcmp(data, "FDI2", 4);
+  bool rich_text = ok && dg_fdi_rich_text(data);
+  bool palette_brush = ok && dg_fdi_palette_brush(data);
   free(data);
   if (!ok) {
 #ifdef DIRECTOR64_DEV_LENIENT
@@ -216,23 +246,17 @@ const wc_image_t *wc_image(wc_t *c, lv_runtime_t *values, const char *asset,
   image->ink = ink;
   image->width = width;
   image->height = height;
+  image->depth = depth;
+  image->rgb555 = rgb555;
+  image->rich_text = rich_text;
+  image->palette_brush = palette_brush;
   image->follow_alpha = follow;
   image->pixels = pixels;
   image->bytes = bytes;
   image->last = c->serial;
   image->reg_x = reg_x;
   image->reg_y = reg_y;
-  image->cover_l = width;
-  image->cover_t = height;
-  image->cover_r = image->cover_b = 0;
-  for (unsigned y = 0; y < height; y++)
-    for (unsigned x = 0; x < width; x++)
-      if (pixels[(size_t)y * width + x] >> 24) {
-        if (x < image->cover_l) image->cover_l = x;
-        if (x >= image->cover_r) image->cover_r = x + 1;
-        if (y < image->cover_t) image->cover_t = y;
-        image->cover_b = y + 1;
-      }
+  image_coverage(image);
   c->image_bytes += bytes;
   c->loads++;
   return image;
@@ -280,15 +304,23 @@ static bool mask_pair(const dg_member_t *member, const dg_member_t *mask) {
   return dg_mask_pair(member->name, mask->name, (int)mask->width - (int)member->width,
                       (int)mask->height - (int)member->height);
 }
-static void apply_mask(wc_t *c, const dg_member_t *member, const dg_member_t *mask,
+static void apply_mask(wc_t *c, dg_runtime_t *d, const dg_member_t *member, const dg_member_t *mask,
                        wc_image_t *image) {
   unsigned width, height;
   stored_dims(mask, &width, &height);
-  uint32_t length;
-  uint8_t *data = read_image(c, mask->asset, &length);
-  bool ok = data && length >= 32 && !memcmp(data, "FDI1", 4) && width && height &&
-            dg_fdi_be16(data + 8) == width && dg_fdi_be16(data + 10) == height &&
-            32u + bitmap_plane_pixels(width, height) * 2u <= length;
+  const dg_pixel_image_t *mutable = dg_member_image(d, mask->id);
+  dg_member_t mask_info;
+  const uint32_t *mask_pixels;
+  if (mutable) {
+    mask_info = *mask; mask = &mask_info;
+    mask_info.width = width = mutable->width; mask_info.height = height = mutable->height;
+    mask_info.reg_x = mutable->reg_x; mask_info.reg_y = mutable->reg_y;
+    mask_pixels = mutable->pixels;
+  } else {
+    const wc_image_t *mask_image = wc_image(c, d->values, mask->asset, width, height, 8);
+    if (!mask_image) return;
+    mask_pixels = mask_image->pixels;
+  }
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
   // Director 8.5 masks are trimmed to their own bounds and placed by
   // registration point; the trimmed-away white is transparent.
@@ -302,7 +334,7 @@ static void apply_mask(wc_t *c, const dg_member_t *member, const dg_member_t *ma
 #endif
   // Authored masks can differ by a pixel from their image; sampling clamps
   // over the overlap, like the original.
-  for (unsigned y = 0; ok && y < image->height; y++) {
+  for (unsigned y = 0; y < image->height; y++) {
     unsigned my = y < height ? y : height - 1;
     int ay = trimmed ? (int)(y * member->height / image->height) - offset_y : 0;
     if (trimmed && (ay < 0 || ay >= (int)mask->height)) {
@@ -322,42 +354,20 @@ static void apply_mask(wc_t *c, const dg_member_t *member, const dg_member_t *ma
         }
         mx = (unsigned)ax * width / mask->width;
       }
-      uint64_t i = bitmap_needs_tiles(width, height) ? bitmap_tile_index(width, mx, my)
-                                                     : (uint64_t)my * width + mx;
-      uint16_t p = (uint16_t)dg_fdi_be16(data + 32 + i * 2);
-      unsigned luminance = ((p >> 11) & 31) * 77 + ((p >> 6) & 31) * 151 + ((p >> 1) & 31) * 28;
+      uint32_t mask_pixel = mask_pixels[(size_t)my * width + mx];
       uint32_t *pixel = &image->pixels[(size_t)y * image->width + x];
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-      // A grey mask pixel is partly opaque: its darkness is the coverage
-      // (Director 8.5's anti-aliased masks keep their soft outlines).
-      unsigned mask_alpha = (p & 1) ? 255u - luminance * 255u / 7936u : 0u;
-      unsigned alpha = image->follow_alpha ? *pixel >> 24 : 255u;
-      *pixel = (*pixel & 0x00ffffffu) | (uint32_t)(alpha * mask_alpha / 255u) << 24;
-#else
-      if (luminance >= 3968)
-        *pixel &= 0x00ffffffu;
-      else if (!image->follow_alpha)
-        *pixel |= 0xff000000u;
-#endif
+      unsigned alpha = dg_mask_alpha(mask_pixel, *pixel >> 24, image->follow_alpha);
+      *pixel = (*pixel & 0x00ffffffu) | (uint32_t)alpha << 24;
     }
   }
-  free(data);
+  image_coverage(image);
 }
 #endif
 
 // ---- Drawing ----
 
 static inline void blend(uint32_t *d, uint32_t s, unsigned alpha) {
-  if (alpha >= 255) {
-    *d = s | 0xff000000u;
-    return;
-  }
-  uint32_t o = *d, result = 0xff000000u;
-  for (unsigned shift = 0; shift < 24; shift += 8) {
-    unsigned sc = (s >> shift) & 255, dc = (o >> shift) & 255;
-    result |= ((sc * alpha + dc * (255 - alpha) + 127) / 255) << shift;
-  }
-  *d = result;
+  *d = dg_rgba_blend(*d,s,alpha);
 }
 static void fill(wc_t *c, int l, int t, int r, int b, uint32_t color) {
   if (l < 0) l = 0;
@@ -368,28 +378,9 @@ static void fill(wc_t *c, int l, int t, int r, int b, uint32_t color) {
     for (int x = l; x < r; x++)
       c->pixels[y * WC_WIDTH + x] = color;
 }
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-// A shape at a sprite's blend: Birthday's daylight overlays tint the room.
-static void fill_blended(wc_t *c, int l, int t, int r, int b, uint32_t color, unsigned opacity) {
-  if (opacity >= 100) {
-    fill(c, l, t, r, b, color);
-    return;
-  }
-  if (l < 0) l = 0;
-  if (t < 0) t = 0;
-  if (r > WC_WIDTH) r = WC_WIDTH;
-  if (b > WC_HEIGHT) b = WC_HEIGHT;
-  for (int y = t; y < b; y++)
-    for (int x = l; x < r; x++)
-      blend(&c->pixels[y * WC_WIDTH + x], color & 0xffffffu, 255 * opacity / 100);
-}
-#define fill_shape(c, l, t, r, b, color) fill_blended(c, l, t, r, b, color, opacity)
-#else
-#define fill_shape(c, l, t, r, b, color) fill(c, l, t, r, b, color)
-#endif
 #if DG_MODERN
 // Director's inks that combine the source with the stage per pixel, as
-// ScummVM's 32-bit path computes them (graphics.cpp): Darken picks each RGB
+// ScummVM's 32-bit path computes them (graphics.cpp): Darkest picks each RGB
 // minimum; Transparent and Not Transparent are the 8-bit palette index ORs
 // that, with white at index 0 and black at 255, become ANDs of the RGB
 // (black source darkens, white leaves the stage; Not Transparent the
@@ -397,24 +388,11 @@ static void fill_blended(wc_t *c, int l, int t, int r, int b, uint32_t color, un
 // blend takes precedence over the ink, and only the source's coverage is
 // drawn.
 static inline bool arithmetic_ink(unsigned ink) {
-  return ink == 1 || ink == 5 || ink == 35 || ink == 39;
+  return dg_ink_arithmetic(ink);
 }
 static inline void arithmetic(uint32_t *d, uint32_t s, unsigned ink, unsigned coverage,
-                              unsigned opacity) {
-  unsigned alpha = coverage * opacity;
-  if (!alpha)
-    return;
-  uint32_t o = *d, result = 0xff000000u;
-  for (unsigned shift = 0; shift < 24; shift += 8) {
-    unsigned sc = (s >> shift) & 255, dc = (o >> shift) & 255, value = sc;
-    if (opacity >= 100)
-      value = ink == 39   ? (sc < dc ? sc : dc)
-              : ink == 1  ? (sc & dc)
-              : ink == 5  ? (dc & ~sc & 255u)
-                          : (dc > sc ? dc - sc : 1) - 1; // 35
-    result |= ((value * alpha + dc * (25500u - alpha)) / 25500u) << shift;
-  }
-  *d = result;
+                              unsigned opacity, uint32_t fore, uint32_t back) {
+  *d = dg_rgba_ink(*d,s,ink,coverage,opacity,fore,back);
 }
 #endif
 
@@ -450,11 +428,21 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
   int cl = l < 0 ? 0 : l, ct = t < 0 ? 0 : t;
   int cr = r > WC_WIDTH ? WC_WIDTH : r, cb = b > WC_HEIGHT ? WC_HEIGHT : b;
   unsigned w = image->width, h = image->height;
+  unsigned stride = image->stride ? image->stride : w;
   int64_t span_x = (int64_t)r - l, span_y = (int64_t)b - t;
 #if DG_MODERN
-  bool plain = !transformed && !arithmetic_ink(ink);
+  bool plain = !transformed && !arithmetic_ink(ink) && ink != 36;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  uint32_t foreground = s->value.flags & 16 ? s->value.fore_rgb : dg_stage_palette(d)[s->value.fore & 255];
+  uint32_t background = s->value.flags & 32 ? s->value.back_rgb : dg_stage_palette(d)[s->value.back & 255];
+  bool controlled = opacity < 100 || foreground != 0 || background != 0xffffffu;
+  if (controlled || ink == 9) plain = false;
+#endif
 #else
   bool plain = !transformed;
+#endif
+#if DG_D10
+  if (image->linked_member && !(image->linked_member->linked_flags & 2)) plain = false;
 #endif
   if (plain) {
     // The common case: each column's source mapped once, rows and columns
@@ -479,10 +467,11 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
       if (sy < image->cover_t || sy >= image->cover_b)
         continue;
       uint32_t *row = &c->pixels[y * WC_WIDTH];
-      const uint32_t *source = &image->pixels[(size_t)sy * w];
+      const uint32_t *source = &image->pixels[(size_t)sy * stride];
       for (int x = first; x < last; x++) {
         uint32_t pixel = source[columns[x]];
-        unsigned coverage = pixel >> 24;
+        unsigned coverage = image->coverage ? image->coverage[(size_t)sy * stride + columns[x]]
+                            : image->force_opaque ? 255 : pixel >> 24;
         if (!coverage)
           continue;
         if (coverage == 255 && opacity >= 100)
@@ -495,33 +484,47 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
   }
   for (int y = ct; y < cb; y++) {
     uint32_t *row = &c->pixels[y * WC_WIDTH];
-    unsigned sy = (unsigned)(((int64_t)(y - t) * 2 + 1) * h / (span_y * 2));
-    if (sy >= h)
-      sy = h - 1;
     for (int x = cl; x < cr; x++) {
-      unsigned sx;
+      float u = (float)(x - l + 0.5f) / span_x, v = (float)(y - t + 0.5f) / span_y;
       if (transformed) {
-        float u, v;
         if (!dg_quad_uv(q, x + 0.5f, y + 0.5f, &u, &v))
           continue;
 #if DG_MODERN
         if (s->flip_h) u = 1 - u;
         if (s->flip_v) v = 1 - v;
 #endif
-        sx = (unsigned)(u * w);
-        sy = (unsigned)(v * h);
-        if (sx >= w) sx = w - 1;
-        if (sy >= h) sy = h - 1;
-      } else {
-        sx = (unsigned)(((int64_t)(x - l) * 2 + 1) * w / (span_x * 2));
-        if (sx >= w)
-          sx = w - 1;
       }
-      uint32_t pixel = image->pixels[(size_t)sy * w + sx];
-      unsigned coverage = pixel >> 24;
+#if DG_D10
+      if (image->linked_member && !dg_linked_uv(image->linked_member, s, &u, &v)) continue;
+#endif
+      unsigned sx = (unsigned)(u * w), sy = (unsigned)(v * h);
+      if (sx >= w) sx = w - 1;
+      if (sy >= h) sy = h - 1;
+      uint32_t pixel = image->pixels[(size_t)sy * stride + sx];
+      unsigned coverage = image->coverage ? image->coverage[(size_t)sy * stride + sx]
+                          : image->force_opaque ? 255 : pixel >> 24;
 #if DG_MODERN
-      if (arithmetic_ink(ink)) {
-        arithmetic(&row[x], pixel, ink, coverage, opacity);
+      if (ink == 36 && !image->rich_text) {
+        uint32_t key = s->value.flags & 32 ? s->value.back_rgb
+                          : dg_stage_palette(d)[s->value.back & 255];
+        if (image->rgb555)
+          key = five(key >> 19 & 31) << 16 | five(key >> 11 & 31) << 8 | five(key >> 3 & 31);
+        if (image->depth == 1) {
+          if (pixel & 0xffffffu) continue;
+          uint32_t fore = s->value.flags & 16 ? s->value.fore_rgb
+                            : dg_stage_palette(d)[s->value.fore & 255];
+          pixel = opaque_rgb(fore);
+        } else if ((pixel & 0xffffffu) == (opaque_rgb(key) & 0xffffffu))
+          continue;
+      }
+      if (arithmetic_ink(ink)
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+          || controlled || ink == 9
+#endif
+      ) {
+        uint32_t fore = s->value.flags & 16 ? s->value.fore_rgb : dg_stage_palette(d)[s->value.fore & 255];
+        uint32_t back = s->value.flags & 32 ? s->value.back_rgb : dg_stage_palette(d)[s->value.back & 255];
+        arithmetic(&row[x], pixel, ink, coverage, opacity, opaque_rgb(fore), opaque_rgb(back));
         continue;
       }
 #endif
@@ -596,15 +599,19 @@ static int text_layout(wc_t *c, const char *text, int width, int height,
                              WC_LAYOUT_CHARS);
   return count < 0 ? 0 : count;
 }
-static void draw_text(wc_t *c, const char *text, const wc_text_style_t *style,
+static bool draw_text(wc_t *c, const char *text, const wc_text_style_t *style,
                       uint32_t color, unsigned alpha, int l, int t, int r, int b,
-                      const wc_text_run_t *runs, unsigned run_count) {
-  int width = r - l, height = b - t;
-  if (!c->host.text || !text || !*text || width <= 0 || height <= 0 ||
-      width > 4096 || height > 4096)
-    return;
+                      const wc_text_run_t *runs, unsigned run_count, int scroll) {
+  int width = r - l, visible_height = b - t;
+  if (scroll < 0) scroll = 0;
+  if (scroll > 4096) return false;
+  int height = visible_height + scroll;
+  if (!text || !*text || width <= 0 || height <= 0) return true;
+  if (!c->host.text || width > 4096 || height > 4096) return false;
   text = utf8_text(text);
   uint32_t key = text_key(text, width, height, style);
+  for (unsigned i = 0; i < run_count; i++) key = (key ^ runs[i].offset) * 16777619u;
+  key = (key ^ run_count) * 16777619u;
   wc_text_t *slot = NULL, *oldest = &c->texts[0];
   for (unsigned i = 0; i < WC_TEXT_SLOTS; i++) {
     wc_text_t *entry = &c->texts[i];
@@ -626,7 +633,7 @@ static void draw_text(wc_t *c, const char *text, const wc_text_style_t *style,
                                          style, slot->coverage)) {
       free(slot->coverage);
       slot->coverage = NULL;
-      return;
+      return false;
     }
     slot->key = key;
     slot->width = width;
@@ -648,53 +655,94 @@ static void draw_text(wc_t *c, const char *text, const wc_text_style_t *style,
     }
   }
   slot->last = c->serial;
-  for (int y = 0; y < height; y++) {
+  for (int y = 0; y < visible_height; y++) {
     if (t + y < 0 || t + y >= WC_HEIGHT)
       continue;
     for (int x = 0; x < width; x++) {
       if (l + x < 0 || l + x >= WC_WIDTH)
         continue;
-      unsigned coverage = slot->coverage[y * width + x];
-      unsigned run = slot->runs ? slot->runs[y * width + x] : 0;
+      unsigned coverage = slot->coverage[(y + scroll) * width + x];
+      unsigned run = slot->runs ? slot->runs[(y + scroll) * width + x] : 0;
       if (coverage)
         blend(&c->pixels[(t + y) * WC_WIDTH + l + x],
               run && run <= run_count ? runs[run - 1].rgb : color, coverage * alpha / 255);
     }
   }
+  return true;
 }
 
 // The style a text member sets in: its authored one, or NULL for the
 // console's builtin font.
-static const wc_text_style_t *member_text_style(const dg_member_t *m, wc_text_style_t *authored) {
+static const wc_text_style_t *member_text_style(dg_runtime_t *d, const dg_member_t *m,
+                                                wc_text_style_t *authored, int *scroll,
+                                                bool prescale) {
+  *scroll = 0;
+  (void)prescale;
 #if DG_MODERN
-  if (m->text_style) {
-    const dg_text_style_t *st = m->text_style;
+  const dg_text_style_t *st = m->text_style;
+  const char *font = NULL;
+  for (unsigned j = 0; d && j < d->field_count; j++)
+    if (d->field_members[j] == m->id) {
+      *scroll = d->field_scroll[j];
+      font = d->field_font_changed[j] ? d->field_fonts[j] : NULL;
+      if (d->field_text_changed[j] && m->text_insert_style)
+        st = m->text_insert_style;
+      break;
+    }
+  if (st) {
     *authored = (wc_text_style_t){st->font_id, st->size, st->align, st->ascent, st->line_height};
+    if (font && *font)
+      for (unsigned file = 0; file < d->loaded_count; file++) {
+        const dg_movie_t *movie = d->loaded[file];
+        for (unsigned i = 0; movie && i < movie->member_count; i++) {
+          const dg_member_t *candidate = &movie->members[i];
+          const dg_text_style_t *styles[] = {candidate->text_style, candidate->text_insert_style};
+          for (unsigned k = 0; k < 2; k++)
+            if (styles[k] && styles[k]->font_name && !strcmp(styles[k]->font_name, font))
+              authored->font = styles[k]->font_id;
+        }
+      }
 #if DG_D10
-    // Glyphs render at the stage prescale, as the console's 4/5 font
-    // variants do; the vertical metrics scale with the sprite bounds.
-    authored->size = (unsigned)dg_prescale_size((int)authored->size);
-    authored->ascent = dg_prescale_size(authored->ascent);
-    authored->line_height = dg_prescale_size(authored->line_height);
+    if (prescale) {
+      authored->size = (unsigned)dg_prescale_size((int)authored->size);
+      authored->ascent = dg_prescale_size(authored->ascent);
+      authored->line_height = dg_prescale_size(authored->line_height);
+      *scroll = dg_prescale_size(*scroll);
+    }
 #endif
     return authored;
   }
 #else
+  (void)d;
   (void)m;
   (void)authored;
 #endif
   return NULL;
 }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+static const dg_text_extra_t *member_color_runs(dg_runtime_t *d, const dg_member_t *m,
+                                                const char *text) {
+  if (!m->text || strcmp(text, m->text)) return NULL;
+  for (unsigned j = 0; j < d->field_count; j++)
+    if (d->field_members[j] == m->id && (d->field_text_changed[j] ||
+        lv_type(d->values->roots[DG_FIELD_COLOR_ROOT + j]) != LV_VOID)) return NULL;
+  return dg_text_extra(d, m->id);
+}
+#endif
 // The character at (x, y) of a text member set in a width x height box, as
 // the host laid it out: 0-based in Unicode characters, -1 for none.
-int wc_text_char_at(wc_t *c, const dg_member_t *m, const char *text, int width, int height,
+int wc_text_char_at(wc_t *c, dg_runtime_t *d, const dg_member_t *m, const char *text, int width, int height,
                     int x, int y) {
   if (!m || !text || !*text || width <= 0 || height <= 0)
     return -1;
   wc_text_style_t authored;
-  const wc_text_style_t *style = member_text_style(m, &authored);
+  int scroll;
+  const wc_text_style_t *style = member_text_style(d, m, &authored, &scroll, true);
   text = utf8_text(text);
-  int count = text_layout(c, text, width, height, style);
+  if (scroll < 0) scroll = 0;
+  if (scroll > 4096 || height > 4096 - scroll) return -1;
+  y += scroll;
+  int count = text_layout(c, text, width, height + scroll, style);
   for (int i = 0; i < count; i++) {
     const int16_t *box = &layout_boxes[i * 4];
     if (x >= box[0] && x < box[0] + box[2] && y >= box[1] && y < box[1] + box[3])
@@ -702,8 +750,92 @@ int wc_text_char_at(wc_t *c, const dg_member_t *m, const char *text, int width, 
   }
   return -1;
 }
+#if DG_D10
+bool wc_read_image(wc_t *c, dg_runtime_t *d, uint32_t member, dg_pixel_image_t *out) {
+  memset(out, 0, sizeof(*out));
+  const dg_member_t *m = member ? dg_member(d, member) : NULL;
+  unsigned width = m ? m->width : 800, height = m ? m->height : 600;
+  if ((member && !m) || !width || !height || width > 4096 || height > 4096)
+    return false;
+  uint32_t *pixels = malloc((size_t)width * height * sizeof(*pixels));
+  if (!pixels) return false;
+  *out = (dg_pixel_image_t){.width = width, .height = height, .depth = 32,
+      .pixels = pixels, .use_alpha = true};
+  if (!member) {
+    wc_render(c, d, 0, 0, false, c->externals);
+    for (unsigned y = 0; y < height; y++)
+      for (unsigned x = 0; x < width; x++)
+        pixels[(size_t)y * width + x] = c->scene[
+            (size_t)(y * WC_HEIGHT / height) * WC_WIDTH + x * WC_WIDTH / width];
+    return !d->values->failed;
+  }
+  if (m->type == 1 || m->type == 5 || m->type == 12) {
+    unsigned sw, sh;
+    stored_dims(m, &sw, &sh);
+    const wc_image_t *image = wc_image(c, d->values, m->asset, sw, sh, 8);
+    if (image) {
+      for (unsigned y = 0; y < height; y++)
+        for (unsigned x = 0; x < width; x++)
+          pixels[(size_t)y * width + x] = image->pixels[
+              (size_t)(y * image->height / height) * image->width + x * image->width / width];
+      out->depth = image->depth ? image->depth : 32;
+      return true;
+    }
+  } else if (m->type == 3 || m->type == 7) {
+    uint8_t *coverage = calloc((size_t)width * height, 1);
+    const char *text = m->text;
+    for (unsigned j = 0; j < d->field_count; j++)
+      if (d->field_members[j] == member)
+        text = lv_cstr(d->values, d->values->roots[DG_FIELD_TEXT_ROOT + j]);
+    wc_text_style_t authored;
+    int scroll;
+    const wc_text_style_t *style = member_text_style(d, m, &authored, &scroll, false);
+    bool ok = coverage && c->host.text && text &&
+        c->host.text(c->host.ctx, utf8_text(text), (int)width, (int)height, style, coverage);
+    if (ok) {
+      uint32_t rgb = m->text_style ? m->text_style->color : 0;
+      for (unsigned j = 0; j < d->field_count; j++)
+        if (d->field_members[j] == member) {
+          if (d->field_text_changed[j] && m->text_insert_style) rgb = m->text_insert_style->color;
+          lv_t value = d->values->roots[DG_FIELD_COLOR_ROOT + j];
+          if (lv_type(value) != LV_VOID) {
+            unsigned n = (unsigned)lv_integer(d->values, value);
+            rgb = lv_type(value) == LV_COLOR || n > 255 ? n : dg_stage_palette(d)[n];
+          }
+        }
+      uint32_t color = opaque_rgb(rgb) & 0xffffffu;
+      for (size_t i = 0; i < (size_t)width * height; i++)
+        pixels[i] = coverage[i] ? color | (uint32_t)coverage[i] << 24 : 0x00ffffffu;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      const dg_text_extra_t *extra = member_color_runs(d, m, text);
+      if (extra && extra->run_count) {
+        int count = text_layout(c, utf8_text(text), width, height, style);
+        unsigned run = 0;
+        for (int i = 0; i < count; i++) {
+          while (run + 1 < extra->run_count && extra->runs[run + 1].offset <= (unsigned)i) run++;
+          if (extra->runs[run].offset > (unsigned)i) continue;
+          uint32_t rgb = opaque_rgb(extra->runs[run].rgb) & 0xffffffu;
+          const int16_t *box = &layout_boxes[i * 4];
+          for (int y = box[1] < 0 ? 0 : box[1]; y < box[1] + box[3] && y < (int)height; y++)
+            for (int x = box[0] < 0 ? 0 : box[0]; x < box[0] + box[2] && x < (int)width; x++) {
+              size_t p = (size_t)y * width + x;
+              if (coverage[p]) pixels[p] = rgb | (uint32_t)coverage[p] << 24;
+            }
+        }
+      }
+#endif
+    }
+    free(coverage);
+    if (ok) return true;
+  }
+  free(pixels);
+  memset(out, 0, sizeof(*out));
+  return false;
+}
+#endif
+
 static uint32_t indexed_color(const dg_runtime_t *d, unsigned index) {
-  return opaque_rgb(d->movie->palette[index & 255]);
+  return opaque_rgb(dg_stage_palette(d)[index & 255]);
 }
 #if DG_MODERN
 static uint32_t sprite_color(const dg_runtime_t *d, const dg_sprite_t *s,
@@ -721,16 +853,18 @@ static uint32_t sprite_color(const dg_runtime_t *d, const dg_sprite_t *s,
 // authored member space with the field's measured advances, so the lines
 // agree with the textHeight the scripts read.
 static void draw_flash_overlays(wc_t *c, dg_runtime_t *d, unsigned channel,
-                                const dg_sprite_t *s, const dg_member_t *m) {
+                                const dg_sprite_t *s, const dg_member_t *m, int ox, int oy, const char *only, bool local) {
   lv_runtime_t *values = d->values;
   static char wrapped[2048];
   for (unsigned f = 0; m && f < m->flash_field_count; f++) {
     const dg_flash_field_t *field = &m->flash_fields[f];
+    if (only && dg_flash_field_find(m, only) != field) continue;
     // A field the scripts have addressed reads its live state from the
     // object bag; an untouched one shows its authored initial text.
     lv_t bag = {0};
     for (unsigned n = 0; n < d->flash_object_count; n++)
       if (d->flash_objects[n].sprite == channel &&
+          d->flash_objects[n].member == m->id &&
           dg_flash_field_find(m, d->flash_objects[n].name) == field) {
         bag = values->roots[DG_FLASH_ROOT + n];
         break;
@@ -738,6 +872,7 @@ static void draw_flash_overlays(wc_t *c, dg_runtime_t *d, unsigned channel,
     const char *text = field->text;
     int fx = field->x, fy = field->y, fw = field->width, fh = field->height;
     unsigned size = field->style->size;
+    unsigned opacity = dg_opacity(s);
     uint32_t color = opaque_rgb(field->style->color);
     if (lv_type(bag) == LV_PROPLIST) {
       if (!lv_truth(values, lv_get(values, NULL, "_visible", bag)))
@@ -747,6 +882,11 @@ static void draw_flash_overlays(wc_t *c, dg_runtime_t *d, unsigned channel,
         continue;
       text = lv_cstr(values, value);
       lv_t v;
+      if (lv_type((v = lv_get(values, NULL, "_alpha", bag))) == LV_NUMBER) {
+        double alpha = lv_numeric(v);
+        if (!isfinite(alpha)) { lv_fail(values, "invalid Flash text alpha"); return; }
+        opacity = (unsigned)(opacity * (alpha < 0 ? 0 : alpha > 100 ? 100 : alpha) / 100);
+      }
       if (lv_type((v = lv_get(values, NULL, "_x", bag))) == LV_NUMBER) fx = (int)lv_numeric(v);
       if (lv_type((v = lv_get(values, NULL, "_y", bag))) == LV_NUMBER) fy = (int)lv_numeric(v);
       if (lv_type((v = lv_get(values, NULL, "_width", bag))) == LV_NUMBER) fw = (int)lv_numeric(v);
@@ -756,6 +896,7 @@ static void draw_flash_overlays(wc_t *c, dg_runtime_t *d, unsigned channel,
       if (lv_type((v = lv_get(values, NULL, "color", bag))) == LV_COLOR)
         color = opaque_rgb((uint32_t)lv_id(v));
     }
+    if (local) { fx = fy = 0; fw = s->value.width; fh = s->value.height; opacity = 100; }
     if (!*text)
       continue;
     dg_flash_field_wrap(field, size, text, fw, wrapped, sizeof(wrapped));
@@ -768,6 +909,7 @@ static void draw_flash_overlays(wc_t *c, dg_runtime_t *d, unsigned channel,
                              dg_prescale_size(ascent), dg_prescale_size(line_height)};
     int al, at, ar, ab;
     dg_sprite_bounds(d, s, &al, &at, &ar, &ab);
+    al += ox; ar += ox; at += oy; ab += oy;
     float sx = m->width ? (float)(ar - al) / m->width : 1.0f;
     float sy = m->height ? (float)(ab - at) / m->height : 1.0f;
     // The SWF renderer keeps a two-pixel gutter inside the field bounds.
@@ -777,29 +919,133 @@ static void draw_flash_overlays(wc_t *c, dg_runtime_t *d, unsigned channel,
     int b = at + (int)((fy + fh) * sy);
     l = dg_prescale_coord(l); t = dg_prescale_coord(t);
     r = dg_prescale_coord(r); b = dg_prescale_coord(b);
-    draw_text(c, wrapped, &style, color & 0xffffffu, dg_opacity(s) * 255 / 100, l, t, r, b,
-              NULL, 0);
+    if(!draw_text(c, wrapped, &style, color & 0xffffffu, opacity * 255 / 100, l, t, r, b,
+              NULL, 0, 0)) lv_fail(d->values,"Flash text rasterization failed: font, allocation or dimensions");
   }
+}
+static void draw_flash_field(wc_t *c, dg_runtime_t *d, unsigned parent,
+    const dg_member_t *member, const dg_film_layer_t *layer, int ox, int oy) {
+  const dg_flash_field_t *field = dg_flash_field_find(member, layer->name);
+  if (!field) { lv_fail(d->values, "missing Flash field layer"); return; }
+  dg_flash_plane_t layout;
+  if (!dg_flash_field_plane(d, parent, member, field, layer, &layout)) return;
+  unsigned width, height;
+  dg_prescale_plane_dims(layout.width, layout.height, &width, &height);
+  uint32_t *plane = malloc((size_t)width * height * sizeof(*plane));
+  uint32_t *saved = malloc(sizeof(c->pixels));
+  if (!plane || !saved) { free(plane); free(saved); lv_fail(d->values, "Flash field framebuffer allocation"); return; }
+  memcpy(saved, c->pixels, sizeof(c->pixels));
+  dg_member_t local_member = *member;
+  local_member.width = (uint16_t)layout.width; local_member.height = (uint16_t)layout.height;
+  dg_sprite_t local_sprite = {.value = {.width = layout.width, .height = layout.height,
+      .type = 16, .blend = 100}, .visible = true, .stretch = true, .custom_quad = true,
+      .quad = {0, 0, (float)layout.width, 0, (float)layout.width, (float)layout.height, 0, (float)layout.height}};
+  for (unsigned top = 0; top < height && !d->values->failed; top += WC_HEIGHT)
+    for (unsigned left = 0; left < width && !d->values->failed; left += WC_WIDTH) {
+      memset(c->pixels, 0, sizeof(c->pixels));
+      draw_flash_overlays(c, d, parent, &local_sprite, &local_member,
+          -dg_stage_coord((int)left), -dg_stage_coord((int)top), layer->name, true);
+      unsigned rows = height - top < WC_HEIGHT ? height - top : WC_HEIGHT;
+      unsigned columns = width - left < WC_WIDTH ? width - left : WC_WIDTH;
+      for (unsigned y = 0; y < rows; y++)
+        memcpy(plane + (size_t)(top + y) * width + left,
+               c->pixels + (size_t)y * WC_WIDTH, columns * sizeof(*plane));
+    }
+  memcpy(c->pixels, saved, sizeof(c->pixels)); free(saved);
+  if (!d->values->failed) {
+    wc_image_t image = {.width = width, .height = height, .pixels = plane, .follow_alpha = true};
+    image_coverage(&image);
+    int l,t,r,b; dg_sprite_bounds(d, &layout.sprite, &l,&t,&r,&b);
+    l = dg_prescale_coord(l + ox); r = dg_prescale_coord(r + ox);
+    t = dg_prescale_coord(t + oy); b = dg_prescale_coord(b + oy);
+    if (r > l && b > t)
+      draw_bitmap(c,d,&layout.sprite,&image,l,t,r,b,8,dg_opacity(&layout.sprite),ox,oy);
+  }
+  free(plane);
+}
+typedef struct { wc_t *compositor; dg_runtime_t *director; } wc_flash_context_t;
+static bool wc_flash_asset(void *context,const dg_film_layer_t *layer,dg_flash_raster_t *out) {
+  wc_flash_context_t *ctx=context;unsigned width,height;
+  dg_prescale_dims(layer->value.width,layer->value.height,&width,&height);
+  const wc_image_t *image=wc_image(ctx->compositor,ctx->director->values,layer->asset,width,height,8);
+  if(!image)return false;
+  unsigned rw,rh;dg_prescale_plane_dims(layer->value.width,layer->value.height,&rw,&rh);
+  int left=dg_prescale_coord(layer->value.x),top=dg_prescale_coord(layer->value.y);
+  if(!dg_flash_raster_allocate(ctx->director,out,left,top,left+(int)rw,top+(int)rh))return false;
+  for(unsigned y=0;y<rh;y++)for(unsigned x=0;x<rw;x++)
+    out->pixels[(size_t)y*rw+x]=image->pixels[(size_t)(y*image->height/rh)*image->width+x*image->width/rw];
+  return true;
+}
+static bool wc_flash_text(void *context,dg_flash_instance_t *instance,const dg_flash_field_t *field,dg_flash_raster_t *out) {
+  wc_flash_context_t *ctx=context;wc_t *c=ctx->compositor;dg_runtime_t *d=ctx->director;
+  dg_flash_field_t effective;dg_text_style_t style;if(!dg_flash_field_snapshot(d,instance,field,&effective,&style))return false;
+  dg_flash_view_t view;dg_flash_view(instance,&view);unsigned width,height;
+  dg_prescale_plane_dims(effective.width,effective.height,&width,&height);
+  int left=dg_prescale_coord((int)floorf(view.bounds[0])),top=dg_prescale_coord((int)floorf(view.bounds[1]));
+  if(!dg_flash_raster_allocate(d,out,left,top,left+(int)width,top+(int)height))return false;
+  uint32_t *saved=malloc(sizeof(c->pixels));
+  if(!saved){free(out->pixels);out->pixels=NULL;lv_fail(d->values,"Flash text stage preservation allocation");return false;}
+  memcpy(saved,c->pixels,sizeof(c->pixels));
+  dg_member_t member=*view.member;member.width=effective.width;member.height=effective.height;
+  member.flash_fields=&effective;member.flash_field_count=1;
+  dg_sprite_t sprite={.value={.type=16,.width=effective.width,.height=effective.height,.blend=100},
+    .visible=true,.stretch=true,.custom_quad=true,
+    .quad={0,0,effective.width,0,effective.width,effective.height,0,effective.height}};
+  for(unsigned y=0;y<height&&!d->values->failed;y+=WC_HEIGHT)
+    for(unsigned x=0;x<width&&!d->values->failed;x+=WC_WIDTH) {
+      memset(c->pixels,0,sizeof(c->pixels));
+      draw_flash_overlays(c,d,DG_SPRITES,&sprite,&member,-dg_stage_coord((int)x),-dg_stage_coord((int)y),NULL,true);
+      unsigned rows=height-y<WC_HEIGHT?height-y:WC_HEIGHT,cols=width-x<WC_WIDTH?width-x:WC_WIDTH;
+      for(unsigned row=0;row<rows;row++)memcpy(out->pixels+(size_t)(y+row)*width+x,c->pixels+(size_t)row*WC_WIDTH,cols*4);
+    }
+  memcpy(c->pixels,saved,sizeof(c->pixels));free(saved);return !d->values->failed;
+}
+bool wc_flash_field_hit(wc_t *c, dg_runtime_t *d, struct dg_flash_instance *instance,
+                        float x, float y) {
+  dg_flash_view_t view;
+  if (!dg_flash_view(instance, &view) || !view.field) return false;
+  wc_flash_context_t context = {c, d};
+  dg_flash_raster_t raster = {0};
+  bool ok = wc_flash_text(&context, instance, view.field, &raster), hit = false;
+#if !(defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE)
+  x *= 0.8f; y *= 0.8f;
+#endif
+  int px = (int)floorf(x) - raster.left, py = (int)floorf(y) - raster.top;
+  if (ok && px >= 0 && py >= 0 && px < (int)raster.width && py < (int)raster.height)
+    hit = (raster.pixels[(size_t)py * raster.width + (unsigned)px] >> 24) != 0;
+  free(raster.pixels);
+  return hit;
 }
 #endif
 
 #if DG_D5 || DG_D10
 // A digital video sprite shows the frame the host has decoded for its current
 // time (d5_video.c draws the console's), stretched to the sprite's bounds.
-static void draw_video(wc_t *c, unsigned sprite, int l, int t, int r, int b,
-                       unsigned opacity) {
+static void draw_video(wc_t *c, dg_runtime_t *owner, unsigned sprite, const dg_sprite_t *s,
+                       int l, int t, int r, int b, unsigned opacity, int ox, int oy) {
   static uint32_t frame[1024 * 768];
   unsigned w = 0, h = 0;
   if (!c->host.video_frame ||
-      !c->host.video_frame(c->host.ctx, sprite, frame, sizeof(frame) / sizeof(*frame), &w, &h) ||
+      !c->host.video_frame(c->host.ctx, owner, sprite, frame, sizeof(frame) / sizeof(*frame), &w, &h) ||
       !w || !h || (size_t)w * h > sizeof(frame) / sizeof(*frame))
     return;
+  float quad[8];
+  dg_sprite_quad(owner,s,quad);
+  for (unsigned at = 0; at < 8; at += 2) { quad[at] += ox; quad[at + 1] += oy; }
+#if DG_D10 && !(defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE)
+  for (unsigned at = 0; at < 8; at++) quad[at] *= 0.8f;
+#endif
   int cl = l < 0 ? 0 : l, ct = t < 0 ? 0 : t;
   int cr = r > WC_WIDTH ? WC_WIDTH : r, cb = b > WC_HEIGHT ? WC_HEIGHT : b;
   for (int y = ct; y < cb; y++) {
-    unsigned sy = (unsigned)((int64_t)(y - t) * h / (b - t));
     for (int x = cl; x < cr; x++) {
-      unsigned sx = (unsigned)((int64_t)(x - l) * w / (r - l));
+      float u,v;
+      if (!dg_quad_uv(quad,x + 0.5f,y + 0.5f,&u,&v)) continue;
+      if (s->flip_h) u = 1 - u;
+      if (s->flip_v) v = 1 - v;
+      unsigned sx = (unsigned)(u*w), sy = (unsigned)(v*h);
+      if (sx >= w) sx = w-1;
+      if (sy >= h) sy = h-1;
       blend(&c->pixels[y * WC_WIDTH + x], frame[(size_t)sy * w + sx] & 0xffffffu,
             255 * opacity / 100);
     }
@@ -808,63 +1054,95 @@ static void draw_video(wc_t *c, unsigned sprite, int l, int t, int r, int b,
 #endif
 
 // One sprite (or trail), as the scene draws it in channel order.
+static void draw_scene(wc_t *, dg_runtime_t *, int, int);
+
+static void draw_sprite(wc_t *, dg_runtime_t *, unsigned, const dg_sprite_t *, int, int);
+#if DG_MODERN
+static void draw_transformed_text(wc_t *c, dg_runtime_t *d, unsigned channel,
+    const dg_sprite_t *sprite, int l, int t, int r, int b, int ox, int oy) {
+  dg_sprite_t flat = *sprite;
+  flat.value.rotation = flat.value.skew = 0;
+  flat.flip_h = flat.flip_v = flat.custom_quad = false;
+  flat.value.blend = 100; flat.value.thickness |= DG_HAS_BLEND;
+  int left, top, right, bottom;
+  dg_sprite_bounds(d, &flat, &left, &top, &right, &bottom);
+  if (right <= left || bottom <= top) return;
+  unsigned width = (unsigned)(right - left), height = (unsigned)(bottom - top);
+#if DG_D10
+  dg_prescale_plane_dims(width, height, &width, &height);
+#endif
+  if (width > 16384 || height > 16384 || (size_t)width * height > 16u * 1024u * 1024u) {
+    lv_fail(d->values, "transformed text dimensions exceed bound"); return;
+  }
+  uint32_t *plane = malloc((size_t)width * height * sizeof(*plane));
+  uint32_t *saved = malloc(sizeof(c->pixels));
+  if (!plane || !saved) {
+    free(plane); free(saved); lv_fail(d->values, "transformed text allocation"); return;
+  }
+  memcpy(saved, c->pixels, sizeof(c->pixels));
+  flat.value.x -= left; flat.value.y -= top;
+  for (unsigned y = 0; y < height && !d->values->failed; y += WC_HEIGHT)
+    for (unsigned x = 0; x < width && !d->values->failed; x += WC_WIDTH) {
+      memset(c->pixels, 0, sizeof(c->pixels));
+#if DG_D10
+      draw_sprite(c,d,channel,&flat,-dg_stage_coord((int)x),-dg_stage_coord((int)y));
+#else
+      draw_sprite(c,d,channel,&flat,-(int)x,-(int)y);
+#endif
+      unsigned rows = height - y < WC_HEIGHT ? height - y : WC_HEIGHT;
+      unsigned columns = width - x < WC_WIDTH ? width - x : WC_WIDTH;
+      for (unsigned row = 0; row < rows; row++)
+        memcpy(plane + (size_t)(y + row) * width + x, c->pixels + (size_t)row * WC_WIDTH,
+               columns * sizeof(*plane));
+    }
+  memcpy(c->pixels, saved, sizeof(c->pixels)); free(saved);
+  if (!d->values->failed) {
+    unsigned opacity = dg_opacity(sprite);
+    for (size_t at = 0; at < (size_t)width * height; at++)
+      plane[at] = (plane[at] & 0xffffffu) | ((plane[at] >> 24) * opacity / 100) << 24;
+    wc_image_t image = {.width = width, .height = height, .pixels = plane, .follow_alpha = true};
+    image_coverage(&image);
+    dg_sprite_t parent = *sprite;
+    parent.value.fore_rgb = 0; parent.value.back_rgb = 0xffffffu; parent.value.flags |= 48;
+    draw_bitmap(c,d,&parent,&image,l,t,r,b,8,100,ox,oy);
+  }
+  free(plane);
+}
+#endif
+
 static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t *s,
                         int ox, int oy) {
   lv_runtime_t *values = d->values;
   (void)i;
   const dg_member_t *m = dg_member(d, s->value.member);
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-  // A film loop whose channels a script drives (dg_film_child_t) draws them
-  // in channel order, in its place, instead of its recorded frames.
-  if (m && m->type == 2 && s == &d->sprites[i] && d->film_child_count) {
-    bool driven = false;
-    for (unsigned k = 0; k < d->film_child_count && !driven; k++)
-      driven = d->film_children[k].parent == i;
-    if (driven) {
-      unsigned opacity = dg_opacity(s);
-      if (!s->visible || !s->value.type || !opacity)
-        return;
-      int pl, pt, pr, pb;
-      dg_sprite_bounds(d, s, &pl, &pt, &pr, &pb);
-      for (unsigned channel = 1; channel < 256; channel++)
-        for (unsigned k = 0; k < d->film_child_count; k++) {
-          const dg_film_child_t *fc = &d->film_children[k];
-          if (fc->parent != i || fc->channel != channel || !fc->member)
-            continue;
-          const dg_member_t *cm = dg_member(d, fc->member);
-          if (!cm)
-            continue;
-          dg_sprite_t child = *s;
-          child.value.member = fc->member;
-          child.value.x = (int16_t)(pl + fc->x);
-          child.value.y = (int16_t)(pt + fc->y);
-          child.value.ink = fc->ink;
-          child.value.blend = (uint8_t)(fc->blend * opacity / 100);
-          child.value.thickness |= DG_HAS_BLEND;
-          child.value.width = (int16_t)(fc->sized ? fc->width : cm->width);
-          child.value.height = (int16_t)(fc->sized ? fc->height : cm->height);
-          child.stretch = fc->sized;
-          child.value.stretch = fc->sized;
-          child.value.rotation = child.value.skew = 0;
-          child.flip_h = child.flip_v = child.custom_quad = false;
-          child.film_frame = 0;
-          // A child is no channel of the stage: index past them all.
-          draw_sprite(c, d, DG_SPRITES, &child, ox, oy);
-        }
-      return;
-    }
+#if DG_D10
+  dg_sprite_t direct_stage;
+  if (m && m->flash_direct_to_stage) {
+    direct_stage=*s; s=&direct_stage;
+    direct_stage.value.ink=8; direct_stage.value.blend=100;
+    direct_stage.value.thickness|=DG_HAS_BLEND;
+    direct_stage.value.fore_rgb=0; direct_stage.value.back_rgb=0xffffff;
+    direct_stage.value.flags|=48;
   }
+  bool driven = m && m->type == 2 && s == &d->sprites[i] && dg_film_driven(d, i);
 #endif
   // Palettes, sounds and script casts have no visual widget in Director.
   if (m && (m->type == 4 || m->type == 6 || m->type == 11 || m->type == 14))
     return;
-  if (m && (m->type == 1 || m->type == 2) && (!m->width || !m->height))
-    return;
+  if (m && (m->type == 1 || m->type == 2 || m->type == 5 || m->type == 12) && (!m->width || !m->height)
+#if DG_D10
+      && !dg_member_image(d, m->id)
+#endif
+  ) return;
   dg_member_t film;
   bool pose = false;
-  if (m && m->type == 2 && m->film_count) {
+  if (m && m->type == 2 && m->film_count
+#if DG_D10
+      && !m->film_frames && !m->film_track_count && !driven
+#endif
+  ) {
     film = *m;
-    film.asset = m->film_assets[dg_film_pose(m, s)];
+    film.asset = dg_film_asset(m, s);
     film.type = 1;
     m = &film;
     pose = true;
@@ -883,32 +1161,182 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
 #endif
   if (r <= 0 || b <= 0 || l >= WC_WIDTH || t >= WC_HEIGHT || r <= l || b <= t)
     return;
+#if DG_MODERN
+  if (m && (m->type == 3 || m->type == 7) &&
+      (s->value.rotation || s->value.skew || s->flip_h || s->flip_v || s->custom_quad)) {
+    draw_transformed_text(c,d,i,s,l,t,r,b,ox,oy); return;
+  }
+#endif
+#if DG_D10
+  if(m&&m->type==2&&m->flash_clip_count) {
+    wc_flash_context_t context={c,d};
+    dg_flash_raster_host_t host={.context=&context,.scale=dg_prescale_coord(1000)/1000.0f,
+      .asset=wc_flash_asset,.text=wc_flash_text};
+    dg_flash_raster_t plane;
+    if(dg_flash_render(d,i,&host,&plane)&&plane.pixels) {
+      wc_image_t image={.width=plane.width,.height=plane.height,.pixels=plane.pixels,.follow_alpha=true};
+      image_coverage(&image);
+      draw_bitmap(c,d,s,&image,l,t,r,b,s->value.ink,opacity,ox,oy);
+    }
+    free(plane.pixels);return;
+  }
+  if (m && m->type == 2 && (m->film_frames || m->film_track_count || driven)) {
+    static unsigned nesting;
+    unsigned width, height;
+    dg_prescale_plane_dims(m->width, m->height, &width, &height);
+    if (!width || !height || (size_t)width * height > 16u * 1024u * 1024u || nesting >= 8) {
+      lv_fail(values, "film loop render dimensions or nesting exceeded"); return;
+    }
+    uint32_t *plane = malloc((size_t)width * height * sizeof(*plane));
+    uint32_t *saved = malloc(sizeof(c->pixels));
+    if (!plane || !saved) {
+      free(plane); free(saved); lv_fail(values, "film loop framebuffer allocation"); return;
+    }
+    memcpy(saved, c->pixels, sizeof(c->pixels));
+    dg_film_frame_t driven_frame;
+    bool resolve = driven || m->film_track_count;
+    dg_film_layer_t *driven_layers = resolve ? dg_film_frame_resolve(d, i, s, m, &driven_frame) : NULL;
+    if (resolve && !driven_layers) { free(plane); free(saved); return; }
+    const dg_film_frame_t *frame = resolve ? &driven_frame : &m->film_frames[dg_film_storage_pose(m, s)];
+    nesting++;
+    for (unsigned top = 0; top < height && !values->failed; top += WC_HEIGHT)
+      for (unsigned left = 0; left < width && !values->failed; left += WC_WIDTH) {
+        memset(c->pixels, 0, sizeof(c->pixels));
+        for (unsigned layer = 0; layer < frame->count && !values->failed; layer++) {
+          const dg_film_layer_t *item = &frame->layers[layer];
+          int offset_x = -m->film_left - dg_stage_coord((int)left);
+          int offset_y = -m->film_top - dg_stage_coord((int)top);
+          if (!item->value.member && item->name && *item->name &&
+              (!item->asset || !*item->asset)) {
+            dg_sprite_t field_parent = {.value = {.member = m->id, .type = 16,
+                .x = m->reg_x, .y = m->reg_y, .width = m->width, .height = m->height,
+                .blend = 100}, .visible = true, .stretch = true};
+            if (item->affine)
+              draw_flash_field(c, d, i, m, item, offset_x, offset_y);
+            else draw_flash_overlays(c, d, i, &field_parent, m, offset_x, offset_y, item->name, false);
+            continue;
+          }
+          dg_sprite_t child;
+          if (!dg_film_layer_sprite(d, i, item, &child)) continue;
+          if (item->asset && *item->asset) {
+            unsigned iw, ih;
+            dg_prescale_dims(item->value.width, item->value.height, &iw, &ih);
+            const wc_image_t *image = wc_image(c, values, item->asset, iw, ih, child.value.ink);
+            if (!image) continue;
+            int cl, ct, cr, cb;
+            dg_sprite_bounds(d, &child, &cl, &ct, &cr, &cb);
+            cl = dg_prescale_coord(cl + offset_x); cr = dg_prescale_coord(cr + offset_x);
+            ct = dg_prescale_coord(ct + offset_y); cb = dg_prescale_coord(cb + offset_y);
+            if (cr > cl && cb > ct)
+              draw_bitmap(c, d, &child, image, cl, ct, cr, cb, child.value.ink,
+                          dg_opacity(&child), offset_x, offset_y);
+          } else draw_sprite(c, d, DG_SPRITES, &child, offset_x, offset_y);
+        }
+        unsigned rows = height - top < WC_HEIGHT ? height - top : WC_HEIGHT;
+        unsigned columns = width - left < WC_WIDTH ? width - left : WC_WIDTH;
+        for (unsigned y = 0; y < rows; y++)
+          memcpy(plane + (size_t)(top + y) * width + left,
+                 c->pixels + (size_t)y * WC_WIDTH, columns * sizeof(*plane));
+      }
+    nesting--;
+    memcpy(c->pixels, saved, sizeof(c->pixels)); free(saved);
+    if (!values->failed) {
+      wc_image_t image = {.width = width, .height = height, .pixels = plane, .follow_alpha = true};
+      image_coverage(&image);
+      if (s->value.ink == 9) {
+        const dg_member_t *mask = dg_member(d, m->id + 1);
+        if (mask && mask->type == 1 && mask_pair(m, mask)) apply_mask(c, d, m, mask, &image);
+      }
+      draw_bitmap(c, d, s, &image, l, t, r, b, s->value.ink, opacity, ox, oy);
+    }
+    free(plane); free(driven_layers);
+    return;
+  }
+#endif
 #if DG_D5 || DG_D10
   if (dg_is_video(m)) {
-    draw_video(c, i, l, t, r, b, opacity);
+    draw_video(c, d, i, s, l, t, r, b, opacity, ox, oy);
     return;
   }
 #endif
 #if DG_D10
-  // A member whose image a script replaced draws from its new source.
-  dg_member_t replaced;
-  uint32_t source;
-  if (m && m->type == 1 && dg_image_source(d, m->id, &source)) {
-    if (!source) {
-      if (c->stage_snapshot.pixels && c->snapshot_member == m->id)
-        draw_bitmap(c, d, s, &c->stage_snapshot, l, t, r, b, 0, opacity, ox, oy);
+  if (m && m->type == 9) {
+    unsigned ink = s->value.ink;
+    if (ink != 0 && ink != 8 && ink != 32 && ink != 36 && !arithmetic_ink(ink)) {
+      lv_fail(values, "unsupported linked movie ink");
       return;
     }
-    if (source == DG_IMAGE_BLANK)
+    unsigned width, height;
+    dg_prescale_plane_dims(m->width, m->height, &width, &height);
+    if (!width || !height || width > WC_WIDTH || height > WC_HEIGHT) {
+      lv_fail(values, "linked movie source rectangle exceeds compositor");
       return;
-    const dg_member_t *from = dg_member(d, source);
-    if (from && from->type == 1 && from->asset && from->asset[0]) {
-      replaced = *from;
-      m = &replaced;
     }
+    uint32_t *plane = malloc(sizeof(c->pixels));
+    if (!plane) { lv_fail(values, "linked movie framebuffer allocation"); return; }
+    memcpy(plane, c->pixels, sizeof(c->pixels));
+    dg_runtime_t *child = dg_linked_begin(d, i);
+    if (!child) {
+      free(plane);
+      lv_fail(values, "linked movie runtime unavailable");
+      return;
+    }
+    draw_scene(c, child, -m->linked_left, -m->linked_top);
+    dg_linked_end(d);
+    // The temporary plane now keeps the child while the parent's stage
+    // returns to the live framebuffer. Shared decoded assets stay cached.
+    for (size_t p = 0; p < (size_t)WC_WIDTH * WC_HEIGHT; p++) {
+      uint32_t pixel = c->pixels[p]; c->pixels[p] = plane[p]; plane[p] = pixel;
+    }
+    wc_image_t image = {.width = width, .height = height, .stride = WC_WIDTH,
+        .pixels = plane, .cover_r = width, .cover_b = height, .linked_member = m};
+    draw_bitmap(c, d, s, &image, l, t, r, b, s->value.ink, opacity, ox, oy);
+    free(plane);
+    return;
   }
 #endif
-  if (m && m->type == 1) {
+#if DG_D10
+  const dg_pixel_image_t *mutable = m ? dg_member_image(d, m->id) : NULL;
+  if (mutable) {
+    unsigned ink = s->value.ink;
+    if (ink != 0 && ink != 8 && ink != 9 && ink != 32 && ink != 36 && !arithmetic_ink(ink)) {
+      lv_fail(values, "unsupported mutable image ink");
+      return;
+    }
+    wc_image_t image = {.width = mutable->width, .height = mutable->height,
+        .pixels = mutable->pixels, .follow_alpha = mutable->use_alpha,
+        .force_opaque = !mutable->use_alpha};
+    if (!mutable->use_alpha && !dg_ink_whole_rect(ink) && ink != 36) {
+      image.coverage = dg_image_matte(d, mutable);
+      if (!image.coverage) return;
+    }
+    // Independent Imaging Lingo planes are not cached decoded assets.
+    // Their coverage bounds must reflect the latest pixel mutations.
+    image_coverage(&image);
+    if (image.force_opaque) {
+      image.cover_l = image.cover_t = 0;
+      image.cover_r = image.width; image.cover_b = image.height;
+    }
+    uint32_t *masked_pixels = NULL;
+    if (ink == 9) {
+      const dg_member_t *mask = dg_member(d, m->id + 1);
+      if (mask && mask->type == 1 && mask_pair(m, mask)) {
+        masked_pixels = malloc((size_t)image.width * image.height * sizeof(*masked_pixels));
+        if (!masked_pixels) { lv_fail(values, "mutable mask allocation"); return; }
+        memcpy(masked_pixels, image.pixels, (size_t)image.width * image.height * sizeof(*masked_pixels));
+        image.pixels = masked_pixels; image.force_opaque = false; image.coverage = NULL;
+        dg_member_t source = *m;
+        source.width = image.width; source.height = image.height;
+        source.reg_x = mutable->reg_x; source.reg_y = mutable->reg_y;
+        apply_mask(c, d, &source, mask, &image);
+      }
+    }
+    draw_bitmap(c, d, s, &image, l, t, r, b, s->value.ink, opacity, ox, oy);
+    free(masked_pixels);
+    return;
+  }
+#endif
+  if (m && (m->type == 1 || m->type == 5 || m->type == 12)) {
     unsigned ink = s->value.ink;
     if (ink != 0 && ink != 8 && ink != 36
 #if DG_MODERN
@@ -923,11 +1351,21 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     }
     unsigned width, height;
     stored_dims(m, &width, &height);
-    unsigned loads = c->loads;
+    // Older profiles use the matte for blended Copy. The original Birthday
+    // engine preserves the whole rectangle, including one-bit sources.
+    // A background key is applied at draw time, since sprites sharing an
+    // asset can choose different keys and change them without reloading.
+    unsigned decode_ink = ink == 0 && dg_blended_copy_matte(opacity) ? 8 : ink;
+#if DG_MODERN
+    if (ink == 36 && m->type != 12) decode_ink = 0;
+#endif
+#if DG_D10
+    if (ink == 9) decode_ink = 8;
+#endif
 #if defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE
     // A film-loop pose cut to its coverage keeps its own size and draws at
     // its offset in the loop's rectangle, by the two registration points.
-    const wc_image_t *image = wc_image(c, values, m->asset, pose ? 0 : width, pose ? 0 : height, ink);
+    const wc_image_t *image = wc_image(c, values, m->asset, pose ? 0 : width, pose ? 0 : height, decode_ink);
     if (!image)
       return;
     if (pose && (image->width != width || image->height != height) && width && height) {
@@ -943,28 +1381,40 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     }
 #else
     (void)pose;
-    const wc_image_t *image = wc_image(c, values, m->asset, width, height, ink);
+    const wc_image_t *image = wc_image(c, values, m->asset, width, height, decode_ink);
     if (!image)
       return;
 #endif
-#if DG_D10
-    if (ink == 9 && c->loads != loads) {
-      const dg_member_t *mask = dg_member(d, m->id + 1);
-      if (mask && mask->type == 1 && mask->asset && mask->asset[0] && mask_pair(m, mask))
-        apply_mask(c, m, mask, (wc_image_t *)image);
+    if (ink == 0 && image->depth == 1 && dg_blended_copy_matte(opacity)) {
+      opacity = 100;
+      image = wc_image(c, values, m->asset, image->width, image->height, 0);
+      if (!image) return;
     }
-#else
-    (void)loads;
+#if DG_D10
+    wc_image_t masked_image;
+    uint32_t *masked_pixels = NULL;
+    if (ink == 9) {
+      const dg_member_t *mask = dg_member(d, m->id + 1);
+      if (mask && mask->type == 1 && mask_pair(m, mask)) {
+        masked_pixels = malloc((size_t)image->width * image->height * sizeof(*masked_pixels));
+        if (!masked_pixels) { lv_fail(values, "mask image allocation"); return; }
+        memcpy(masked_pixels, image->pixels, (size_t)image->width * image->height * sizeof(*masked_pixels));
+        masked_image = *image; masked_image.pixels = masked_pixels;
+        apply_mask(c, d, m, mask, &masked_image); image = &masked_image;
+      }
+    }
 #endif
     draw_bitmap(c, d, s, image, l, t, r, b, ink, opacity, ox, oy);
 #if DG_D10
-    draw_flash_overlays(c, d, i, s, m);
+    free(masked_pixels);
+    draw_flash_overlays(c, d, i, s, m, ox, oy, NULL, false);
 #endif
   } else if (m && (m->type == 3 || m->type == 7)) {
     const char *text = m->text;
     uint32_t color = indexed_color(d, s->value.fore);
     wc_text_style_t authored;
-    const wc_text_style_t *style = member_text_style(m, &authored);
+    int scroll;
+    const wc_text_style_t *style = member_text_style(d, m, &authored, &scroll, true);
 #if DG_MODERN
     if (m->text_style) {
       uint32_t rgb = m->text_style->color;
@@ -975,6 +1425,10 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     for (unsigned j = 0; j < d->field_count; j++)
       if (d->field_members[j] == m->id) {
         text = lv_cstr(values, values->roots[DG_FIELD_TEXT_ROOT + j]);
+#if DG_MODERN
+        if (d->field_text_changed[j] && m->text_insert_style)
+          color = opaque_rgb(m->text_insert_style->color);
+#endif
         lv_t field_color = values->roots[DG_FIELD_COLOR_ROOT + j];
         if (lv_type(field_color) != LV_VOID) {
           unsigned value = (unsigned)lv_integer(values, field_color);
@@ -989,13 +1443,14 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     static wc_text_run_t runs[254];
     unsigned run_count = 0;
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-    const dg_text_extra_t *extra = dg_text_extra(d, m->id);
-    if (extra && text == m->text)
+    const dg_text_extra_t *extra = member_color_runs(d, m, text);
+    if (extra)
       for (; run_count < extra->run_count && run_count < 254; run_count++)
         runs[run_count] = (wc_text_run_t){extra->runs[run_count].offset,
                                           opaque_rgb(extra->runs[run_count].rgb) & 0xffffffu};
 #endif
-    draw_text(c, text, style, color & 0xffffffu, opacity * 255 / 100, l, t, r, b, runs, run_count);
+    if(!draw_text(c, text, style, color & 0xffffffu, opacity * 255 / 100, l, t, r, b, runs, run_count, scroll))
+      lv_fail(d->values,"text rasterization failed: font, allocation or dimensions");
   } else if ((m && m->type == 8) || s->value.type < 16) {
     unsigned thickness = s->value.thickness & 15;
     unsigned line = thickness ? thickness - 1 : 0;
@@ -1004,39 +1459,95 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
 #if DG_MODERN
     uint32_t foreground = sprite_color(d, s, false);
     uint32_t background = sprite_color(d, s, true);
-    // Background-transparent shapes with matching colours are hit areas.
-    if (s->value.ink == 36 && foreground == background)
-      return;
 #else
     uint32_t foreground = indexed_color(d, s->value.fore);
+    uint32_t background = indexed_color(d, s->value.back);
 #endif
     unsigned kind = m ? m->shape : 1;
+    unsigned pattern = dg_member_pattern(d,m);
     bool filled = !m || m->filled;
-    if (kind == 1 && filled)
-      fill_shape(c, l, t, r, b, foreground);
-    else
-      for (int y = t < 0 ? 0 : t; y < b && y < WC_HEIGHT; y++) {
-        int spans[4];
-        unsigned n = dg_shape_spans(kind, r - l, b - t, y - t, line, filled,
-                                    m && m->line_direction == 6, spans);
-        for (unsigned k = 0; k < n; k++)
-          if (spans[k * 2] < spans[k * 2 + 1])
-            fill_shape(c, l + spans[k * 2], y, l + spans[k * 2 + 1], y + 1,
-                       foreground);
+    const wc_image_t *tile = NULL;
+    const char *texture=dg_shape_texture(d,m,pattern);
+    if (texture && *texture) tile = wc_image(c, values, texture, 0, 0, 0);
+    if (pattern > 56 && !tile) {
+      lv_fail(values, "missing shape texture pattern asset");
+      return;
+    }
+    bool transformed = false;
+    float shape_quad[8];
+    int shape_width = r - l, shape_height = b - t;
+#if DG_MODERN
+    transformed = s->value.rotation || s->value.skew || s->flip_h || s->flip_v || s->custom_quad;
+    if (transformed) {
+      dg_sprite_t flat = *s;
+      flat.value.rotation = flat.value.skew = 0;
+      flat.flip_h = flat.flip_v = flat.custom_quad = false;
+      int fl, ft, fr, fb;
+      dg_sprite_bounds(d, &flat, &fl, &ft, &fr, &fb);
+      shape_width = fr - fl; shape_height = fb - ft;
+      dg_sprite_quad(d, s, shape_quad);
+      for (unsigned point = 0; point < 8; point += 2) {
+        shape_quad[point] += ox; shape_quad[point + 1] += oy;
       }
-  } else if (m) {
+#if DG_D10 && !(defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE)
+      for (unsigned point = 0; point < 8; point++) shape_quad[point] *= 0.8f;
+#endif
+    }
+#endif
+    for (int y = t < 0 ? 0 : t; y < b && y < WC_HEIGHT; y++) {
+      int spans[4] = {0, r - l};
+      unsigned n = transformed ? 1 : dg_shape_spans(kind, r - l, b - t, y - t, line, filled,
+                                  m && m->line_direction == 6, spans);
+      for (unsigned k = 0; k < n; k++) {
+        int left = l + spans[k * 2], right = l + spans[k * 2 + 1];
+        if (left < 0) left = 0;
+        if (right > WC_WIDTH) right = WC_WIDTH;
+        for (int x = left; x < right; x++) {
+          int shape_x = x - l, shape_y = y - t;
+          if (transformed) {
+            float u, v;
+            if (!dg_quad_uv(shape_quad, x + 0.5f, y + 0.5f, &u, &v)) continue;
+#if DG_MODERN
+            if (s->flip_h) u = 1 - u;
+            if (s->flip_v) v = 1 - v;
+#endif
+            int sx = (int)(u * shape_width), sy = (int)(v * shape_height);
+            if (sx >= shape_width) sx = shape_width - 1;
+            if (sy >= shape_height) sy = shape_height - 1;
+            shape_x = sx; shape_y = sy;
+            if (!dg_shape_contains(kind, shape_width, shape_height, sx, sy, line, filled,
+                                   m && m->line_direction == 6)) continue;
+          }
+
 #if DG_D10
-    // Policy-pinned deferred Xtra members (the Flash intro timelines)
-    // stay data-only and draw nothing, as on the console.
-    if (m->type == 15)
-      return;
+          int stage_x = dg_stage_coord(x) - ox, stage_y = dg_stage_coord(y) - oy;
+#else
+          int stage_x = x - ox, stage_y = y - oy;
 #endif
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-    // A linked movie playing in a sprite (Löwenzahn 8's Tamagotchi dog):
-    // not yet converted, so it draws nothing.
-    if (m->type == 9)
-      return;
-#endif
+          bool stroke = filled && line && dg_shape_contains(kind, shape_width, shape_height,
+              shape_x, shape_y, line, false, m && m->line_direction == 6);
+          bool bit = stroke || dg_shape_pattern(pattern, stage_x, stage_y);
+          bool use_tile = tile && !stroke;
+          uint32_t sample = 0;
+          if (use_tile) {
+            unsigned tx = (unsigned)((stage_x % (int)tile->width + (int)tile->width) % (int)tile->width);
+            unsigned ty = (unsigned)((stage_y % (int)tile->height + (int)tile->height) % (int)tile->height);
+            sample = tile->pixels[(size_t)ty * tile->width + tx];
+            if(tile->palette_brush) {
+              const uint32_t *palette=dg_stage_palette(d);
+              if(!palette){lv_fail(values,"shape texture has no active palette");return;}
+              sample=opaque_rgb(palette[sample&255]);
+            }
+            if (!(sample >> 24) || (s->value.ink == 36 &&
+                (sample & 0xffffffu) == (background & 0xffffffu))) continue;
+          } else if (!dg_shape_ink_visible(bit, s->value.ink, opacity, foreground, background)) continue;
+          uint32_t *destination = &c->pixels[y * WC_WIDTH + x];
+          *destination=dg_rgba_shape(*destination,sample,use_tile,bit,s->value.ink,
+                                     opacity,foreground,background);
+        }
+      }
+    }
+  } else if (m) {
     static char message[64];
     snprintf(message, sizeof(message), "unsupported visible cast type %u", m->type);
     lv_fail(values, message);
@@ -1046,6 +1557,21 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
 // Draws a scene; `ox, oy` shift it (D5's source dialog draws its movie at
 // the dialog window's place over the suspended stage).
 static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy) {
+#if DG_D10
+  const dg_pixel_image_t *stage = dg_stage_image(d);
+  if (stage) {
+    int dx = dg_prescale_coord(ox), dy = dg_prescale_coord(oy);
+    for (unsigned y = 0; y < WC_HEIGHT; y++)
+      for (unsigned x = 0; x < WC_WIDTH; x++) {
+        int sx = (int)x - dx, sy = (int)y - dy;
+        c->pixels[(size_t)y * WC_WIDTH + x] = sx >= 0 && sx < WC_WIDTH && sy >= 0 && sy < WC_HEIGHT
+            ? stage->pixels[(size_t)((unsigned)sy * stage->height / WC_HEIGHT) * stage->width +
+                            (unsigned)sx * stage->width / WC_WIDTH] | 0xff000000u
+            : opaque_rgb(d->stage_color);
+      }
+    return;
+  }
+#endif
   lv_runtime_t *values = d->values;
 #if DG_MODERN
   fill(c, 0, 0, WC_WIDTH, WC_HEIGHT, opaque_rgb(d->stage_color));
@@ -1054,8 +1580,15 @@ static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy) {
 #endif
   const uint16_t *order;
   unsigned count = dg_draw_order(d, &order);
+  for (unsigned direct=0;direct<2;direct++)
   for (unsigned draw = 0; draw < count && !values->failed; draw++) {
     unsigned i = order[draw];
+#if DG_D10
+    const dg_member_t *member=dg_member(d,d->sprites[i].value.member);
+    if ((member && member->flash_direct_to_stage)!=!!direct) continue;
+#else
+    if (direct) continue;
+#endif
     for (unsigned pass = 0; pass <= d->trail_count; pass++) {
       if (pass < d->trail_count && d->trails[pass].channel != i)
         continue;
@@ -1068,6 +1601,15 @@ static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy) {
 
 // ---- Pointer ----
 
+static bool native_cursor_plane(wc_t *, lv_runtime_t *, const dg_member_t *, uint16_t [256]);
+static bool cursor_is_color(const dg_member_t *m) {
+#if DG_D10
+  return m && m->source_xtra == 5;
+#else
+  (void)m;
+  return false;
+#endif
+}
 static bool cursor_plane(wc_t *c, lv_runtime_t *values, const dg_member_t *m,
                          uint16_t out[256]) {
   // A cursor reads the stored RGBA5551 words themselves: its colours are
@@ -1131,12 +1673,13 @@ static const dg_cursor_bitmap_t *cursor_bitmap(wc_t *c, dg_runtime_t *d,
       slot = entry;
   }
   uint16_t pixels[256], coverage[256];
-  if (!cursor_plane(c, d->values, m, pixels) ||
+  if (!(cursor_is_color(m) ? native_cursor_plane(c, d->values, m, pixels) : cursor_plane(c, d->values, m, pixels)) ||
       (mask && !cursor_plane(c, d->values, mask, coverage)))
     return NULL;
-  if (!dg_cursor_compose(&slot->bitmap, pixels, m->width, m->height,
+  if (!(cursor_is_color(m) ? dg_cursor_color(&slot->bitmap, pixels, m->width, m->height, m->reg_x, m->reg_y) :
+      dg_cursor_compose(&slot->bitmap, pixels, m->width, m->height,
                          mask ? coverage : NULL, mask ? mask->width : 0,
-                         mask ? mask->height : 0, m->reg_x, m->reg_y)) {
+                         mask ? mask->height : 0, m->reg_x, m->reg_y))) {
     lv_fail(d->values, "unsupported color cursor bitmap");
     return NULL;
   }
@@ -1209,7 +1752,7 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
   externals = externals * 31 + (d->ticks < d->alert_until);
   externals = externals * 31 + d->native_dialog;
 #endif
-  if (c->drawn && c->revision == d->visual_revision &&
+  if (c->drawn && c->owner == d && c->revision == d->visual_revision &&
       dg_cursor_equal(c->cursor, cursor) && c->pointer_count == count &&
       !memcmp(c->pointers, pointers, count * sizeof(*pointers)) &&
       c->background == background && c->externals == externals)
@@ -1237,12 +1780,14 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
   if (d->ticks < d->alert_until && !d->values->failed) {
     // A recovered script alert, in the console's builtin font.
     fill(c, 48, 180, 592, 290, 0xffffffffu);
-    draw_text(c, d->alert_text, NULL, 0, 255, 64, 201, 574, 281, NULL, 0);
+    if(!draw_text(c, d->alert_text, NULL, 0, 255, 64, 201, 574, 281, NULL, 0, 0))
+      lv_fail(d->values,"alert text rasterization failed");
   }
 #endif
   for (unsigned i = 0; i < count && !d->values->failed; i++)
     draw_cursor(c, d, cursor, pointers[i]);
   c->drawn = true;
+  c->owner = d;
   c->revision = d->visual_revision;
   c->cursor = cursor;
   memcpy(c->pointers, pointers, count * sizeof(*pointers));
@@ -1285,9 +1830,14 @@ static bool native_cursor_plane(wc_t *c, lv_runtime_t *v, const dg_member_t *m,
     for (unsigned x = 0; ok && x < width; x++) {
       const uint8_t *p = data + 32 + ((size_t)y * m->width + x) * stride;
       if (rgba32) {
-        unsigned rgb = dg_fdi_be32(p) >> 8;
-        ok = !rgb || rgb == 0xffffff;
-        out[y * 16 + x] = rgb ? 0xffff : 1;
+        uint32_t pixel = dg_fdi_be32(p), rgb = pixel >> 8;
+        if (cursor_is_color(m))
+          out[y * 16 + x] = (uint16_t)(((pixel >> 27) << 11) | (((pixel >> 19) & 31) << 6) |
+                                      (((pixel >> 11) & 31) << 1) | ((pixel & 255) >= 128));
+        else {
+          ok = !rgb || rgb == 0xffffff;
+          out[y * 16 + x] = rgb ? 0xffff : 1;
+        }
       } else
         out[y * 16 + x] = (uint16_t)dg_fdi_be16(p);
     }
@@ -1302,7 +1852,8 @@ bool wc_cursor_bitmap(wc_t *c, lv_runtime_t *v, const dg_member_t *m,
   if (!native_cursor_plane(c, v, m, pixels) ||
       (mask && !native_cursor_plane(c, v, mask, coverage)))
     return false;
-  bool ok = dg_cursor_compose(out, pixels, m->width, m->height, mask ? coverage : NULL,
+  bool ok = cursor_is_color(m) ? dg_cursor_color(out, pixels, m->width, m->height, m->reg_x, m->reg_y) :
+      dg_cursor_compose(out, pixels, m->width, m->height, mask ? coverage : NULL,
                               mask ? mask->width : 0, mask ? mask->height : 0,
                               m->reg_x, m->reg_y);
   if (!ok)

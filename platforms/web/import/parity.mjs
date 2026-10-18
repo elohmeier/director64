@@ -43,9 +43,10 @@ const readAt = (offset, length) => {
   return bytes;
 };
 const started = performance.now();
+const profile = JSON.parse(readFileSync(profilePath, "utf8"));
 const result = await importGame({
   source: {size, readAt},
-  profile: JSON.parse(readFileSync(profilePath, "utf8")),
+  profile,
   tools: {
     converter, DirectorFile, pool,
     parserWasm: readFileSync(join(root, "node_modules/projectorrays/dist/projectorrays.wasm")),
@@ -59,6 +60,8 @@ const result = await importGame({
       mkspriteWasm: readFileSync(join(tools, "mksprite.wasm")),
     },
     substituteFont: readFileSync(join(tools, "droid-sans.ttf")),
+    systemFonts: Object.fromEntries((profile.policy.system_font_resources ?? []).map((resource) =>
+      [resource.sha256, readFileSync(join(tools, resource.path.split("/").pop()))])),
   },
 });
 pool?.close();

@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 
 from director64.project import GameSpec
-from director64.rom import RomError
+from director64.rom import RomError, overlay_symbol_names
 from director64.rom_inputs import record as record_rom_inputs
 
 
@@ -67,7 +67,8 @@ def test_mucklas_rom_profiles_apply_manifest_budget(tmp_path, monkeypatch, rom_f
         "director/model.json": {},
         "aot/c/manifest.json": {
             "movies": [
-                {"movie": f"M{i}.DXR", "native_functions": 0, "handlers": 0} for i in range(49)
+                {"movie": f"M{i}.DXR", "code_kind": "bytecode", "native_functions": 0,
+                 "bytecode_functions": 3, "bytecode_bytes": 24, "handlers": 3} for i in range(49)
             ]
         },
     }
@@ -108,3 +109,17 @@ def test_mucklas_rom_profiles_apply_manifest_budget(tmp_path, monkeypatch, rom_f
         record_rom_inputs(game, profile, rom_path)
         with pytest.raises(RomError, match=message):
             validation.validate_rom(tmp_path, profile)
+
+
+def test_overlay_symbol_manifest_distinguishes_native_code_from_bytecode():
+    native = {"movie": "A.DXR", "native_functions": 2, "code_kind": "native"}
+    bytecode = {"movie": "B.DXR", "native_functions": 0, "code_kind": "bytecode",
+                "bytecode_functions": 7, "bytecode_bytes": 128}
+    assert overlay_symbol_names({"movies": [native, bytecode]}) == {"code/a_dxr.dso.sym"}
+    with pytest.raises(RomError, match="stale bytecode overlay manifest"):
+        overlay_symbol_names({"movies": [{"movie": "B.DXR", "native_functions": 7,
+                                          "bytecode_bytes": 128}]})
+    with pytest.raises(RomError, match="bytecode overlay declares native"):
+        overlay_symbol_names({"movies": [{**bytecode, "native_functions": 7}]})
+    with pytest.raises(RomError, match="unknown overlay code kind"):
+        overlay_symbol_names({"movies": [{**bytecode, "code_kind": "unknown"}]})

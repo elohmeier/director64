@@ -68,7 +68,7 @@ static void draw_record_tick(dg_runtime_t *d) {
     if (!m || !m->width || !m->height) continue;
     const char *asset = NULL;
     if (m->type == 1) asset = m->asset;
-    else if (m->type == 2 && m->film_count) asset = m->film_assets[dg_film_pose(m, s)];
+    else if (m->type == 2 && m->film_count) asset = dg_film_asset(m, s);
     if (!asset || !*asset) continue;
     int l, t, r, b;
     dg_sprite_bounds(d, s, &l, &t, &r, &b);

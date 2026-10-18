@@ -5,7 +5,7 @@
 static dg_runtime_t d;
 static lv_runtime_t v;
 static const lv_movie_t code = {"CURSORS.DXR", 0, NULL,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t casts[] = {{"Internal",1,1},{"Shared",2,1}};
+static const dg_cast_t casts[] = {{.name="Internal",.file=1,.cast=1},{.name="Shared",.file=2,.cast=1}};
 static const dg_member_t members[] = {
   {.id=0x210001,.number=1,.cast=1,.type=1,.width=16,.height=16,.name="image"},
   {.id=0x210002,.number=2,.cast=1,.type=1,.width=13,.height=12,.name="mask"},

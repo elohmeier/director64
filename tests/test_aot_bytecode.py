@@ -13,6 +13,9 @@ def compile_fixture(tmp_path: Path, source: str) -> tuple[str, str]:
     handlers = parse_movie(source, "FIXTURE.DXR")
     manifest = generate({"handlers": handlers}, tmp_path)
     assert manifest["movies"][0]["file"] == "fixture_dxr.c"
+    assert manifest["movies"][0]["code_kind"] == "bytecode"
+    assert manifest["movies"][0]["native_functions"] == 0
+    assert manifest["movies"][0]["bytecode_functions"] > 0
     return (tmp_path / "fixture_dxr.c").read_text(), (tmp_path / "fixture_dxr.lst").read_text()
 
 

@@ -127,7 +127,7 @@ static const dg_member_t members[] = {
      .asset = "missing.fdi"}};
 static const dg_frame_t frames[] = {{0, 0}};
 static uint32_t palette[256];
-static const dg_cast_t casts[] = {{"Internal", 1, 1}};
+static const dg_cast_t casts[] = {{.name="Internal",.file=1,.cast=1}};
 static dg_movie_t movie = {.code = &code, .id = 1, .tempo = 30, .cast_count = 1,
                            .member_count = 4, .frame_count = 1, .casts = casts,
                            .members = members, .frames = frames, .palette = palette};

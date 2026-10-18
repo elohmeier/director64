@@ -2,6 +2,7 @@
 // may consider a sound finished) is the runtime's service clock; this plays
 // what the runtime started, with its loop points and gain, and pauses with
 // the game.
+import {FlashSounds} from "./flash-audio.js";
 
 // Converted sounds are PCM RIFF WAVE files, decoded synchronously so a sound
 // starts on the tick the score started it.
@@ -118,11 +119,15 @@ export class AudioEngine {
       this.voices.push(null);
     }
     this.pending = [];
+    this.paused = [];
+    this.playback = [];
+    this.loopReleased = [];
     this.video = new Map();
     this.buffers = new Map();
     this.decoding = new Map();
     this.bufferBytes = 0;
     this.errors = [];
+    this.flash = new FlashSounds(this);
   }
   // A sound's decoded buffer with its source rate and length (loop points
   // and the console's loop rule are in source frames): at once for a WAV or
@@ -175,20 +180,21 @@ export class AudioEngine {
     try {
       entry = this.load(name);
     } catch (error) {
-      this.errors.push(String(error));
+      this.errors.push(`cannot play sound ${name}: ${error}`);
       console.warn(error);
       return;
     }
     if (entry) return start(entry, 0);
-    const token = {};
+    const token = {requested: this.context.currentTime, pausedAt: null, held: 0};
     this.pending[channel] = token;
-    const requested = this.context.currentTime;
     this.whenLoaded(name).then((ready) => {
       if (this.pending[channel] !== token) return;
       this.pending[channel] = null;
-      start(ready, Math.max(0, this.context.currentTime - requested));
+      start(ready, Math.max(0, (token.pausedAt ?? this.context.currentTime) - token.requested - token.held));
     }, (error) => {
-      this.errors.push(String(error));
+      if (this.pending[channel] !== token) return;
+      this.pending[channel] = null;
+      this.errors.push(`cannot decode sound ${name}: ${error}`);
       console.warn(error);
     });
   }
@@ -196,22 +202,18 @@ export class AudioEngine {
     this.stop(channel);
     if (!name || channel >= this.voices.length) return;
     this.whenReady(channel, name, ({buffer, rate, frames}, offset) => {
-      const source = this.context.createBufferSource();
-      source.buffer = buffer;
-      if (looping) {
-        source.loop = true;
-        const bounds = loopBounds(loopStart, loopEnd, frames);
-        if (bounds) {
-          source.loopStart = bounds.start / rate;
-          source.loopEnd = bounds.end / rate;
-        }
-      } else if (offset >= buffer.duration) return;
-      source.connect(this.gains[channel]);
-      source.onended = () => {
-        if (this.voices[channel] === source) this.voices[channel] = null;
-      };
-      source.start(0, offset);
-      this.voices[channel] = source;
+      const bounds = looping ? loopBounds(loopStart, loopEnd, frames) : null;
+      const start = bounds ? bounds.start / rate : 0;
+      const end = bounds ? bounds.end / rate : buffer.duration;
+      const released = this.loopReleased[channel];
+      if (looping && released != null) {
+        const position = end > start && released >= end ?
+          start + (released - start) % (end - start) : released;
+        offset = position + Math.max(0, offset - released);
+      }
+      this.playback[channel] = {buffer, offset, looping: looping && released == null,
+        loopStart: start, loopEnd: end};
+      if (!this.paused[channel]) this.startChannel(channel);
     });
   }
   // A playFile stream (the streams pack): WAV starts at once, as members do;
@@ -221,21 +223,18 @@ export class AudioEngine {
   playStream(channel, bytes) {
     this.stop(channel);
     if (!bytes || channel >= this.voices.length) return;
-    const token = {};
+    const token = {requested: this.context.currentTime, pausedAt: null, held: 0};
     this.pending[channel] = token;
     const start = (buffer) => {
       if (this.pending[channel] !== token) return;
       this.pending[channel] = null;
-      const source = this.context.createBufferSource();
-      source.buffer = buffer;
-      source.connect(this.gains[channel]);
-      source.onended = () => {
-        if (this.voices[channel] === source) this.voices[channel] = null;
-      };
-      source.start();
-      this.voices[channel] = source;
+      const offset = Math.max(0, (token.pausedAt ?? this.context.currentTime) - token.requested - token.held);
+      this.playback[channel] = {buffer, offset, looping: false, loopStart: 0, loopEnd: buffer.duration};
+      if (!this.paused[channel]) this.startChannel(channel);
     };
     const failed = (error) => {
+      if (this.pending[channel] !== token) return;
+      this.pending[channel] = null;
       this.errors.push(String(error));
       console.warn(error);
     };
@@ -254,8 +253,53 @@ export class AudioEngine {
       this.context.decodeAudioData(bytes.slice().buffer).then(start, failed);
     }
   }
-  stop(channel) {
-    this.pending[channel] = null;
+  // Buffer sources are single-use. Resume with a new source reading the
+  // same buffer at the saved offset; the channel's gain and loop survive.
+  startChannel(channel) {
+    const state = this.playback[channel];
+    if (!state) return;
+    if (state.looping && state.loopEnd > state.loopStart && state.offset >= state.loopEnd)
+      state.offset = state.loopStart + (state.offset - state.loopStart) % (state.loopEnd - state.loopStart);
+    if (!state.looping && state.offset >= state.buffer.duration) {
+      this.playback[channel] = null;
+      return;
+    }
+    const source = this.context.createBufferSource();
+    source.buffer = state.buffer;
+    source.loop = state.looping;
+    source.loopStart = state.loopStart;
+    source.loopEnd = state.loopEnd;
+    source.connect(this.gains[channel]);
+    source.onended = () => {
+      if (this.voices[channel] === source) {
+        this.voices[channel] = null;
+        this.playback[channel] = null;
+      }
+      source.disconnect();
+    };
+    state.startedAt = this.context.currentTime;
+    source.start(0, state.offset);
+    this.voices[channel] = source;
+  }
+  pauseChannel(channel, paused = true) {
+    if (channel < 0 || channel >= this.voices.length || !!this.paused[channel] === paused) return;
+    if (!this.playback[channel] && !this.pending[channel]) return;
+    const now = this.context.currentTime;
+    const token = this.pending[channel];
+    if (token) {
+      if (paused) token.pausedAt = now;
+      else { token.held += now - token.pausedAt; token.pausedAt = null; }
+    }
+    this.paused[channel] = paused;
+    if (paused) {
+      const state = this.playback[channel];
+      if (state && this.voices[channel]) state.offset += Math.max(0, now - state.startedAt);
+      this.stopSource(channel);
+    } else {
+      this.startChannel(channel);
+    }
+  }
+  stopSource(channel) {
     const voice = this.voices[channel];
     this.voices[channel] = null;
     if (voice) {
@@ -263,6 +307,32 @@ export class AudioEngine {
       voice.stop();
       voice.disconnect();
     }
+  }
+  breakLoop(channel) {
+    if (channel < 0 || channel >= this.voices.length || this.loopReleased[channel] != null) return;
+    const now = this.context.currentTime;
+    const token = this.pending[channel];
+    if (token) {
+      this.loopReleased[channel] = Math.max(0, (token.pausedAt ?? now) - token.requested - token.held);
+      return;
+    }
+    const state = this.playback[channel];
+    if (!state?.looping) return;
+    let offset = state.offset + (this.voices[channel] ? Math.max(0, now - state.startedAt) : 0);
+    if (state.loopEnd > state.loopStart && offset >= state.loopEnd)
+      offset = state.loopStart + (offset - state.loopStart) % (state.loopEnd - state.loopStart);
+    state.offset = offset;
+    state.startedAt = now;
+    state.looping = false;
+    this.loopReleased[channel] = 0;
+    if (this.voices[channel]) this.voices[channel].loop = false;
+  }
+  stop(channel) {
+    this.pending[channel] = null;
+    this.paused[channel] = false;
+    this.playback[channel] = null;
+    this.loopReleased[channel] = null;
+    this.stopSource(channel);
   }
   // A sound's length in seconds (0 when missing), without decoding it.
   duration(name) {
@@ -311,6 +381,7 @@ export class AudioEngine {
   gain(channel, value) {
     if (this.gains[channel]) this.gains[channel].gain.value = value;
   }
+  flashSound(id, sound) { this.flash.update(id, sound); }
   // The player's volume and mute (settings.js), over the game's own gains.
   setVolume(volume, muted) {
     this.volume = volume;
@@ -321,6 +392,7 @@ export class AudioEngine {
   suspend() { return this.context.suspend(); }
   resume() { return this.context.resume(); }
   stopAll() {
+    this.flash.stopAll();
     this.voices.forEach((_, i) => this.stop(i));
     for (const sprite of [...this.video.keys()]) this.stopVideo(sprite);
   }

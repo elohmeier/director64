@@ -1,0 +1,29 @@
+-- Synthetic stage palette readback; run once per batch0..3, then capture the32x8 stage rectangle.
+-- Uses64channels for older players. Set batch below before running.
+global out, pm, paletteIndex, channel, xPos, yPos, batch
+batch=0
+out=new(xtra("fileio"))
+out.createFile("C:\palette-stage-colors.txt")
+out.openFile("C:\palette-stage-colors.txt",2)
+puppetPalette "System - Win"
+pm=new(#shape)
+pm.shapeType=#rect
+pm.filled=1
+pm.lineSize=0
+pm.rect=rect(0,0,2,2)
+pm.pattern=1
+repeat with channel=1 to 64
+ paletteIndex=channel-1+batch*64
+ puppetSprite(channel,1)
+ sprite(channel).member=pm
+ sprite(channel).visible=1
+ sprite(channel).ink=0
+ sprite(channel).blend=100
+ sprite(channel).foreColor=paletteIndex
+ xPos=((channel-1) mod 16)*2
+ yPos=((channel-1)-((channel-1) mod 16))/16*2
+ sprite(channel).rect=rect(xPos,yPos,xPos+2,yPos+2)
+end repeat
+updateStage
+out.writeString(string([the stageLeft,the stageTop,the colorDepth,the movieName])&RETURN)
+out.closeFile()

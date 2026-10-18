@@ -21,6 +21,8 @@ enum { DG_CURSOR_SIZE = 16 };
 typedef struct {
   uint16_t black[DG_CURSOR_SIZE], opaque[DG_CURSOR_SIZE];
   uint8_t hot_x, hot_y;
+  bool color;
+  uint16_t colors[DG_CURSOR_SIZE * DG_CURSOR_SIZE];
 } dg_cursor_bitmap_t;
 
 static inline void dg_cursor_hotspot(dg_cursor_bitmap_t *out, int x, int y) {
@@ -56,6 +58,25 @@ static inline bool dg_cursor_compose(dg_cursor_bitmap_t *out,
   return true;
 }
 
+// Cursor Xtra frames retain their authored colors. The converter applies
+// Auto Mask to all white pixels; the alpha bit here is already authoritative.
+static inline bool dg_cursor_color(dg_cursor_bitmap_t *out,
+    const uint16_t *image, unsigned width, unsigned height,
+    int hot_x, int hot_y) {
+  if (!image || !width || !height || width > DG_CURSOR_SIZE ||
+      height > DG_CURSOR_SIZE) return false;
+  memset(out, 0, sizeof(*out));
+  out->color = true;
+  dg_cursor_hotspot(out, hot_x, hot_y);
+  for (unsigned y = 0; y < height; y++)
+    for (unsigned x = 0; x < width; x++) {
+      uint16_t pixel = image[y * DG_CURSOR_SIZE + x];
+      out->colors[y * DG_CURSOR_SIZE + x] = pixel;
+      if (pixel & 1) out->opaque[y] |= (uint16_t)(0x8000u >> x);
+    }
+  return true;
+}
+
 // RGBA5551 with the coverage bit set, for tinting a cursor's ink.
 static inline uint16_t dg_cursor_ink(uint8_t r, uint8_t g, uint8_t b) {
   return (uint16_t)((r >> 3) << 11 | (g >> 3) << 6 | (b >> 3) << 1 | 1);
@@ -64,6 +85,10 @@ static inline uint16_t dg_cursor_ink(uint8_t r, uint8_t g, uint8_t b) {
 // tint, so a coloured cursor still reads against the art underneath it.
 static inline void dg_cursor_pixels_ink(const dg_cursor_bitmap_t *bitmap,
                                         uint16_t pixels[256], uint16_t ink) {
+  if (bitmap->color) {
+    memcpy(pixels, bitmap->colors, sizeof(bitmap->colors));
+    return;
+  }
   if (!ink) ink = 1;
   for (unsigned y = 0; y < DG_CURSOR_SIZE; y++)
     for (unsigned x = 0; x < DG_CURSOR_SIZE; x++) {
@@ -78,6 +103,13 @@ static inline void dg_cursor_pixels(const dg_cursor_bitmap_t *bitmap,
 }
 static inline uint32_t dg_cursor_bitmap_hash(const dg_cursor_bitmap_t *bitmap) {
   uint32_t hash = 2166136261u;
+  if (bitmap->color) {
+    hash = (hash ^ 1u) * 16777619u;
+    for (unsigned i = 0; i < 256; i++) {
+      hash = (hash ^ (bitmap->colors[i] >> 8)) * 16777619u;
+      hash = (hash ^ (bitmap->colors[i] & 255)) * 16777619u;
+    }
+  }
   for (unsigned y = 0; y < 16; y++) {
     uint16_t black = bitmap->black[y] & bitmap->opaque[y];
     const unsigned bytes[] = {black >> 8, black & 255,

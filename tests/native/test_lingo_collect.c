@@ -80,6 +80,7 @@ int main(void) {
   // of the order it produced last time.
   cycle(wide, 6, 4);
   assert(!runtime.failed);
+  assert(runtime.object_high_water == wide);
 
   // Heavily churned: keeping every other object and refilling each round
   // interleaves generations until handle order says little about heap order.
@@ -94,6 +95,15 @@ int main(void) {
   // holds if compaction accounted for every live object exactly once.
   assert(runtime.heap_used == 0);
   assert(runtime.object_count == 0);
+  // Collection and handle reuse must not erase the peak that sizes the
+  // console pool. A smaller subsequent live set leaves it unchanged.
+  cycle(8, 2, 2);
+  assert(runtime.object_count == 0 && runtime.object_high_water == wide);
+  // A fresh runtime starts a new measurement, including after reuse.
+  lv_init(&runtime, (lv_services_t){0}, NULL, globals, 1, 42);
+  assert(runtime.object_high_water == 0);
+  cycle(12, 2, 2);
+  assert(runtime.object_count == 0 && runtime.object_high_water == 12);
   puts("lingo collect: compaction order survives handle churn");
   return 0;
 }

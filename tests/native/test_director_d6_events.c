@@ -52,7 +52,7 @@ static const lv_handler_t handlers[]={
  H("keydown",3,key,"BehaviorScript"),H("idle",99,idle,"MovieScript"),
  H("stopmovie",99,stop,"MovieScript")};
 static const lv_movie_t code={"DATA.CXT",sizeof(handlers)/sizeof(*handlers),handlers,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t casts[]={{"Internal",1,1}};
+static const dg_cast_t casts[]={{.name="Internal",.file=1,.cast=1}};
 static const uint8_t advances[95]={[87-32]=11,[73-32]=3};
 static const int16_t kerning[]={87,73,-10};
 static const dg_text_style_t style={.size=24,.line_height=24,.advances=advances,.kerning=kerning,.kerning_count=1};

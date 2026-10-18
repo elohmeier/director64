@@ -5,12 +5,16 @@ mod common;
 
 use common::*;
 use director64_aot::convert::d5media::font_map;
-use director64_aot::convert::paige::{paige_styles, Reader, Records};
+use director64_aot::convert::paige::{Reader, Records, paige_styles};
 use director64_aot::convert::text::{bind_text_fonts, text_reachability};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn num(n: i64) -> Vec<u8> {
-    latin1(&format!("\x02{}{:X}", if n < 0 { "-" } else { "" }, n.abs()))
+    latin1(&format!(
+        "\x02{}{:X}",
+        if n < 0 { "-" } else { "" },
+        n.abs()
+    ))
 }
 fn numbers(ns: &[i64]) -> Vec<u8> {
     ns.iter().flat_map(|&n| num(n)).collect()
@@ -23,7 +27,14 @@ fn name(text: &str) -> Vec<u8> {
 }
 fn fixture() -> Records {
     let zeros = numbers(&[0; 17]);
-    let font = concat(&[&name("Geneva"), &name(""), &zeros, &name("Pettson *"), &name(""), &zeros]);
+    let font = concat(&[
+        &name("Geneva"),
+        &name(""),
+        &zeros,
+        &name("Pettson *"),
+        &name(""),
+        &zeros,
+    ]);
     let (mut a, mut b) = (vec![0i64; 77], vec![0i64; 77]);
     a[18] = 12 * 65536;
     b[0] = 1;
@@ -69,11 +80,45 @@ fn font_indices_select_authored_face_size_color_and_insertion_metrics() {
     let p = paige_styles(&fixture(), 2).unwrap();
     let s = &p["styles"][p["insertStyle"].as_u64().unwrap() as usize];
     assert_eq!(s["font"], "Pettson *");
-    assert_eq!((s["pointSize"].clone(), s["ascent"].clone(), s["descent"].clone()), (15.into(), 14.into(), 7.into()));
+    assert_eq!(
+        (
+            s["pointSize"].clone(),
+            s["ascent"].clone(),
+            s["descent"].clone()
+        ),
+        (15.into(), 14.into(), 7.into())
+    );
     assert_eq!(s["foreground"], json!([0x4c00, 0xa00, 0, 0]));
     assert_eq!(p["paragraphs"][0]["justification"], 1);
-    assert_eq!(p["styleRuns"], json!([{"offset": 0, "index": 1}, {"offset": 4, "index": 1}]));
+    assert_eq!(
+        p["styleRuns"],
+        json!([{"offset": 0, "index": 1}, {"offset": 4, "index": 1}])
+    );
     assert_eq!(p["styles"][0]["face"], json!({}));
+}
+
+#[test]
+fn large_edit_style_tables_preserve_the_selected_insertion_style() {
+    let mut records = fixture();
+    let mut style = vec![0; 77];
+    style[0] = 1;
+    style[18] = 15 * 65536;
+    let mut data = num(4449);
+    for _ in 0..4450 {
+        data.extend(numbers(&style));
+    }
+    records.insert(6, (data, 4450));
+    let document = paige_styles(&records, 2).unwrap();
+    assert_eq!(document["styles"].as_array().unwrap().len(), 4450);
+    assert_eq!(document["insertStyle"], 4449);
+    assert_eq!(document["styles"][4449]["font"], "Pettson *");
+    assert_eq!(document["styles"][4449]["pointSize"], 15);
+    records.get_mut(&6).unwrap().1 = 65536;
+    assert!(
+        paige_styles(&records, 2)
+            .unwrap_err()
+            .contains("excessive Paige section 6")
+    );
 }
 
 #[test]
@@ -83,7 +128,10 @@ fn record_truncations_fail_instead_of_guessing_font_names_or_metrics() {
         for n in 0..bytes.len() {
             let mut f = fixture();
             f.get_mut(&kind).unwrap().0 = bytes[..n].to_vec();
-            assert!(paige_styles(&f, 2).is_err(), "section {kind} truncated at {n}");
+            assert!(
+                paige_styles(&f, 2).is_err(),
+                "section {kind} truncated at {n}"
+            );
         }
     }
 }
@@ -102,7 +150,8 @@ fn run_sentinels_are_bounded_and_invalid_font_references_fail() {
 }
 
 #[test]
-fn original_font_binding_keeps_initial_and_insertion_sizes_distinct_and_records_reachable_evidence() {
+fn original_font_binding_keeps_initial_and_insertion_sizes_distinct_and_records_reachable_evidence()
+{
     let mut t = paige_styles(&fixture(), 2).unwrap();
     t["styles"][0]["font"] = json!("Pettson *");
     t["styleRuns"][0]["index"] = json!(0);
@@ -115,18 +164,30 @@ fn original_font_binding_keeps_initial_and_insertion_sizes_distinct_and_records_
         "casts": [{"number": 1, "file": "LO.DXR"}],
         "score": {"frames": [{"number": 3, "channels": [{"channel": 8, "bytes": bytes}]}]}})];
     let mut fonts = vec![json!({"number": 1, "aliases": ["Pettson", "Pettson *"]})];
-    assert_eq!(bind_text_fonts(&mut movies, &mut fonts, false).unwrap(), Vec::<Value>::new());
+    assert_eq!(
+        bind_text_fonts(&mut movies, &mut fonts, false).unwrap(),
+        Vec::<Value>::new()
+    );
     let member = &movies[0]["members"][0];
     assert_eq!(member["textStyle"]["size"], 12);
     assert_eq!(member["textInsertStyle"]["size"], 15);
     assert_eq!(member["textInsertStyle"]["color"], 0x4c0a00);
-    assert_eq!(fonts[0]["variants"], json!([{"size": 12, "asset": "fonts/f1-12.font64"}, {"size": 15, "asset": "fonts/f1-15.font64"}]));
-    let scripts = [("LO.DXR.lingo".to_string(), "member(\"namn\").text = \"Ab\"".to_string())];
+    assert_eq!(
+        fonts[0]["variants"],
+        json!([{"size": 12, "asset": "fonts/f1-12.font64"}, {"size": 15, "asset": "fonts/f1-15.font64"}])
+    );
+    let scripts = [(
+        "LO.DXR.lingo".to_string(),
+        "member(\"namn\").text = \"Ab\"".to_string(),
+    )];
     let a = text_reachability(&movies, &scripts);
     assert_eq!(a["computedReferencesProvenUnreachable"], false);
     assert_eq!(a["members"][0]["evidence"], "referenced");
     assert_eq!(a["members"][0]["scoreReferences"][0]["channel"], 8);
-    assert_eq!(a["members"][0]["literalNameReferences"], json!(["LO.DXR.lingo"]));
+    assert_eq!(
+        a["members"][0]["literalNameReferences"],
+        json!(["LO.DXR.lingo"])
+    );
 }
 
 #[test]
@@ -168,8 +229,15 @@ fn fmap_fixture(entries: &[(i64, i64, &str)]) -> Vec<u8> {
 
 #[test]
 fn fmap_decodes_cast_font_ids_prefers_windows_on_duplicates_and_rejects_truncation() {
-    let bytes = fmap_fixture(&[(32769, 2, "Arial"), (32770, 1, "Chicago"), (32770, 2, "GrundSchulGroteskBQ-RNew *")]);
-    assert_eq!(Value::Object(font_map(&bytes).unwrap()), json!({"32769": "Arial", "32770": "GrundSchulGroteskBQ-RNew *"}));
+    let bytes = fmap_fixture(&[
+        (32769, 2, "Arial"),
+        (32770, 1, "Chicago"),
+        (32770, 2, "GrundSchulGroteskBQ-RNew *"),
+    ]);
+    assert_eq!(
+        Value::Object(font_map(&bytes).unwrap()),
+        json!({"32769": "Arial", "32770": "GrundSchulGroteskBQ-RNew *"})
+    );
     for n in 0..bytes.len() {
         assert!(font_map(&bytes[..n]).is_err(), "truncated at {n}");
     }
@@ -177,7 +245,8 @@ fn fmap_decodes_cast_font_ids_prefers_windows_on_duplicates_and_rejects_truncati
 
 #[test]
 fn field_styles_bind_through_the_cast_font_map_only_when_the_game_policy_opts_in() {
-    let make = || vec![json!({"name": "LOGIN.DXR",
+    let make = || {
+        vec![json!({"name": "LOGIN.DXR",
         "casts": [{"number": 1, "file": "LOGIN.DXR", "fontMap": {"32770": "Pettson *", "32771": "Arial"}}],
         "members": [
             {"cast": 1, "number": 5, "name": "Line current", "text": "b", "textAlign": 1,
@@ -185,22 +254,65 @@ fn field_styles_bind_through_the_cast_font_map_only_when_the_game_policy_opts_in
             {"cast": 1, "number": 6, "name": "system", "text": "x", "textAlign": -1,
                 "sourceTextStyles": [{"offset": 0, "lineHeight": 16, "ascent": 13, "sourceFontId": 32771, "face": 0, "size": 12, "color": 0xff0000}]},
             {"cast": 1, "number": 7, "name": "unmapped", "text": "y", "textAlign": 0,
-                "sourceTextStyles": [{"offset": 0, "lineHeight": 0, "ascent": 0, "sourceFontId": 99, "face": 1, "size": 10, "color": 0}]}]})];
+                "sourceTextStyles": [{"offset": 0, "lineHeight": 0, "ascent": 0, "sourceFontId": 99, "face": 1, "size": 10, "color": 0}]}]})]
+    };
     let mut fonts = vec![json!({"number": 1, "aliases": ["Pettson", "Pettson *"]})];
     let mut off = make();
-    assert_eq!(bind_text_fonts(&mut off, &mut fonts, false).unwrap(), Vec::<Value>::new());
+    assert_eq!(
+        bind_text_fonts(&mut off, &mut fonts, false).unwrap(),
+        Vec::<Value>::new()
+    );
     assert!(off[0]["members"][0].get("textStyle").is_none());
     assert_eq!(fonts[0]["variants"], json!([]));
     let mut on = make();
     let limits = bind_text_fonts(&mut on, &mut fonts, true).unwrap();
     let bound = &on[0]["members"][0];
-    assert_eq!(bound["textStyle"], json!({"fontName": "Pettson *", "fontId": 1, "size": 24, "align": 1,
-        "ascent": 0, "descent": 0, "leading": 0, "lineHeight": 0, "color": 0}));
+    assert_eq!(
+        bound["textStyle"],
+        json!({"fontName": "Pettson *", "fontId": 1, "size": 24, "align": 1,
+        "ascent": 0, "descent": 0, "leading": 0, "lineHeight": 0, "color": 0})
+    );
     assert_eq!(bound["textInsertStyle"], bound["textStyle"]);
     assert_eq!(bound["textPresentation"], "recovered-original-font");
-    assert_eq!(fonts[0]["variants"], json!([{"size": 24, "asset": "fonts/f1-24.font64"}]));
+    assert_eq!(
+        fonts[0]["variants"],
+        json!([{"size": 24, "asset": "fonts/f1-24.font64"}])
+    );
     assert!(on[0]["members"][1].get("textStyle").is_none());
     assert!(on[0]["members"][2].get("textStyle").is_none());
-    let found: Vec<(Value, Value)> = limits.iter().map(|l| (l["kind"].clone(), l["fonts"][0].clone())).collect();
-    assert_eq!(found, [(json!("unavailable-source-font"), json!("Arial")), (json!("unavailable-source-font"), json!("font id 99"))]);
+    let found: Vec<(Value, Value)> = limits
+        .iter()
+        .map(|l| (l["kind"].clone(), l["fonts"][0].clone()))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (json!("unavailable-source-font"), json!("Arial")),
+            (json!("unavailable-source-font"), json!("font id 99"))
+        ]
+    );
+}
+
+#[test]
+fn live_flash_requires_exact_faces_and_preserves_distinct_authored_sizes() {
+    use director64_aot::convert::text::bind_flash_fonts;
+    let movies = vec![
+        json!({"name":"SYNTHETIC.DIR","members":[{"cast":2,"number":7,"flashFields":[
+        {"fontName":"Original Face","fontHeight":12},{"fontName":"Original Face","fontHeight":16},
+        {"fontName":"Original Face","fontHeight":12}],"flashFontUses":[{"fontName":"Times New Roman","fontHeight":12}]}]}),
+    ];
+    let mut fonts = vec![json!({"number":1,"aliases":["Original Face"],"variants":[]})];
+    let limits = bind_flash_fonts(&movies, &mut fonts).unwrap();
+    assert_eq!(
+        fonts[0]["variants"],
+        json!([{"size":12,"asset":"fonts/f1-12.font64"},{"size":16,"asset":"fonts/f1-16.font64"}])
+    );
+    assert_eq!(limits[0]["kind"], "flash-source-font-missing");
+    assert_eq!(limits[0]["implemented"], false);
+    assert_eq!(limits[0]["cast"], 2);
+    assert_eq!(limits[0]["member"], 7);
+    assert_eq!(limits[0]["fonts"], json!(["Times New Roman"]));
+    fonts.push(json!({"number":2,"aliases":["Times New Roman"],"variants":[]}));
+    assert!(bind_flash_fonts(&movies, &mut fonts).unwrap().is_empty());
+    assert_eq!(fonts[1]["variants"][0]["size"], 12);
 }

@@ -1,0 +1,20 @@
+-- Synthetic pixel inputs only; see docs/reference-capture.md.
+global p, q, out
+out = new(xtra("fileio"))
+out.createFile("C:\ink-results.txt")
+out.openFile("C:\ink-results.txt",2)
+p = image(1,1,32)
+q = image(1,1,32)
+repeat with ink in [35,37,39,40,41]
+  repeat with src in [0,64,128,192,255]
+    repeat with fg in [0,50,128,255]
+      repeat with bg in [0,64,128,255]
+        p.setPixel(point(0,0),rgb(src,src,src))
+        q.setPixel(point(0,0),rgb(10,20,30))
+        q.copyPixels(p,rect(0,0,1,1),rect(0,0,1,1),[#ink:ink,#color:rgb(fg,fg,fg),#bgColor:rgb(bg,bg,bg)])
+        out.writeString(string([ink,src,fg,bg,q.getPixel(point(0,0))]) & RETURN)
+      end repeat
+    end repeat
+  end repeat
+end repeat
+out.closeFile()

@@ -148,6 +148,8 @@ def test_save_fixture_pins_native_receipts_and_isolates_gopher_bytes(boot, tmp_p
         "REQUIREMENT_FAIL rdram",
         "RSP CRASH",
         "ASSERTION FAILED",
+        "DIRECTOR64 NATIVE_TRACE SCRIPT_ERROR source handler failed",
+        "CPU EXCEPTION: write to invalid memory address",
         "Error: capture timed out",
         "thread panicked",
     ],

@@ -12,7 +12,7 @@ static const char *const global_names[] = {
 };
 static lv_runtime_t values;
 static dg_runtime_t director;
-static unsigned busy_until[DG_SOUND_CHANNELS], sound_started[DG_SOUND_CHANNELS], sound_count;
+
 static unsigned char flash[131072];
 static bool flash_read(void *ctx, size_t offset, void *data, size_t length) {
   (void)ctx; if (offset > sizeof(flash) || length > sizeof(flash) - offset) return false;
@@ -28,20 +28,7 @@ static bool read_file(void *ctx, const char *name, char *data, unsigned cap, uns
 static bool write_file(void *ctx, const char *name, const char *data, unsigned length) {
   (void)ctx; return game_write_file(name, data, length);
 }
-static void sound(void *ctx, unsigned channel, const dg_member_t *m) {
-  (void)ctx;
-  busy_until[channel] = director.ticks + (m && m->rate ? (m->samples * 60u + m->rate - 1) / m->rate : 0);
-  sound_started[channel] = director.ticks;
-  if (m && m->looping) busy_until[channel] = UINT32_MAX;
-  sound_count++;
-}
-static bool busy(void *ctx, unsigned channel) { (void)ctx; return director.ticks < busy_until[channel]; }
-// No mixer here, so playback advances with the tick the sound started on.
-static unsigned position(void *ctx, unsigned channel) {
-  (void)ctx;
-  if (director.ticks <= sound_started[channel]) return 0;
-  return (director.ticks - sound_started[channel]) * 1000u / 60u;
-}
+#include "audio.inc"
 static void trace(void *ctx, const char *text) { (void)ctx; fprintf(stderr, "TRACE %s\n", text); }
 static bool hit(void *ctx, const dg_member_t *m, unsigned ink, int x, int y) {
   (void)ctx; return native_image_hit(&values, m, ink, x, y);
@@ -65,11 +52,10 @@ static bool enter(const dg_movie_t *movie, unsigned frame) {
   return dg_enter(&director, movie, frame, shared, count);
 }
 static void boot(void) {
-  memset(busy_until, 0, sizeof(busy_until));
-  memset(sound_started, 0, sizeof(sound_started));
+  memset(probe_voices, 0, sizeof(probe_voices));
   game_save_load((save_backend_t){flash_read, flash_write, NULL});
   dg_init(&director, &values, (dg_platform_t){.read_file=read_file, .write_file=write_file,
-    .nth_file=game_nth_file, .long_date=game_long_date, .sound=sound, .sound_busy=busy, .sound_position=position, .trace=trace, .hit=hit},
+    .nth_file=game_nth_file, .long_date=game_long_date, .sound=sound, .sound_busy=busy, PROBE_AUDIO_POSITION .sound_pause=sound_pause, .sound_break_loop=sound_break_loop, .trace=trace, .hit=hit},
     NULL, global_names, sizeof(global_names)/sizeof(*global_names), 42);
 }
 #include "draw_record.inc"

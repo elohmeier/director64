@@ -1,0 +1,18 @@
+-- Synthetic RGB inputs expose indexed nearest-colour conversion.
+global out, p, q, paletteMode, i, c
+out=new(xtra("fileio"))
+out.createFile("C:\palette-quantize.txt")
+out.openFile("C:\palette-quantize.txt",2)
+repeat with paletteMode in [#systemMac,#systemWin]
+ p=image(256,1,8,paletteMode)
+ q=image(256,1,32)
+ repeat with i=0 to 255
+  c=rgb(i,255-i,(i*37) mod 256)
+  p.setPixel(point(i,0),c)
+ end repeat
+ q.copyPixels(p,rect(0,0,256,1),rect(0,0,256,1),[#ink:0])
+ repeat with i=0 to 255
+  out.writeString(string([paletteMode,i,p.getPixel(point(i,0)),q.getPixel(point(i,0))])&RETURN)
+ end repeat
+end repeat
+out.closeFile()

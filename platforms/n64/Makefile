@@ -6,6 +6,7 @@ $(error WORK is required)
 endif
 DIRECTOR_VERSION ?= 6
 EXTENDED_D6 ?= 0
+DIRECTOR85 ?= 0
 GENERATED_POINTER ?= 0
 CONTROLLER_COUNT ?= 1
 REPLAY_SCENARIO ?= 1
@@ -29,6 +30,9 @@ ifeq ($(DIRECTOR_VERSION),10)
 # the resident controller window and the planes inside the 8 MiB console.
 # Appended after n64.mk's -O2 inside its target-specific flag sets.
 N64_C_AND_CXX_FLAGS += -Os
+# Pixel loops benefit from the SDK optimization level. Keep the interpreter
+# size-optimized: its measured speed gain did not justify 129 KiB of RDRAM.
+$(BUILD_DIR)/director_main.o: CFLAGS += -O2
 endif
 # The pinned n64.mk emits --padding 0 when metadata is set at include time,
 # but n64tool requires a suffix for one-digit sizes. Let n64metadata pad last.
@@ -36,7 +40,8 @@ N64_ROM_METADATA := $(BUILD_DIR)/metadata.ini
 N64_TOOLFLAGS += --padding 0B
 
 CFLAGS += $(addprefix -I,$(SOURCE_DIRS) $(ROOT)/runtime/storage $(ROOT)/runtime) -I$(WORK)/aot/c -I$(WORK)/director/c
-CFLAGS += -DDIRECTOR64_DIRECTOR_VERSION=$(DIRECTOR_VERSION) -DDIRECTOR64_EXTENDED_D6=$(EXTENDED_D6)
+CFLAGS += -DDIRECTOR64_N64=1
+CFLAGS += -DDIRECTOR64_DIRECTOR_VERSION=$(DIRECTOR_VERSION) -DDIRECTOR64_EXTENDED_D6=$(EXTENDED_D6) -DDIRECTOR64_D85=$(DIRECTOR85)
 # The ports the ROM header declares are the ports the runtime reads, so the
 # number of on-screen cursors never disagrees with the menu's player count.
 CFLAGS += -DDIRECTOR64_CONTROLLER_COUNT=$(CONTROLLER_COUNT)
@@ -53,9 +58,12 @@ endif
 ifneq ($(filter 1,$(EXTENDED_D6))$(filter $(DIRECTOR_VERSION),7 8 10),)
 SOURCES += text_input.c
 endif
-ifeq ($(DIRECTOR_VERSION),5)
+ifneq ($(filter $(DIRECTOR_VERSION),5 10),)
 SOURCES += d5_video.c
 LDFLAGS += --wrap=sys_hw_memset
+endif
+ifeq ($(DIRECTOR_VERSION),10)
+SOURCES += flash_audio.c
 endif
 SOURCES += $(notdir $(filter-out %/director_replay.c,$(wildcard $(ROOT)/games/$(GAME)/runtime/*.c)))
 N64_MKDFS_ROOT := $(WORK)/filesystem

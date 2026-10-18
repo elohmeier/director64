@@ -2,6 +2,7 @@
 #define DIRECTOR64_DIRECTOR_H
 #include "lingo_runtime.h"
 #include "cursor.h"
+#include "imaging.h"
 
 #if DG_D5
 #define DG_SPRITES 49
@@ -56,22 +57,6 @@
 // loops leave VR4300 time for input, audio and drawing at the 60 Hz service
 // rate.
 #define DG_SERVICE_BUDGET 288
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-// A film loop channel a script drives inside `tell sprite(n)`: Director 8.5
-// engines (Birthday's, Ghosts' psAnimation) animate whole scenes by setting
-// the member, position, ink, blend and size of a placeholder loop's own
-// channels each frame. The loop then draws these instead of its recorded
-// frames; positions are in the loop's space (its top-left at 0,0).
-typedef struct {
-  uint16_t parent;
-  uint8_t channel, ink, blend, sized;
-  uint32_t member;
-  int16_t x, y, width, height;
-} dg_film_child_t;
-#define DG_FILM_CHILDREN 256
-// A sprite reference to one: flag, parent channel << 8, loop channel.
-#define DG_CHILD_SPRITE 0x40000000
-#endif
 // A member id packs its file, its cast within that file and its number:
 // file << 21 | cast << 16 | number. Five cast bits hold the 17 cast
 // libraries a Findus 8.5 movie keeps in one file.
@@ -122,7 +107,6 @@ _Static_assert(DG_TIMEOUT_ROOT + DG_TIMEOUTS < LV_ROOTS,
 // scripts (a text field and its ActionScript geometry). Each slot roots one
 // property bag; the exercises address a handful per screen.
 #define DG_FLASH_OBJECTS 64
-#define DG_IMAGE_ALIASES 8
 #define DG_FLASH_ROOT (DG_TIMEOUT_ROOT + DG_TIMEOUTS)
 _Static_assert(DG_FLASH_ROOT + DG_FLASH_OBJECTS < LV_ROOTS,
                "flash object roots must fit in the Lingo root table");
@@ -164,6 +148,29 @@ typedef struct {
   uint16_t frame;
 } dg_label_t;
 #if DG_D10
+typedef struct dg_film_frame dg_film_frame_t;
+typedef struct dg_film_track dg_film_track_t;
+typedef struct dg_flash_clip dg_flash_clip_t;
+typedef struct dg_flash_button dg_flash_button_t;
+typedef struct {
+  uint16_t frame; // One-based frame; zero initializes a definition/placement.
+  uint32_t event, length; // Event zero is a frame action; other bits retain SWF conditions.
+  const uint8_t *code;
+  uint8_t key; // ClipEventKeyPress key; button key conditions remain in event.
+} dg_flash_action_t;
+typedef struct {uint16_t clip_id; dg_flash_action_t action;} dg_flash_initializer_t;
+typedef struct {
+  uint32_t position; // Envelope positions retain SWF's 44.1 kHz time base.
+  uint16_t left, right;
+} dg_flash_envelope_t;
+typedef struct {
+  uint16_t frame, sound, loops;
+  uint8_t flags, envelope_count;
+  uint32_t in_point, out_point;
+  const dg_flash_envelope_t *envelopes;
+} dg_flash_sound_event_t;
+typedef struct { uint16_t id; const char *asset; uint32_t samples, rate; } dg_flash_sound_t;
+typedef struct { uint16_t id; const char *name; } dg_flash_export_t;
 // A named edit-text field recorded from a converted Flash member: authored
 // scripts address it by instance name (sprite(n).my_txt) or bound variable
 // (setVariable("text1", …)) and the prompt renders as a text overlay above
@@ -175,7 +182,15 @@ typedef struct {
   uint8_t align, word_wrap, multiline;
   int8_t leading;
   const dg_text_style_t *style;
+  int32_t local_bounds[4]; // 16.16 left,top,width,height before SWF placement.
+  uint16_t id; // Character definition ID; the placement owns its live value.
+  bool embed_fonts; // DefineEditText UseOutlines; device text is not mask geometry.
 } dg_flash_field_t;
+typedef struct {
+  const char *name, *target, *property;
+  uint8_t operation, argument; // 1 add, 2 set, 3 font size, 4 unescaped text.
+  bool method; // Receiver is target field rather than the containing sprite.
+} dg_flash_helper_t;
 #endif
 #if DG_EXTENDED
 // One authored cue point in a sound member: where it falls, and the name the
@@ -213,22 +228,62 @@ typedef struct {
   const char *video_audio;
   uint32_t video_flags;
 #endif
-#if DG_D5
+#if DG_D5 || DG_D10
+  // Interleaved sound1/sound2 member ids, two entries per film frame.
+  // NULL when the cast's sound-enable flag is clear.
   const uint32_t *film_sounds;
 #endif
 #if DG_D10
-  uint8_t source_xtra; // 0 native, 1 Flash, 2 vectorShape, 3 DirectMedia video.
+  uint8_t source_xtra; // 0 native, 1 Flash, 2 vectorShape, 3 DirectMedia, 4 QuickTime video, 5 color cursor.
   // The recorded dynamic Flash surface: authored frame labels over the
   // flattened film timeline, and the named edit-text fields whose prompts
   // render as text overlays.
   uint8_t flash_label_count, flash_field_count;
   const dg_label_t *flash_labels;
   const dg_flash_field_t *flash_fields;
+  // A linked Director movie: a registry identity, independent child stage
+  // origin, and the authored movie-cast flags (scripts16, sound8, noLoop32,
+  // noCrop2, center1).
+  uint16_t linked_movie;
+  uint32_t linked_flags;
+  int16_t linked_left, linked_top;
+  // Recorded film frames requiring live composition (text or nested
+  // runtime media). Frames use the same playhead as flattened film poses.
+  const dg_film_frame_t *film_frames;
+  int16_t film_left, film_top;
+  uint32_t film_flags; // Native film cast: sound8, no-loop32, scale2, center1.
+  uint16_t film_track_count;
+  const dg_film_track_t *film_tracks;
+  uint16_t flash_stop_count;
+  const uint16_t *flash_stops; // Authored one-based Stop action frames.
+  uint16_t flash_helper_count;
+  const dg_flash_helper_t *flash_helpers;
+  uint8_t flash_variant_count; // Zero/one: ordinary poses; >one: frame-major phase variants.
+  uint32_t flash_rate; // Intrinsic SWF frames per second, 16.16 fixed point.
+  const uint32_t *flash_audio_positions; // PCM offset per root frame; UINT32_MAX means no block.
+  uint8_t flash_playback_mode; // 0 Normal, 1 Fixed, 2 Lock-Step.
+  uint32_t flash_fixed_rate; // Fixed playback frames per second, 16.16.
+  uint8_t flash_direct_to_stage, flash_version;
+  uint16_t flash_clip_count, flash_button_count, flash_sound_count, flash_export_count;
+  const dg_flash_clip_t *flash_clips;
+  const dg_flash_button_t *flash_buttons;
+  const dg_flash_sound_t *flash_sounds;
+  const dg_flash_export_t *flash_exports;
+  uint16_t flash_initializer_count;
+  const dg_flash_initializer_t *flash_initializers;
+  // Exact styles needed by script-created fields or TextFormat objects.
+  uint16_t flash_font_count;
+  const dg_text_style_t *const *flash_fonts;
 #endif
+  uint16_t palette_count; // Exact authored CLUT size, 0 when absent.
+  const uint32_t *palette;
 } dg_member_t;
 typedef struct {
   const char *name;
   uint16_t file, cast;
+#if DG_MODERN
+  const char *const *shape_patterns;
+#endif
 } dg_cast_t;
 #if DG_EXTENDED
 typedef struct {
@@ -254,6 +309,67 @@ typedef struct {
   uint8_t behavior_count;
 #endif
 } dg_spec_t;
+#if DG_D10
+struct dg_film_track {
+  uint16_t channel, count;
+  uint32_t size;
+  const uint8_t *data; // LE frame/mask, then changed fields; film_track.h.
+};
+// Script edits overlay the current recorded film frame, per parent instance.
+// Keep the owning member so reusing a stage channel cannot leak old edits.
+#define DG_FILM_CHILDREN 256
+#define DG_CHILD_SPRITE 0x40000000u
+#define DG_CHILD_SHIFT 10
+#define DG_CHILD_CHANNEL_MASK 1023u
+#define DG_CHILD_VISIBLE 0x10000u
+#define DG_CHILD_STRETCH 0x20000u
+typedef struct {
+  uint16_t parent, channel;
+  uint32_t owner, mask;
+  dg_spec_t value;
+  bool visible, puppet;
+} dg_film_child_t;
+#endif
+#if DG_D10
+typedef struct {
+  uint16_t channel, film_frame;
+  dg_spec_t value;
+  // Direct Flash depth planes use member=0. Origins retain the authored
+  // object's translation in 16.16 stage pixels, independent of pixel crop.
+  const char *asset, *name;
+  // Geometric Flash masks ignore fill opacity, color transforms and strokes.
+  // Every retained raster leaf supplies coverage, sharing asset when equal.
+  const char *mask_asset;
+  int32_t origin_x, origin_y;
+  bool affine;
+  int32_t matrix[6]; // 16.16 a,b,c,d,tx,ty; live text's authored placement.
+  uint16_t clip_id, button_id, field_id, clip_depth;
+  uint32_t placement_generation;
+  bool has_cxform;
+  int16_t cxform[8]; // RGBA multipliers divided by256, then RGBA offsets.
+  uint16_t action_count;
+  const dg_flash_action_t *actions;
+} dg_film_layer_t;
+struct dg_film_frame {
+  uint16_t count;
+  const dg_film_layer_t *layers;
+};
+struct dg_flash_clip {
+  uint16_t id, frame_count, action_count, label_count, sound_event_count;
+  int32_t local_bounds[4]; // Geometry origin and extent; never an implicit clip.
+  const dg_film_frame_t *frames; // ID0 uses the member's root film_frames.
+  const dg_flash_action_t *actions;
+  const dg_label_t *labels;
+  const dg_flash_sound_event_t *sound_events;
+};
+struct dg_flash_button {
+  uint16_t id, action_count;
+  bool track_as_menu;
+  int32_t local_bounds[4];
+  dg_film_frame_t states[4]; // Up, Over, Down, HitTest.
+  const dg_flash_action_t *actions;
+};
+#endif
 typedef struct {
   uint16_t channel, mask;
   dg_spec_t value;
@@ -323,6 +439,14 @@ typedef struct {
 #endif
   unsigned auto_mask;
   unsigned film_frame;
+  bool film_paused;
+#if DG_D10
+  uint16_t film_instance; // Transient native-film playback instance, zero for a fresh stage sprite.
+  uint8_t flash_variant, flash_clock; // One-based initial choice; independent nested clock modulo variants.
+  double flash_phase; // Fractional Flash clock; absolute root frame for streamed audio.
+  uint32_t flash_fixed_rate;
+  uint8_t flash_mode, flash_settings; // Sprite overrides: mode bit1, fixed-rate bit2.
+#endif
 #if DG_MODERN
   float quad[8]; // offsets from sprite location, for authored script quads
 #endif
@@ -355,6 +479,8 @@ typedef struct {
   char data[16384];
 #endif
 } dg_file_t;
+struct dg_runtime;
+struct dg_flash_instance;
 typedef struct {
   // Read/write an explicitly named virtual save file; never a host path.
   bool (*read_file)(void *, const char *, char *, unsigned, unsigned *);
@@ -362,6 +488,10 @@ typedef struct {
   const char *(*nth_file)(void *, const char *, int);
   bool (*sound_busy)(void *, unsigned);
   void (*sound)(void *, unsigned, const dg_member_t *);
+  // Pause/resume a channel without losing its position or busy state.
+  void (*sound_pause)(void *, unsigned, bool);
+  // Disable looping without seeking; continue through the sound's tail.
+  void (*sound_break_loop)(void *, unsigned);
   void (*trace)(void *, const char *);
   bool (*hit)(void *, const dg_member_t *, unsigned, int, int);
   const char *(*long_date)(void *);
@@ -395,6 +525,13 @@ typedef struct {
   // Keep what the stage shows now as the member's image (`member.image =
   // (the stage).image`); NULL leaves such members showing their own image.
   void (*capture_stage)(void *, uint32_t member);
+  // Copy an authored member (including text), or the stage for member 0,
+  // into independently owned pixels. Failure is a script error.
+  bool (*read_image)(void *, uint32_t member, dg_pixel_image_t *);
+  // Embedded Flash text used as a geometric mask: sample glyph coverage
+  // in field-local authored coordinates, independent of object opacity.
+  bool (*flash_field_hit)(void *, struct dg_runtime *,
+                          struct dg_flash_instance *, float x, float y);
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
   // Which character of a text member's box lies at (x, y) in that box, as
   // the host set it: 0-based in Unicode characters, -1 for none. `sprite`
@@ -404,7 +541,7 @@ typedef struct {
 #endif
 #endif
 } dg_platform_t;
-typedef struct {
+typedef struct dg_runtime {
   lv_runtime_t *values;
   dg_platform_t platform;
   void *context;
@@ -505,11 +642,17 @@ typedef struct {
   unsigned timeout_cursor;
   struct {
     unsigned sprite;
+    uint32_t member;
+    uint16_t overridden;
     char name[24];
   } flash_objects[DG_FLASH_OBJECTS];
   unsigned flash_object_count;
   // The sprite holding keyboard focus, or zero for none.
   unsigned keyboard_focus;
+  bool key_dispatch_down;
+  struct { uint32_t member, fixed_rate; uint8_t mode; bool paused; } flash_playback[DG_FIELDS];
+  unsigned flash_playback_count;
+  struct dg_flash_state *flash_state;
 #endif
 #endif
   unsigned drag_sprite;
@@ -517,6 +660,7 @@ typedef struct {
   bool mouse_down, mouse_pressed, mouse_released, mouse_up_dispatch,
       await_release, quit, transitioned;
   uint32_t sound_serial[DG_SOUND_CHANNELS], sounds[DG_SOUND_CHANNELS];
+  bool sound_paused[DG_SOUND_CHANNELS];
   bool sound_puppet[DG_SOUND_CHANNELS];
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
   // Each sound object's playlist (queue/setPlaylist): members still to
@@ -610,12 +754,14 @@ typedef struct {
   bool exit_lock, search_current_folder;
   uint32_t stage_color;
   uint16_t channel_volume[DG_SOUND_CHANNELS], fade_volume[DG_SOUND_CHANNELS];
+  uint16_t fade_target[DG_SOUND_CHANNELS];
+  bool fade_restore[DG_SOUND_CHANNELS];
   uint32_t fade_start[DG_SOUND_CHANNELS], fade_duration[DG_SOUND_CHANNELS];
   uint32_t loop_members[64];
   bool loop_values[64];
   unsigned loop_count;
   char field_fonts[DG_FIELDS][64];
-  bool field_text_changed[DG_FIELDS];
+  bool field_text_changed[DG_FIELDS], field_font_changed[DG_FIELDS];
   int field_scroll[DG_FIELDS];
   bool begin_pending[DG_SPRITES];
 #endif
@@ -634,12 +780,11 @@ typedef struct {
   // `play movie` returns: the calling movie and frame `play done` resumes.
   char play_return[4][64];
   unsigned play_return_frame[4], play_depth;
-  // Film loop channels scripts drive through `tell sprite(n)`; see
-  // dg_film_child_t.
-  dg_film_child_t film_children[DG_FILM_CHILDREN];
-  unsigned film_child_count;
 #endif
 #if DG_D10
+  dg_film_child_t film_children[DG_FILM_CHILDREN];
+  unsigned film_child_count;
+  struct dg_film_playback *film_playback;
   // The name `the movieName` answers when the platform entered the movie
   // by an authored long name its 8.3 file truncates ("Baumhoehle.dxr");
   // empty answers the file's own name.
@@ -654,6 +799,9 @@ typedef struct {
   char file_names[4][32];
   uint32_t field_members[DG_FIELDS];
   unsigned field_count;
+  uint8_t field_patterns[DG_FIELDS];
+  uint32_t active_palette[256];
+  bool palette_active, palette_puppet;
   dg_cursor_t cursor;
   int sound_level, color_depth, float_precision;
   // Whether the code for a member or behavior script declares any mouse
@@ -692,17 +840,45 @@ typedef struct {
   uint32_t event_quiet[3][(DG_SPRITES + 31) / 32];
 #endif
 #if DG_D10
-  // Bitmap members whose image a script replaced (`member.image = x`): drawn
-  // from another member's image, or with source 0 from the snapshot of the
-  // stage the platform took when `(the stage).image` was assigned. The
-  // authored stage covers take that snapshot before a scene changes and
-  // show it until the new scene is set up.
-  struct {
-    uint32_t member, source;
-  } image_aliases[DG_IMAGE_ALIASES];
-  unsigned image_alias_count;
+  // Owned Imaging Lingo surfaces, reclaimed by script reachability.
+  dg_imaging_t *imaging;
+  struct dg_linked_state *linked_state;
+  struct dg_linked_child *linked_children;
+  struct dg_runtime *linked_parent;
+  struct dg_runtime *linked_sound_owner[DG_SOUND_CHANNELS];
+  uint32_t linked_flags;
+  // Per-boot instance identity for platform resources; never reuse a removed
+  // child's video/audio handle even if the allocator reuses its address.
+  uint32_t linked_instance, linked_next_instance;
+  uint32_t linked_frame_serial;
+  unsigned linked_depth, linked_focus;
+  bool linked_paused;
+  uint16_t film_sound_sprite[2], film_sound_pose[2];
+  uint32_t film_sound_instance[2];
+  uint32_t linked_channels[(DG_SPRITES + 31) / 32];
+  uint32_t flash_direct_channels[(DG_SPRITES + 31) / 32];
+
 #endif
 } dg_runtime_t;
+static inline const uint32_t *dg_stage_palette(const dg_runtime_t *d) {
+#if DG_D10
+  while (d->linked_parent) d = d->linked_parent;
+#endif
+  return d->palette_active ? d->active_palette : d->movie ? d->movie->palette : NULL;
+}
+
+unsigned dg_member_pattern(const dg_runtime_t *, const dg_member_t *);
+const char *dg_shape_texture(const dg_runtime_t *, const dg_member_t *, unsigned pattern);
+
+// Stable during an instance's lifetime and distinct across linked movies.
+static inline unsigned dg_video_player_id(const dg_runtime_t *d, unsigned channel) {
+#if DG_D10
+  return d->linked_instance * DG_SPRITES + channel;
+#else
+  (void)d;
+  return channel;
+#endif
+}
 
 void dg_init(dg_runtime_t *, lv_runtime_t *, dg_platform_t, void *,
              const char *const *, unsigned, uint32_t);
@@ -714,6 +890,8 @@ dg_cursor_t dg_cursor_current(dg_runtime_t *);
 void dg_stop_sounds(dg_runtime_t *);
 unsigned dg_opacity(const dg_sprite_t *);
 unsigned dg_film_pose(const dg_member_t *, const dg_sprite_t *);
+unsigned dg_film_storage_pose(const dg_member_t *, const dg_sprite_t *);
+const char *dg_film_asset(const dg_member_t *, const dg_sprite_t *);
 bool dg_tick(dg_runtime_t *, int, int, bool, unsigned);
 #if DG_EXTENDED
 bool dg_edit_text(dg_runtime_t *, unsigned sprite, const char *text);
@@ -730,14 +908,32 @@ bool dg_clock_advance(uint64_t *, uint64_t, unsigned *);
 bool dg_seek(dg_runtime_t *, unsigned);
 const dg_member_t *dg_member(dg_runtime_t *, uint32_t);
 #if DG_D5 || DG_D10
-// A member the platform plays as video: D5's digital video, D10's
-// DirectMedia Xtra.
+// Converted native video, including QuickTime and DirectMedia Xtras.
 static inline bool dg_is_video(const dg_member_t *m) {
 #if DG_D5
   return m && m->type == 10;
 #else
-  return m && m->type == 15 && m->source_xtra == 3;
+  return m && (m->type == 10 || (m->type == 15 && (m->source_xtra == 3 || m->source_xtra == 4)));
 #endif
+}
+// Flash stream sound uses the same per-instance media players as video,
+// while its picture continues through the live Flash compositor.
+static inline bool dg_is_flash_audio(const dg_member_t *m) {
+#if DG_D10
+  return m && m->source_xtra == 1 && m->flash_audio_positions &&
+         m->video_audio && *m->video_audio && m->rate;
+#else
+  (void)m; return false;
+#endif
+}
+static inline bool dg_has_media(const dg_member_t *m) {
+  return dg_is_video(m) || dg_is_flash_audio(m);
+}
+static inline double dg_media_duration(const dg_member_t *m) {
+  return dg_is_flash_audio(m) ? (double)m->samples * 600 / m->rate : m->samples;
+}
+static inline bool dg_media_sound(const dg_member_t *m) {
+  return dg_is_flash_audio(m) || (m->video_flags & 8);
 }
 #endif
 const dg_movie_t *dg_loaded(dg_runtime_t *, unsigned);
@@ -762,11 +958,32 @@ void dg_update_stage(dg_runtime_t *);
 // property services; refreshes D8 event eligibility even if already stage-dirty.
 void dg_sprite_changed(dg_runtime_t *, unsigned);
 #if DG_D10
-// Whether a script replaced the member's image, and with what: another
-// member's id, or 0 for the platform's stage snapshot.
-// The image source of a blank image(w, h, depth): the member draws nothing.
-#define DG_IMAGE_BLANK 0xffffffffu
-bool dg_image_source(const dg_runtime_t *, uint32_t member, uint32_t *source);
+uint32_t dg_film_sound(dg_runtime_t *, unsigned root, unsigned channel, unsigned *pose, unsigned *source);
+void dg_films_dispose(dg_runtime_t *);
+void dg_film_reset(dg_runtime_t *, unsigned stage_channel);
+void dg_films_present(dg_runtime_t *, bool advance_roots);
+unsigned dg_film_prepare(dg_runtime_t *, unsigned parent, const dg_sprite_t *, const dg_member_t *);
+lv_t dg_film_tell(dg_runtime_t *, lv_t parent, unsigned channel);
+bool dg_film_go(dg_runtime_t *, lv_t parent, unsigned frame);
+unsigned dg_film_frame(dg_runtime_t *, lv_t parent, bool last);
+bool dg_film_recorded_layer(dg_runtime_t *, const dg_member_t *, unsigned pose, unsigned channel, dg_film_layer_t *);
+bool dg_film_child_layer(dg_runtime_t *, unsigned parent, unsigned channel, dg_film_layer_t *);
+#endif
+#if DG_D10
+// NULL until image pixels are changed or assigned. Mutations invalidate the stage.
+const dg_pixel_image_t *dg_member_image(const dg_runtime_t *, uint32_t member);
+// Cached exterior-white matte for owned mutable images; NULL on failure.
+const uint8_t *dg_image_matte(dg_runtime_t *, const dg_pixel_image_t *);
+// Direct stage painting lasts until the next ordinary stage change.
+const dg_pixel_image_t *dg_stage_image(const dg_runtime_t *);
+// Enter/leave the child's shared-heap interpreter context for composition.
+dg_runtime_t *dg_linked_begin(dg_runtime_t *, unsigned channel);
+void dg_linked_end(dg_runtime_t *);
+const dg_runtime_t *dg_linked_movie(const dg_runtime_t *, unsigned channel);
+void dg_linked_dispose(dg_runtime_t *);
+
+// Release all owned image storage before discarding or reinitializing a runtime.
+void dg_images_dispose(dg_runtime_t *);
 // The named field of a Flash member, matched case-insensitively against the
 // recorded instance name or bound variable; NULL when the name is not a field.
 const dg_flash_field_t *dg_flash_field_find(const dg_member_t *, const char *);

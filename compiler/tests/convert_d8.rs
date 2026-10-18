@@ -5,9 +5,10 @@ mod common;
 
 use common::*;
 use director64_aot::convert::bitmap::{
-    bitmap_metadata, bitmap_pixels, bitmap_source_alpha, builtin_palette, decode_palette, score_model, Meta,
+    Meta, bitmap_metadata, bitmap_pixels, bitmap_source_alpha, builtin_palette, decode_palette,
+    score_model,
 };
-use director64_aot::convert::fdi::{fdi_image, fdi_pixel, FdiMeta};
+use director64_aot::convert::fdi::{FdiMeta, fdi_image, fdi_pixel};
 use director64_aot::convert::js::hex;
 use director64_aot::convert::swf::vector_shape_pixels;
 use director64_aot::convert::xtra::text_xtra_model;
@@ -23,9 +24,17 @@ fn score_retains_48_byte_partial_updates_and_high_sprite_channels() {
         "deltas": [{"channel_offset": 805 * 48 + 24, "payload": {"length": 8}}]}]});
     let model = score_model(&score, None).unwrap();
     let channel = &model["frames"][0]["channels"][0];
-    assert_eq!((model["recordSize"].clone(), model["version"].clone()), (48.into(), 13.into()));
+    assert_eq!(
+        (model["recordSize"].clone(), model["version"].clone()),
+        (48.into(), 13.into())
+    );
     assert_eq!(channel["channel"], 805);
-    let recorded: Vec<u8> = channel["bytes"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect();
+    let recorded: Vec<u8> = channel["bytes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap() as u8)
+        .collect();
     assert_eq!(recorded.len(), 48);
     let changed: Vec<i64> = (0..48).map(|i| i64::from((24..32).contains(&i))).collect();
     assert_eq!(channel["changed"], json!(changed));
@@ -46,8 +55,47 @@ fn builtin_palette_operands_resolve_exact_mac_cube_and_grayscale_ramps() {
     assert_eq!(mac[245], [238, 238, 238]);
     assert_eq!(mac[255], [0, 0, 0]);
     assert_eq!(gray[91], [164, 164, 164]);
-    assert_eq!(decode_palette(&builtin_palette(-2, 4).unwrap()).unwrap()[1], [238, 238, 238]);
+    assert_eq!(
+        decode_palette(&builtin_palette(-2, 4).unwrap()).unwrap()[1],
+        [238, 238, 238]
+    );
     assert!(builtin_palette(-8, 8).unwrap_err().contains("unsupported"));
+}
+
+#[test]
+fn four_bit_mac_pixels_match_original_projector_index_observations() {
+    let palette = builtin_palette(0, 4).unwrap();
+    let meta = Meta {
+        width: 16,
+        height: 1,
+        depth: 4,
+        pitch: 8,
+        palette: 0,
+        palette_cast: 0,
+        reg_x: 0,
+        reg_y: 0,
+        use_alpha: false,
+        alpha_threshold: 0,
+        update_flags: 0,
+    };
+    let rgba = bitmap_pixels(
+        &meta,
+        &[0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef],
+        Some(&palette),
+        true,
+    )
+    .unwrap();
+    // Numerical readback from the source-free palette-mac-four probe.
+    let observed = [
+        0xffffff, 0xbebebe, 0xffe600, 0x808080, 0x9fd8ff, 0x7c601b, 0x009e00, 0x8ed200, 0xde00bf,
+        0x8d00a3, 0xfa0039, 0xff8c32, 0x0000ea, 0x00f0db, 0x646464, 0,
+    ];
+    for (i, rgb) in observed.into_iter().enumerate() {
+        assert_eq!(
+            &rgba[i * 4..i * 4 + 3],
+            &[(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8]
+        );
+    }
 }
 
 #[test]
@@ -59,7 +107,11 @@ fn authored_empty_bitmaps_remain_empty_and_truncated_color_metadata_fails() {
     let meta = bitmap_metadata(&bytes, 600).unwrap();
     assert_eq!((meta.width, meta.height), (0, 0));
     be32(&mut bytes, 8, 22);
-    assert!(bitmap_metadata(&bytes, 600).unwrap_err().contains("truncated color"));
+    assert!(
+        bitmap_metadata(&bytes, 600)
+            .unwrap_err()
+            .contains("truncated color")
+    );
 }
 
 fn fdi_meta(meta: &Meta) -> FdiMeta {
@@ -71,6 +123,8 @@ fn fdi_meta(meta: &Meta) -> FdiMeta {
         use_alpha: meta.use_alpha,
         alpha_threshold: meta.use_alpha.then_some(meta.alpha_threshold as u8),
         rgba32: false,
+        source_depth: meta.depth as u8,
+        rich_background: None,
     }
 }
 
@@ -109,13 +163,20 @@ fn follow_alpha_survives_interleaved_and_planar_bitd_conversion_to_target_fdia()
     cast[34] = 0;
     let plain = bitmap_metadata(&cast, 800).unwrap();
     assert!(!plain.use_alpha);
-    assert!(bitmap_source_alpha(&plain, &argb).unwrap_err().contains("authored alpha"));
+    assert!(
+        bitmap_source_alpha(&plain, &argb)
+            .unwrap_err()
+            .contains("authored alpha")
+    );
 }
 
 fn xmed(records: &[(u32, Vec<u8>)], suffix: &str) -> Vec<u8> {
     let mut out = latin1("FFFF0000000600040001\x0177AA");
     for (id, body) in records {
-        out.extend(latin1(&format!("\x03{id:04X}{:08X}00000000", body.len() + 1)));
+        out.extend(latin1(&format!(
+            "\x03{id:04X}{:08X}00000000",
+            body.len() + 1
+        )));
         out.extend_from_slice(body);
     }
     out.extend(latin1(&format!("\x03{suffix}")));
@@ -130,30 +191,81 @@ fn text_payload() -> Vec<u8> {
 
 #[test]
 fn xmed_text_uses_bounded_section_2_rather_than_font_name_heuristics() {
-    let document = xmed(&[(0, vec![0x81]), (1, vec![0x82]), (2, latin1("\x005,H\u{8a}llo")),
-        (8, latin1("\x00B,Fake text!!"))], "");
+    let document = xmed(
+        &[
+            (0, vec![0x81]),
+            (1, vec![0x82]),
+            (2, latin1("\x005,H\u{8a}llo")),
+            (8, latin1("\x00B,Fake text!!")),
+        ],
+        "",
+    );
     let result = text_xtra_model(&text_payload(), &document, 800).unwrap();
     assert_eq!(result["text"], "Hällo");
-    assert_eq!((result["width"].clone(), result["height"].clone()), (80.into(), 20.into()));
+    assert_eq!(
+        (result["width"].clone(), result["height"].clone()),
+        (80.into(), 20.into())
+    );
     assert_eq!(result["textEncoding"], "macintosh");
     assert_eq!(result["textPresentation"], "native-target-font");
-    assert_eq!(text_xtra_model(&text_payload(), &xmed(&[(0, vec![]), (1, vec![])], "FF"), 800).unwrap()["text"], "");
-    assert!(text_xtra_model(&text_payload(), &document[..document.len() - 1], 800).unwrap_err().contains("record range"));
+    assert_eq!(
+        text_xtra_model(
+            &text_payload(),
+            &xmed(&[(0, vec![]), (1, vec![])], "FF"),
+            800
+        )
+        .unwrap()["text"],
+        ""
+    );
+    assert!(
+        text_xtra_model(&text_payload(), &document[..document.len() - 1], 800)
+            .unwrap_err()
+            .contains("record range")
+    );
     let short = xmed(&[(0, vec![]), (1, vec![]), (2, latin1("\x006,short"))], "");
-    assert!(text_xtra_model(&text_payload(), &short, 800).unwrap_err().contains("text length"));
+    assert!(
+        text_xtra_model(&text_payload(), &short, 800)
+            .unwrap_err()
+            .contains("text length")
+    );
 }
 
 fn vector_fixture(extra: &[u8]) -> Vec<u8> {
     let mut edges = Writer::new();
-    edges.put(0, 1).put(3, 5).put(1, 5).put(0, 1).put(0, 1).put(1, 1);
+    edges
+        .put(0, 1)
+        .put(3, 5)
+        .put(1, 5)
+        .put(0, 1)
+        .put(0, 1)
+        .put(1, 1);
     for (vertical, delta) in [(0, 60), (1, 40), (0, -60), (1, -40)] {
-        edges.put(1, 1).put(1, 1).put(5, 4).put(0, 1).put(vertical, 1).put(delta, 7);
+        edges
+            .put(1, 1)
+            .put(1, 1)
+            .put(5, 4)
+            .put(0, 1)
+            .put(vertical, 1)
+            .put(delta, 7);
     }
     edges.put(0, 1).put(0, 5);
-    let shape = concat(&[&[1, 0], &stage_rect(), &[1, 0, 255, 0, 0, 0, 0x10], &edges.done()]);
+    let shape = concat(&[
+        &[1, 0],
+        &stage_rect(),
+        &[1, 0, 255, 0, 0, 0, 0x10],
+        &edges.done(),
+    ]);
     let placement = [1, 0, 1, 0, 0];
-    let mut swf = concat(&[&latin1("FWS\x01\0\0\0\0"), &stage_rect(), &[0, 12, 1, 0], &tag(22, &shape),
-        &tag(4, &placement), extra, &tag(1, &[]), &tag(0, &[])]);
+    let mut swf = concat(&[
+        &latin1("FWS\x01\0\0\0\0"),
+        &stage_rect(),
+        &[0, 12, 1, 0],
+        &tag(22, &shape),
+        &tag(4, &placement),
+        extra,
+        &tag(1, &[]),
+        &tag(0, &[]),
+    ]);
     let length = swf.len() as i64;
     le32(&mut swf, 4, length);
     let mut envelope = vec![0u8; 12];
@@ -172,7 +284,12 @@ fn static_vector_xmed_rasterizes_authored_geometry_and_rejects_unknown_swf_tags(
     }
     let error = |extra: &[u8]| vector_shape_pixels(&vector_fixture(extra)).err().unwrap();
     assert!(error(&tag(12, &[7, 0])).contains("needs explicit conversion"));
-    assert!(error(&tag(19, &[])).contains("unsupported static SWF tag 19"));
+    assert!(error(&tag(19, &[])).contains("SWF sound block without header"));
     let whole = vector_fixture(&[]);
-    assert!(vector_shape_pixels(&whole[..whole.len() - 1]).err().unwrap().contains("envelope"));
+    assert!(
+        vector_shape_pixels(&whole[..whole.len() - 1])
+            .err()
+            .unwrap()
+            .contains("envelope")
+    );
 }

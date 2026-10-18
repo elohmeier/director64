@@ -291,6 +291,16 @@ def executable_program(game) -> Path:
     compatibility = game.data["port"].get("native_compatibility", False)
     if not movie and not compatibility:
         return path
+    if compatibility and not (game.directory / "host/compatibility.py").is_file():
+        converted = subprocess.run([
+            *generator_command(game.root), "director", "port-program", path,
+            game.work / "analysis/source/manifest.json", game.slug, game.source["sha256"],
+            movie or "-", "compat",
+        ], capture_output=True, text=True, check=True)
+        program = json.loads(converted.stdout)
+        output = game.work / "aot/native-program.json"
+        output.write_text(json.dumps(program, indent=2) + "\n")
+        return output
     program = json.loads(path.read_text())
     if compatibility:
         program = game.host("compatibility").apply(program, game.source["sha256"])

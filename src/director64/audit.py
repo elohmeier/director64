@@ -1,4 +1,4 @@
-"""Opt-in static rendering preflight for a recovered, normalized model.
+"""Shared compiler rendering preflight for a recovered, normalized model.
 
 This inventories authored requirements, not reachability. Strict mode rejects
 score features the selected renderer cannot draw. It does not certify visuals.
@@ -8,96 +8,45 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
+import subprocess
 from pathlib import Path
 
 
 def audit_model(model: dict, target: str) -> dict:
-    if target not in {"web", "android", "n64"}:
-        raise ValueError(f"unknown renderer: {target}")
-    movies = {movie["name"].upper(): movie for movie in model["movies"]}
-    versions = sorted({movie["directorVersion"] for movie in movies.values()})
-    if not versions or any(version not in {500, 600, 700, 800, 850, 1000} for version in versions):
-        raise ValueError(f"unsupported or absent Director versions: {versions}")
-    # The D8.5 ports use the D10 runtime family (family.h).
-    family = 10 if max(versions) >= 850 else max(versions) // 100
-    modern = family != 6 or model.get("extendedD6", False)
-    inks = {0, 8, 36}
-    if modern:
-        inks |= {32, 39}
-        if target != "n64":
-            inks |= {1, 5, 35}
-    if family == 10:
-        inks.add(9)
-    findings: dict[tuple, dict] = {}
-    unresolved = 0
+    """Use the same capability implementation as native and Wasm packaging."""
+    from .aot import generator_command, repository_root
 
-    def record(code: str, movie: dict, frame: dict, channel: dict, **detail) -> None:
-        key = (code, *detail.items())
-        finding = findings.setdefault(key, {"code": code, **detail, "records": 0, "examples": []})
-        finding["records"] += 1
-        if len(finding["examples"]) < 3:
-            finding["examples"].append(
-                {"movie": movie["name"], "frame": frame["number"], "sprite": channel["channel"] - 5}
-            )
-
-    for movie in movies.values():
-        members = {(member.get("cast", 1), member["number"]): member for member in movie["members"]}
-        for cast in movie.get("casts", []):
-            external_name = cast.get("file", movie["name"]).upper()
-            if external_name == movie["name"].upper():
-                continue
-            external = movies.get(external_name)
-            if external is None:
-                raise ValueError(f"{movie['name']}: missing external cast {external_name}")
-            for member in external["members"]:
-                # scene.rs binds an external cast to that file's cast 1.
-                if member.get("cast", 1) == 1:
-                    members[cast["number"], member["number"]] = member
-        for frame in movie.get("score", {}).get("frames", []):
-            for channel in frame["channels"]:
-                if channel["channel"] < 6:
-                    continue
-                data = channel["bytes"]
-                if len(data) != (48 if family >= 7 else 24):
-                    raise ValueError(f"{movie['name']}: invalid normalized sprite record length")
-                if not data[0]:
-                    continue
-                cast = data[4] * 256 + data[5]
-                number = data[6] * 256 + data[7]
-                member = members.get((cast, number))
-                if not member:
-                    # QuickDraw shapes need no member, and scripts can supply
-                    # dynamic members. Unresolved records need runtime review.
-                    if number and data[0] >= 16:
-                        unresolved += 1
-                    continue
-                kind = member["type"]
-                ink = data[1] & 63
-                if (
-                    kind in {1, 2}
-                    and member.get("width")
-                    and member.get("height")
-                    and ink not in inks
-                ):
-                    record("unsupported-bitmap-ink", movie, frame, channel, ink=ink)
-                if kind == 9:
-                    record("linked-movie-not-rendered", movie, frame, channel)
-
-    approximations = Counter(
-        note.get("kind", "unknown") for note in model.get("approximations", [])
+    result = subprocess.run(
+        [*generator_command(repository_root()), "capabilities", "-", target],
+        input=json.dumps(model), text=True, capture_output=True, check=False,
     )
-    return {
-        "target": target,
-        "director_versions": versions,
-        "runtime_family": family,
-        "movies": len(movies),
-        "problems": model.get("problems", []),
-        "findings": list(findings.values()),
-        "unresolved_member_records": unresolved,
-        "approximation_counts": dict(sorted(approximations.items())),
-        "scope": "Authored score records; scripts, visibility and reachability are not simulated.",
-    }
+    if result.returncode:
+        raise ValueError(result.stderr.strip())
+    return json.loads(result.stdout)
+
+
+def require_capabilities(model: dict, target: str, identity: str) -> dict:
+    report = audit_model(model, target)
+    if report["problems"]:
+        raise ValueError(f"{identity}: resource conversion is incomplete: {report['problems']}")
+    if report["findings"]:
+        finding = report["findings"][0]
+        at = finding["examples"][0]
+        feature = finding["code"] + (f" {finding['ink']}" if "ink" in finding else "")
+        if "kind" in finding:
+            feature += f" {finding['kind']}"
+        location = "".join(
+            f" {key} {at[key]}"
+            for key in (
+                "film_cast", "film_member", "frame", "sprite", "cast", "member", "font", "size"
+            )
+            if key in at
+        )
+        raise ValueError(
+            f"{identity}: renderer {target} capability {feature} "
+            f"at {at.get('movie', '?')}{location}"
+        )
+    return report
 
 
 def main(argv: list[str] | None = None) -> int:

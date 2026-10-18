@@ -1,9 +1,9 @@
 //! Film-loop flattening (tools/director/film-model.mjs): child sprites
 //! composed onto the loop's bounds, uncovered pixels left transparent.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use super::fdi::{fdi_composite, fdi_image, fdi_pixel, FdiMeta};
+use super::fdi::{FdiMeta, fdi_composite, fdi_image, fdi_pixel};
 use super::js;
 
 fn shape_inset(kind: i64, w: f64, h: f64, y: f64) -> f64 {
@@ -22,13 +22,25 @@ fn shape_inset(kind: i64, w: f64, h: f64, y: f64) -> f64 {
             return 0.0;
         }
     }
-    let dy = if y < h / 2.0 { ry - y - 0.5 } else { y + 0.5 - (h - ry) };
+    let dy = if y < h / 2.0 {
+        ry - y - 0.5
+    } else {
+        y + 0.5 - (h - ry)
+    };
     let square = 1.0 - (dy / ry).powi(2);
     (rx * (1.0 - (if square > 0.0 { square } else { 0.0 }).sqrt()) - 0.5).ceil()
 }
 
 /// Row spans mirroring runtime/director/shape.c.
-pub fn shape_spans(kind: i64, w: i64, h: i64, y: i64, line: i64, filled: bool, reverse: bool) -> Vec<(i64, i64)> {
+pub fn shape_spans(
+    kind: i64,
+    w: i64,
+    h: i64,
+    y: i64,
+    line: i64,
+    filled: bool,
+    reverse: bool,
+) -> Vec<(i64, i64)> {
     if w <= 0 || h <= 0 || y < 0 || y >= h || !(1..=4).contains(&kind) {
         return vec![];
     }
@@ -53,12 +65,21 @@ pub fn shape_spans(kind: i64, w: i64, h: i64, y: i64, line: i64, filled: bool, r
     if filled || line * 2 >= w || line * 2 >= h || y < line || y >= h - line {
         return vec![(outer, w - outer)];
     }
-    let inner = outer.max(line + shape_inset(kind, (w - line * 2) as f64, (h - line * 2) as f64, (y - line) as f64) as i64);
+    let inner = outer.max(
+        line + shape_inset(
+            kind,
+            (w - line * 2) as f64,
+            (h - line * 2) as f64,
+            (y - line) as f64,
+        ) as i64,
+    );
     vec![(outer, inner), (w - inner, w - outer)]
 }
 
 fn int(v: &Value) -> i64 {
-    v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)).unwrap_or(0)
+    v.as_i64()
+        .or_else(|| v.as_f64().map(|f| f as i64))
+        .unwrap_or(0)
 }
 fn be16(b: &[u8], at: usize) -> i64 {
     u16::from_be_bytes([b[at], b[at + 1]]) as i64
@@ -76,6 +97,101 @@ pub struct Composed {
 /// flattens it first and retries.
 pub const NESTED_PENDING: &str = "film-loop nested child pending";
 
+pub fn nonvisual(member: &Value) -> bool {
+    [6, 11, 14].contains(&int(&member["type"]))
+        || (member["type"] == 15
+            && member["xtra"]["symbol"] == "font"
+            && member["embeddedFont"].as_u64().is_some_and(|id| id > 0))
+}
+
+pub fn child_member<'a>(
+    movie: &'a Value,
+    cast: i64,
+    number: i64,
+    movies: &'a [Value],
+) -> Option<(&'a Value, &'a Value)> {
+    let find = |m: &'a Value, c| {
+        m["members"]
+            .as_array()?
+            .iter()
+            .find(|member| int(&member["cast"]) == c && int(&member["number"]) == number)
+    };
+    if let Some(member) = find(movie, cast) {
+        return Some((movie, member));
+    }
+    let library = movie["casts"]
+        .as_array()?
+        .iter()
+        .find(|c| int(&c["number"]) == cast)?;
+    let target = movies.iter().find(|m| m["name"] == library["file"])?;
+    Some((target, find(target, 1)?))
+}
+
+/// Imported films use the owning cast library's `ccl ` relocation table,
+/// not the movie score's logical cast numbers. Index zero is valid. Original
+/// Director 8.5.1r104 controls independently changed table entries zero/one
+/// and selected the corresponding sound libraries; 0xffff retains the owner.
+pub fn reference<'a>(
+    movie: &'a Value,
+    film: &Value,
+    encoded: i64,
+    movies: &'a [Value],
+) -> Result<(&'a Value, i64), String> {
+    let owner = int(&film["cast"]);
+    if encoded == -1 || encoded == 65535 {
+        return Ok((movie, owner));
+    }
+    let library = movie["casts"]
+        .as_array()
+        .and_then(|casts| casts.iter().find(|cast| int(&cast["number"]) == owner));
+    if let Some(map) = library.and_then(|cast| cast["filmCastMap"].as_array()) {
+        let entry = usize::try_from(encoded)
+            .ok()
+            .and_then(|index| map.get(index))
+            .ok_or_else(|| {
+                format!("film cast relocation index {encoded} outside owner cast {owner} table")
+            })?;
+        if let Some(cast) = entry.as_i64().filter(|&cast| cast > 0) {
+            return Ok((movie, cast));
+        }
+        if let Some(file) = entry["file"].as_str() {
+            let target = movies
+                .iter()
+                .find(|candidate| candidate["name"] == file)
+                .ok_or_else(|| format!("film cast relocation file {file} is absent"))?;
+            let cast = int(&entry["cast"]);
+            if cast > 0 {
+                return Ok((target, cast));
+            }
+        }
+        if let Some(path) = entry["path"].as_str() {
+            return Err(format!(
+                "unresolved film cast relocation path {path} for owner cast {owner}, index {encoded}"
+            ));
+        }
+        return Err(format!(
+            "invalid film cast relocation entry {encoded} for owner cast {owner}"
+        ));
+    }
+    // D5/D6 normalized records predating the imported-film table retain
+    // their existing direct-cast interpretation. Modern films must provide
+    // a table for every non-owner reference, including encoded index zero.
+    if int(&film["filmScore"]["version"]) < 13 && encoded >= 0 {
+        return Ok((movie, encoded));
+    }
+    Err(format!(
+        "film cast relocation table missing for owner cast {owner}, index {encoded}"
+    ))
+}
+
+/// Modern native film channels remain editable through `tell sprite`, even
+/// when every authored child is a bitmap. Preserve their compact tracks and
+/// compose the current channel states at runtime rather than freezing them.
+pub fn needs_runtime(movie: &Value, member: &Value, _movies: &[Value]) -> Result<bool, String> {
+    let version = int(&movie["directorVersion"]);
+    Ok((version >= 850 || version == 10) && member["filmScore"].is_object())
+}
+
 /// One flattened frame of a film loop. `states` are the channels' latest
 /// records, composed in channel order; `load` reads a converted image asset.
 /// `frame` is the loop's frame index, which selects a nested loop's frame;
@@ -92,7 +208,8 @@ pub fn compose_film_frame(
     limits: &mut Vec<Value>,
 ) -> Result<Composed, String> {
     let (lw, lh) = (int(&loop_member["width"]), int(&loop_member["height"]));
-    let mut composed = vec![0u8; (lw * lh * 4) as usize];
+    let runtime = loop_member["filmRuntime"] == true;
+    let mut composed = vec![0u8; if runtime { 4 } else { (lw * lh * 4) as usize }];
     let version = int(&loop_member["filmScore"]["version"]);
     // Director 8.5 masks keep their grey levels as coverage.
     let soft_masks = int(&movie["directorVersion"]) == 850;
@@ -111,34 +228,52 @@ pub fn compose_film_frame(
         for (k, v) in extra {
             entry.insert(k.into(), v);
         }
-        entry.insert("original_projector_verified".into(), json!(false));
+        entry
+            .entry("original_projector_verified")
+            .or_insert(json!(false));
         let entry = Value::Object(entry);
         let key = js::stringify(&entry);
         if !limits.iter().any(|l| js::stringify(l) == key) {
             limits.push(entry);
         }
     };
-    let (loop_cast, loop_left, loop_top) =
-        (int(&loop_member["cast"]), int(&loop_member["left"]), int(&loop_member["top"]));
+    let (loop_left, loop_top) = (int(&loop_member["left"]), int(&loop_member["top"]));
     let mut ordered: Vec<&(i64, Value)> = states.iter().collect();
     ordered.sort_by_key(|s| s.0);
     for (channel, c) in ordered {
         let channel = *channel;
-        let b: Vec<u8> = c["bytes"].as_array().ok_or("channel bytes")?.iter().map(|v| int(v) as u8).collect();
+        let b: Vec<u8> = c["bytes"]
+            .as_array()
+            .ok_or("channel bytes")?
+            .iter()
+            .map(|v| int(v) as u8)
+            .collect();
         let n = be16(&b, 6);
         let cast = be16(&b, 4);
         if channel < 6 {
             if channel == 3 || channel == 4 {
-                let sound_cast = bei16(&b, 0);
+                let sound_cast = be16(&b, 0);
                 let number = be16(&b, 2);
-                let slot = if version == 7 { if channel == 4 { 0 } else { 1 } } else if channel == 3 { 0 } else { 1 };
+                // Both normalized D5 and modern scores put Sound2 before Sound1.
+                // Confirmed with the original 8.5.1r104 engine: channel4 plays sound(1).
+                let slot = if channel == 4 { 0 } else { 1 };
                 if number != 0 {
-                    if sound_cast == 0 && version != 7 {
-                        record("film-loop-unresolved-sound", vec![("channel", json!(channel)), ("sound", json!(number))], limits);
-                    } else {
-                        sounds[slot] = json!({"cast": if sound_cast == -1 { loop_cast } else { sound_cast }, "member": number});
+                    let (source, cast) = reference(movie, loop_member, sound_cast, movies)?;
+                    sounds[slot] = json!({"cast": cast, "member": number});
+                    if source["name"] != movie["name"] {
+                        sounds[slot]["file"] = source["name"].clone();
                     }
                 }
+                continue;
+            }
+            // Modern imported Director films retain score records for
+            // scripts, tempo, palette and transitions, but those channels
+            // do not execute inside a film loop. The host owns the latter
+            // three, and internal movies have no script interactivity.
+            // Macromedia MX2004 Using Director, p202; recovered v13 films
+            // contain these records alongside their ordinary sprite deltas.
+            // Sound channels above are deliberately retained.
+            if version >= 13 {
                 continue;
             }
             let empty_cast = channel >= 2 && bei16(&b, 0) == -2 && !b[2..].iter().any(|&v| v != 0);
@@ -150,20 +285,24 @@ pub fn compose_film_frame(
         if b[0] == 0 || n == 0 {
             continue;
         }
-        if cast == 0 && version != 7 {
-            record("film-loop-unresolved-child", vec![("channel", json!(channel)), ("child", json!(n))], limits);
-            continue;
-        }
-        let child_cast = if cast == 65535 { loop_cast } else { cast };
-        let mut target = movie;
+        let (source, child_cast) = reference(movie, loop_member, cast, movies)?;
+        let mut target = source;
         let mut target_cast = child_cast;
         let find = |m: &Value, number: i64, cast: i64| -> Option<Value> {
-            m["members"].as_array()?.iter().find(|x| int(&x["number"]) == number && int(&x["cast"]) == cast).cloned()
+            m["members"]
+                .as_array()?
+                .iter()
+                .find(|x| int(&x["number"]) == number && int(&x["cast"]) == cast)
+                .cloned()
         };
-        let mut child = find(movie, n, child_cast);
+        let mut child = find(source, n, child_cast);
         if child.is_none() {
-            let library = movie["casts"].as_array().and_then(|c| c.get((child_cast - 1) as usize));
-            let other = library.filter(|l| l["file"] != movie["name"]).and_then(|l| movies.iter().find(|m| m["name"] == l["file"]));
+            let library = source["casts"]
+                .as_array()
+                .and_then(|c| c.get((child_cast - 1) as usize));
+            let other = library
+                .filter(|l| l["file"] != source["name"])
+                .and_then(|l| movies.iter().find(|m| m["name"] == l["file"]));
             target_cast = 1;
             match other {
                 Some(m) => {
@@ -174,13 +313,49 @@ pub fn compose_film_frame(
             }
         }
         let Some(child) = child else {
-            record("film-loop-absent-child", vec![("channel", json!(channel)), ("cast", json!(child_cast)), ("child", json!(n))], limits);
+            record(
+                if runtime {
+                    "film-loop-mutable-placeholder"
+                } else {
+                    "film-loop-absent-child"
+                },
+                vec![
+                    ("channel", json!(channel)),
+                    ("child_cast", json!(child_cast)),
+                    ("child_file", target["name"].clone()),
+                    ("child", json!(n)),
+                ],
+                limits,
+            );
             continue;
         };
-        let opacity = if b[22] & 16 != 0 { 255 - b[21] as i64 } else { 255 };
+        // Runtime films retain this resolved visual record in compact channel tracks.
+        // Their image asset is only a transparent pose/count placeholder.
+        if loop_member["filmRuntime"] == true {
+            continue;
+        }
+        // A deliberately empty bitmap has no image resource. It occupies its
+        // score span without obscuring the other children (Optik's Rollen
+        // schief uses this as one of its numbered animation poses).
+        if int(&child["type"]) == 1
+            && child["empty"] == true
+            && int(&child["width"]) == 0
+            && int(&child["height"]) == 0
+        {
+            continue;
+        }
+        let opacity = if b[22] & 16 != 0 {
+            255 - b[21] as i64
+        } else {
+            255
+        };
         let ink = (b[1] & 63) as i64;
         let (cw, ch) = (int(&child["width"]), int(&child["height"]));
-        let (width, height) = if b[1] & 128 != 0 { (bei16(&b, 18), bei16(&b, 16)) } else { (cw, ch) };
+        let (width, height) = if b[1] & 128 != 0 {
+            (bei16(&b, 18), bei16(&b, 16))
+        } else {
+            (cw, ch)
+        };
         if int(&child["type"]) == 8 && version == 13 {
             if opacity == 0 {
                 continue;
@@ -192,7 +367,11 @@ pub fn compose_film_frame(
             if ink == 9 {
                 // Mask ink on a shape draws nothing: the Findus 8.5 loops carry
                 // full-stage cover rectangles so, which the original never shows.
-                record("film-loop-shape-mask-ink", vec![("channel", json!(channel)), ("child", json!(n))], limits);
+                record(
+                    "film-loop-shape-mask-ink",
+                    vec![("channel", json!(channel)), ("child", json!(n))],
+                    limits,
+                );
                 continue;
             } else if ![0, 8].contains(&ink) {
                 return Err("film-loop ink".into());
@@ -204,8 +383,15 @@ pub fn compose_film_frame(
             // and the foreground is a palette index unless flagged RGB
             // (ScummVM Sprite::getShape, frame byte 20).
             let d85 = int(&movie["directorVersion"]) == 850;
-            let line = if d85 { (b[22] & 15) as i64 - 1 } else { int(&child["lineWidth"]) };
-            let color = match movie["palette"].as_array().and_then(|p| p.get(b[2] as usize)) {
+            let line = if d85 {
+                (b[22] & 15) as i64 - 1
+            } else {
+                int(&child["lineWidth"])
+            };
+            let color = match movie["palette"]
+                .as_array()
+                .and_then(|p| p.get(b[2] as usize))
+            {
                 Some(rgb) if d85 && b[20] & 0x10 == 0 => {
                     let rgb = int(rgb);
                     [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8]
@@ -216,13 +402,27 @@ pub fn compose_film_frame(
                 if top + y < 0 || top + y >= lh {
                     continue;
                 }
-                let filled = child["filled"].as_bool().unwrap_or_else(|| int(&child["filled"]) != 0);
-                for (a, e) in shape_spans(shape, width, height, y, line, filled, int(&child["lineDirection"]) == 6) {
+                let filled = child["filled"]
+                    .as_bool()
+                    .unwrap_or_else(|| int(&child["filled"]) != 0);
+                for (a, e) in shape_spans(
+                    shape,
+                    width,
+                    height,
+                    y,
+                    line,
+                    filled,
+                    int(&child["lineDirection"]) == 6,
+                ) {
                     for x in a..e {
                         if left + x < 0 || left + x >= lw {
                             continue;
                         }
-                        fdi_composite(&mut composed, (((top + y) * lw + left + x) * 4) as usize, [color[0], color[1], color[2], opacity as u8]);
+                        fdi_composite(
+                            &mut composed,
+                            (((top + y) * lw + left + x) * 4) as usize,
+                            [color[0], color[1], color[2], opacity as u8],
+                        );
                     }
                 }
             }
@@ -231,8 +431,12 @@ pub fn compose_film_frame(
         // A sound, script or transition member in a sprite channel draws
         // nothing; Director 8.5 film loops carry them where authors kept
         // timing cues.
-        if [6, 11, 14].contains(&int(&child["type"])) {
-            record("film-loop-nonvisual-child", vec![("channel", json!(channel)), ("type", child["type"].clone())], limits);
+        if nonvisual(&child) {
+            record(
+                "film-loop-nonvisual-child",
+                vec![("channel", json!(channel)), ("type", child["type"].clone())],
+                limits,
+            );
             continue;
         }
         // A field or Xtra member inside a loop needs the runtime's text and
@@ -240,8 +444,15 @@ pub fn compose_film_frame(
         // carry authors' comment fields under stale castlib numbers, so there
         // they are skipped and recorded; elsewhere a port defers the loop.
         if int(&movie["directorVersion"]) == 850 && [3, 15].contains(&int(&child["type"])) {
-            record("film-loop-unflattened-child", vec![("channel", json!(channel)), ("type", child["type"].clone()),
-                ("name", child["name"].clone())], limits);
+            record(
+                "film-loop-unflattened-child",
+                vec![
+                    ("channel", json!(channel)),
+                    ("type", child["type"].clone()),
+                    ("name", child["name"].clone()),
+                ],
+                limits,
+            );
             continue;
         }
         // A nested loop draws its own frame at the parent's frame index. Only
@@ -253,20 +464,30 @@ pub fn compose_film_frame(
                 if !break_cycles {
                     return Err(NESTED_PENDING.into());
                 }
-                record("film-loop-nested-cycle", vec![("channel", json!(channel)), ("child", json!(n))], limits);
+                record(
+                    "film-loop-nested-cycle",
+                    vec![("channel", json!(channel)), ("child", json!(n))],
+                    limits,
+                );
                 continue;
             };
             if frames.is_empty() {
                 continue;
             }
-            Some(frames[frame % frames.len()].as_str().unwrap_or("").to_string())
+            Some(
+                frames[frame % frames.len()]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+            )
         } else {
             None
         };
         if int(&child["type"]) != 1 && !nested {
             return Err("film-loop non-bitmap/script child".into());
         }
-        let allowed = [0, 8, 36].contains(&ink) || (version == 7 && ink == 2) || (version == 13 && ink == 9);
+        let allowed =
+            [0, 8, 36].contains(&ink) || (version == 7 && ink == 2) || (version == 13 && ink == 9);
         if !allowed {
             return Err("film-loop ink".into());
         }
@@ -276,21 +497,43 @@ pub fn compose_film_frame(
         let mut mask_offset: Option<(i64, i64)> = None;
         if ink == 9 {
             let member = find(target, n + 1, target_cast);
-            match member.filter(|m| int(&m["type"]) == 1 && m["asset"].as_str().is_some_and(|a| !a.is_empty())) {
+            match member.filter(|m| {
+                int(&m["type"]) == 1 && m["asset"].as_str().is_some_and(|a| !a.is_empty())
+            }) {
                 Some(member) => {
                     let (mw, mh) = (int(&member["width"]), int(&member["height"]));
-                    let offset = (int(&child["regX"]) - int(&member["regX"]), int(&child["regY"]) - int(&member["regY"]));
-                    if int(&movie["directorVersion"]) == 850 && ((mw, mh) != (cw, ch) || offset != (0, 0)) {
+                    let offset = (
+                        int(&child["regX"]) - int(&member["regX"]),
+                        int(&child["regY"]) - int(&member["regY"]),
+                    );
+                    if int(&movie["directorVersion"]) == 850
+                        && ((mw, mh) != (cw, ch) || offset != (0, 0))
+                    {
                         mask_offset = Some(offset);
                     }
                     mask = Some((load(member["asset"].as_str().unwrap())?, mw, mh))
                 }
-                // Without a bitmap after it, Mask ink has no mask and copies
-                // (ScummVM Channel::getMask); Director 8.5 loops nest loops so.
-                None => record("film-loop-mask-missing", vec![("channel", json!(channel)), ("child", json!(n))], limits),
+                // Director 8.5.1 r104 projector: absent/non-bitmap neighbor
+                // falls back to Matte, retaining exterior transparency.
+                // Reproduced by tools/reference/ink-mask.lingo.
+                None => record(
+                    "film-loop-mask-missing",
+                    vec![
+                        ("channel", json!(channel)),
+                        ("child", json!(n)),
+                        ("fallback", json!("matte")),
+                        ("implemented", json!(true)),
+                        ("original_projector_verified", json!(true)),
+                    ],
+                    limits,
+                ),
             }
         }
-        let pixels = load(nested_asset.as_deref().unwrap_or(child["asset"].as_str().unwrap_or("")))?;
+        let pixels = load(
+            nested_asset
+                .as_deref()
+                .unwrap_or(child["asset"].as_str().unwrap_or("")),
+        )?;
         // Math.trunc of the scaled registration.
         let reg_x = (int(&child["regX"]) as f64 * width as f64 / cw as f64).trunc() as i64;
         let reg_y = (int(&child["regY"]) as f64 * height as f64 / ch as f64).trunc() as i64;
@@ -303,7 +546,14 @@ pub fn compose_film_frame(
                 }
                 let sx = (x as f64 * cw as f64 / width as f64).floor() as i64;
                 let sy = (y as f64 * ch as f64 / height as f64).floor() as i64;
-                let mut pixel = fdi_pixel(&pixels, (sy * cw + sx) as usize, if ink == 2 || ink == 9 { 0 } else { ink });
+                let source_ink = if ink == 9 && mask.is_none() {
+                    8
+                } else if ink == 2 || ink == 9 {
+                    0
+                } else {
+                    ink
+                };
+                let mut pixel = fdi_pixel(&pixels, (sy * cw + sx) as usize, source_ink);
                 if let Some((mask_pixels, mw, mh)) = &mask {
                     let mut opaque = false;
                     // Director 8.5 reads a grey mask pixel as partly opaque.
@@ -319,7 +569,11 @@ pub fn compose_film_frame(
                             && (stencil[0] != 0 || stencil[1] != 0 || stencil[2] != 0)
                             && !(stencil[0] == 255 && stencil[1] == 255 && stencil[2] == 255)
                         {
-                            record("film-loop-mask-antialiased", vec![("channel", json!(channel)), ("child", json!(n))], limits);
+                            record(
+                                "film-loop-mask-antialiased",
+                                vec![("channel", json!(channel)), ("child", json!(n))],
+                                limits,
+                            );
                         }
                         let sum = stencil[0] as u32 + stencil[1] as u32 + stencil[2] as u32;
                         if soft_masks {
@@ -347,13 +601,62 @@ pub fn compose_film_frame(
         }
     }
     let meta = FdiMeta {
-        width: lw as usize,
-        height: lh as usize,
-        reg_x: int(&loop_member["regX"]),
-        reg_y: int(&loop_member["regY"]),
+        width: if runtime { 1 } else { lw as usize },
+        height: if runtime { 1 } else { lh as usize },
+        reg_x: if runtime {
+            0
+        } else {
+            int(&loop_member["regX"])
+        },
+        reg_y: if runtime {
+            0
+        } else {
+            int(&loop_member["regY"])
+        },
         use_alpha: true,
         alpha_threshold: loop_member["alphaThreshold"].as_u64().map(|v| v as u8),
         rgba32: loop_member["rgba32"].as_bool().unwrap_or(false),
+        source_depth: 0,
+        rich_background: None,
     };
-    Ok(Composed { data: fdi_image(&meta, &composed)?, sounds: Value::Array(sounds.to_vec()) })
+    Ok(Composed {
+        data: fdi_image(&meta, &composed)?,
+        sounds: Value::Array(sounds.to_vec()),
+    })
+}
+
+#[cfg(test)]
+mod sound_tests {
+    use super::*;
+
+    #[test]
+    fn sound_channels_keep_authored_order_across_score_versions() {
+        for version in [7, 11, 13] {
+            let movie = json!({"name":"synthetic", "directorVersion":850,
+                "casts":[{"number":4,"filmCastMap":[1,3,2]}]});
+            let film = json!({"cast":4,"number":1,"width":1,"height":1,
+                "filmScore":{"version":version}});
+            let mut first = vec![0u8; 48];
+            first[1] = 2;
+            first[3] = 7;
+            let mut second = first.clone();
+            second[3] = 8;
+            let states = vec![(3, json!({"bytes":second})), (4, json!({"bytes":first}))];
+            let result = compose_film_frame(
+                &movie,
+                &film,
+                0,
+                false,
+                &states,
+                &mut |_| Err("unexpected image load".into()),
+                &[],
+                &mut Vec::new(),
+            )
+            .unwrap();
+            assert_eq!(
+                result.sounds,
+                json!([{"cast":2,"member":7},{"cast":2,"member":8}])
+            );
+        }
+    }
 }

@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -34,6 +35,7 @@ final class Text {
   private final Typeface monogram;
   private final float monogramSize;
   private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+  private RuntimeException loadError;
 
   Text(AssetManager assets, File cache) {
     monogram = Typeface.createFromAsset(assets, "monogram.ttf");
@@ -44,7 +46,7 @@ final class Text {
     try {
       loadFonts(assets, cache);
     } catch (Exception error) {
-      android.util.Log.w("director64", "fonts could not be loaded", error);
+      loadError = new IllegalStateException("game fonts could not be loaded", error);
     }
   }
 
@@ -63,18 +65,27 @@ final class Text {
       String name = names.next();
       JSONArray at = entries.getJSONArray(name);
       int offset = at.getInt(0), length = at.getInt(1);
-      File file = new File(cache, "font-" + name + ".ttf");
-      if (!file.isFile() || file.length() != length) {
-        try (FileOutputStream out = new FileOutputStream(file)) {
-          out.write(blob, offset, length);
-        }
+      if (offset < 0 || length <= 0 || (long) offset + length > blob.length)
+        throw new IOException("font " + name + " is outside its asset pack");
+      MessageDigest hash = MessageDigest.getInstance("SHA-256");
+      hash.update(blob, offset, length);
+      StringBuilder digest = new StringBuilder();
+      for (byte value : hash.digest()) digest.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
+      // Equal byte counts do not identify a font across game/package updates.
+      File file = new File(cache, "font-" + name + "-" + digest + ".ttf");
+      try (FileOutputStream out = new FileOutputStream(file)) {
+        out.write(blob, offset, length);
       }
-      try {
-        fonts.put(Integer.parseInt(name), Typeface.createFromFile(file));
-      } catch (RuntimeException error) {
-        android.util.Log.w("director64", "font " + name + " could not be loaded", error);
-      }
+      fonts.put(Integer.parseInt(name), Typeface.createFromFile(file));
     }
+  }
+
+  private Typeface typeface(int font, int size) {
+    if (loadError != null) throw loadError;
+    if (size == 0) return null;
+    Typeface face = fonts.get(font);
+    if (face == null) throw new IllegalStateException("missing authored font " + font + " at size " + size);
+    return face;
   }
 
   // Director wraps a text member's paragraphs at its box width, on spaces.
@@ -102,7 +113,7 @@ final class Text {
       byte[] utf8, int width, int height, int font, int size, int align, int ascent, int lineHeight) {
     String text = new String(utf8, StandardCharsets.UTF_8);
     short[] boxes = new short[text.length() * 4];
-    Typeface face = size != 0 ? fonts.get(font) : null;
+    Typeface face = typeface(font, size);
     List<int[]> starts = new ArrayList<>();
     List<String> rows = new ArrayList<>();
     int step;
@@ -170,11 +181,11 @@ final class Text {
   synchronized byte[] rasterize(
       byte[] utf8, int width, int height, int font, int size, int align, int ascent, int lineHeight) {
     String text = new String(utf8, StandardCharsets.UTF_8);
+    Typeface face = typeface(font, size);
     Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8);
     Canvas canvas = new Canvas(bitmap);
     canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
     paint.setColor(Color.WHITE);
-    Typeface face = size != 0 ? fonts.get(font) : null;
     boolean builtin = face == null;
     if (builtin) {
       paint.setTypeface(monogram);

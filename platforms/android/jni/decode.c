@@ -2,6 +2,7 @@
 #include <android/log.h>
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaExtractor.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -42,7 +43,7 @@ static bool parse_wav(const uint8_t *bytes, size_t length, wav_t *wav) {
     return false;
   unsigned code = 0;
   memset(wav, 0, sizeof(*wav));
-  for (size_t at = 12; at + 8 <= length;) {
+  for (size_t at = 12; length - at >= 8;) {
     uint32_t size = u32(bytes + at + 4);
     size_t body = at + 8;
     if (size > length - body)
@@ -56,7 +57,8 @@ static bool parse_wav(const uint8_t *bytes, size_t length, wav_t *wav) {
       wav->data = bytes + body;
       wav->bytes = size;
     }
-    at = body + size + (size & 1);
+    at = body + size;
+    if ((size & 1) && at < length) at++;
   }
   return code == 1 && wav->data && (wav->bits == 8 || wav->bits == 16) &&
          wav->channels >= 1 && wav->channels <= 2 && wav->rate;
@@ -116,7 +118,7 @@ sound_t *decode_wav(const uint8_t *data, size_t length) {
       s->pcm[i] = (int16_t)u16(wav.data + i * 2);
   } else {
     for (size_t i = 0; i < samples; i++)
-      s->pcm[i] = (int16_t)((wav.data[i] - 128) << 8);
+      s->pcm[i] = (int16_t)(((int)wav.data[i] - 128) * 256);
   }
   return s;
 }
@@ -130,10 +132,17 @@ typedef struct {
 
 static bool append(growing_t *g, const int16_t *frames, size_t count, unsigned in_channels,
                    unsigned out_channels) {
+  if (count > SIZE_MAX - g->frames || g->frames + count > UINT32_MAX ||
+      g->frames + count > SIZE_MAX / out_channels / sizeof(*g->pcm)) return false;
   if (g->frames + count > g->cap) {
-    size_t cap = g->cap ? g->cap * 2 : 65536;
-    while (cap < g->frames + count)
+    size_t cap = g->cap ? g->cap : 65536;
+    while (cap < g->frames + count) {
+      if (cap > SIZE_MAX / 2 / out_channels / sizeof(*g->pcm)) {
+        cap = g->frames + count;
+        break;
+      }
       cap *= 2;
+    }
     int16_t *grown = realloc(g->pcm, cap * out_channels * 2);
     if (!grown)
       return false;
@@ -147,13 +156,17 @@ static bool append(growing_t *g, const int16_t *frames, size_t count, unsigned i
   return true;
 }
 
-sound_t *decode_media(int fd, uint64_t offset, uint64_t length) {
+sound_t *decode_media(int fd, uint64_t offset, uint64_t length, char *error,
+                      size_t error_capacity) {
   AMediaExtractor *extractor = AMediaExtractor_new();
   AMediaCodec *codec = NULL;
   AMediaFormat *format = NULL;
   growing_t out = {0};
   int32_t channels = 0, rate = 0, encoding = 2;
   sound_t *result = NULL;
+  const char *failure = "could not open audio media";
+  bool completed = false;
+  if (error_capacity) error[0] = 0;
   if (!extractor || AMediaExtractor_setDataSourceFd(extractor, fd, (off64_t)offset,
                                                     (off64_t)length) != AMEDIA_OK)
     goto done;
@@ -168,6 +181,7 @@ sound_t *decode_media(int fd, uint64_t offset, uint64_t length) {
     }
     AMediaFormat_delete(f);
   }
+  failure = "could not configure audio decoder";
   if (!codec || AMediaCodec_configure(codec, format, NULL, NULL, 0) != AMEDIA_OK ||
       AMediaCodec_start(codec) != AMEDIA_OK)
     goto done;
@@ -180,16 +194,21 @@ sound_t *decode_media(int fd, uint64_t offset, uint64_t length) {
       if (in >= 0) {
         size_t cap = 0;
         uint8_t *buffer = AMediaCodec_getInputBuffer(codec, (size_t)in, &cap);
+        if (!buffer || !cap) { failure = "audio decoder supplied no input buffer"; goto done; }
         ssize_t size = AMediaExtractor_readSampleData(extractor, buffer, cap);
+        media_status_t queued;
         if (size < 0) {
-          AMediaCodec_queueInputBuffer(codec, (size_t)in, 0, 0, 0,
-                                       AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
+          queued = AMediaCodec_queueInputBuffer(codec, (size_t)in, 0, 0, 0,
+                                                AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
           input_done = true;
         } else {
-          AMediaCodec_queueInputBuffer(codec, (size_t)in, 0, (size_t)size,
-                                       (uint64_t)AMediaExtractor_getSampleTime(extractor), 0);
+          queued = AMediaCodec_queueInputBuffer(codec, (size_t)in, 0, (size_t)size,
+                                                (uint64_t)AMediaExtractor_getSampleTime(extractor), 0);
           AMediaExtractor_advance(extractor);
         }
+        if (queued != AMEDIA_OK) { failure = "audio decoder rejected an input packet"; goto done; }
+      } else if (in != AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
+        failure = "audio decoder input failed"; goto done;
       }
     }
     AMediaCodecBufferInfo info;
@@ -203,13 +222,25 @@ sound_t *decode_media(int fd, uint64_t offset, uint64_t length) {
       continue;
     }
     if (index < 0) {
+      if (index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
+      if (index != AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
+        failure = "audio decoder output failed"; goto done;
+      }
       idle++;
       continue;
     }
     idle = 0;
     size_t cap = 0;
     uint8_t *buffer = AMediaCodec_getOutputBuffer(codec, (size_t)index, &cap);
-    if (buffer && info.size > 0 && channels > 0) {
+    bool valid = info.size >= 0 && info.offset >= 0 && (size_t)info.offset <= cap &&
+                 (size_t)info.size <= cap - (size_t)info.offset;
+    bool appended = true;
+    if (info.size > 0 && (!valid || !buffer || channels <= 0 || rate <= 0 ||
+                          (encoding != 2 && encoding != 4))) {
+      AMediaCodec_releaseOutputBuffer(codec, (size_t)index, false);
+      failure = "audio decoder returned invalid PCM"; goto done;
+    }
+    if (info.size > 0) {
       unsigned keep = channels > 2 ? 2 : (unsigned)channels;
       if (encoding == 4) { // float
         size_t count = (size_t)info.size / 4 / (size_t)channels;
@@ -222,20 +253,26 @@ sound_t *decode_media(int fd, uint64_t offset, uint64_t length) {
               float v = f[(done + i) * (size_t)channels + c] * 32767.0f;
               converted[i * keep + c] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
             }
-          append(&out, converted, n, keep, keep);
+          if (!append(&out, converted, n, keep, keep)) { appended = false; break; }
           done += n;
         }
       } else {
         size_t count = (size_t)info.size / 2 / (size_t)channels;
-        append(&out, (const int16_t *)(buffer + info.offset), count, (unsigned)channels, keep);
+        appended = append(&out, (const int16_t *)(buffer + info.offset), count, (unsigned)channels, keep);
       }
     }
     AMediaCodec_releaseOutputBuffer(codec, (size_t)index, false);
-    if (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM)
+    if (!appended) { failure = "out of memory decoding complete audio"; goto done; }
+    if (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) {
+      completed = true;
       break;
+    }
   }
+  if (!completed) { failure = "audio decoder timed out before end of stream"; goto done; }
+  failure = "audio decoder produced no sound";
   if (out.frames && rate > 0 && channels > 0) {
     result = calloc(1, sizeof(sound_t));
+    if (!result) failure = "out of memory allocating decoded sound";
     if (result) {
       result->pcm = out.pcm;
       out.pcm = NULL;
@@ -248,6 +285,7 @@ sound_t *decode_media(int fd, uint64_t offset, uint64_t length) {
     LOG("media decode produced no sound");
   }
 done:
+  if (!result && error_capacity) snprintf(error, error_capacity, "%s", failure);
   free(out.pcm);
   if (codec) {
     AMediaCodec_stop(codec);

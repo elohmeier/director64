@@ -75,7 +75,7 @@ static const lv_handler_t handlers[] = {
      .kind = "CastScript", .step = cast},
 };
 static const lv_movie_t code = {"EVENTS.DXR", 5, handlers,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t casts[] = {{"Internal", 1, 1}, {"Other", 1, 2}};
+static const dg_cast_t casts[] = {{.name="Internal",.file=1,.cast=1}, {.name="Other",.file=1,.cast=2}};
 static const dg_member_t members[] = {
     {.id = 0x210003, .number = 3, .cast = 1, .type = 1,
      .width = 1, .height = 1, .name = "later bitmap"},

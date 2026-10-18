@@ -6,7 +6,7 @@
 static lv_runtime_t values;
 static dg_runtime_t director;
 static const lv_movie_t code = {.name = "TEXT.DXR"};
-static const dg_cast_t casts[] = {{"Internal", 1, 1}};
+static const dg_cast_t casts[] = {{.name="Internal",.file=1,.cast=1}};
 static const dg_text_style_t initial = {.font_name = "Pettson *", .font_id = 1,
     .size = 12, .ascent = 11, .descent = 6, .line_height = 17};
 static const dg_text_style_t insertion = {.font_name = "Pettson *", .font_id = 1,

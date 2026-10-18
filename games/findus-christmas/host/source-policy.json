@@ -66,16 +66,6 @@
       "sha256": "4e68de040f2de5d6182ffc718deeebc622806b47b133ee1066137edcf066b34a"
     }
   ],
-  "shape_pattern_overrides": [
-    {
-      "movie": "DAG15.DXR",
-      "cast": 1,
-      "member": 25,
-      "sha256": "83eaf1ded8e3b1d9cade13ec435322215aad9277a847116fbe835729ee4b3082",
-      "from": 63,
-      "to": 1
-    }
-  ],
   "extended_d6": true,
   "projector_copies": [
     {
@@ -110,5 +100,10 @@
     }
   ],
   "image_indexed": true,
-  "image_pack_budget_mib": 49
+  "image_pack_budget_mib": 49,
+  "shape_pattern_library": {
+    "path": "../FINDUS3.EXE",
+    "sha256": "02a2d719bdca3ac47c53b08dd583247684fc53c745a2ee995b23eef491230267",
+    "embedded": "dirapi"
+  }
 }

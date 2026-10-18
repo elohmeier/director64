@@ -4,9 +4,19 @@
 // the page's thread.
 const encoder = new TextEncoder(), decoder = new TextDecoder();
 
+// WebAssembly exposes i32 addresses as signed JavaScript numbers. Their bit
+// pattern remains an unsigned wasm32 offset, including heaps above 2 GiB.
+// Fetch the current memory view after any allocation or call that can grow it.
+export function wasmSpan(view, pointer, length) {
+  const start = pointer >>> 0, count = length >>> 0;
+  if (start > view.length || count > view.length - start)
+    throw new RangeError(`WASM range ${start}+${count} exceeds ${view.length} bytes`);
+  return view.subarray(start, start + count);
+}
+
 // The operations compiler/wasm's HostFiles asks of the embedder's files
 // (its `Op` numbering), each answering a status, a size or a staged reply.
-function fileOperations(current, memory) {
+export function fileOperations(current, memory) {
   let staged = null;
   const stage = (bytes) => {
     staged = bytes;
@@ -16,11 +26,11 @@ function fileOperations(current, memory) {
     d64c_fs: (op, pathPointer, pathLength, dataPointer, dataLength) => {
       const files = current();
       if (!files) return -1;
-      const path = decoder.decode(memory().subarray(pathPointer, pathPointer + pathLength));
+      const path = decoder.decode(wasmSpan(memory(), pathPointer, pathLength));
       try {
         switch (op) {
           case 0: return stage(files.read(path));
-          case 1: files.write(path, memory().slice(dataPointer, dataPointer + dataLength)); return 0;
+          case 1: files.write(path, wasmSpan(memory(), dataPointer, dataLength).slice()); return 0;
           case 2: return files.exists(path) ? 1 : 0;
           case 3: return files.isFile(path) ? 1 : 0;
           case 4: return stage(encoder.encode(JSON.stringify(files.list(path).map(([name, kind]) => [name, kind === "dir"]))));
@@ -34,7 +44,7 @@ function fileOperations(current, memory) {
       }
     },
     d64c_fs_take: (pointer) => {
-      memory().set(staged, pointer);
+      wasmSpan(memory(), pointer, staged.length).set(staged);
       staged = null;
     },
   };
@@ -49,9 +59,10 @@ export async function loadConverter(bytes) {
       ...host,
       d64c_read_at: (offset, pointer, length) => {
         try {
-          const data = readAt(offset, length);
-          if (data.length !== length) return 1;
-          new Uint8Array(instance.exports.memory.buffer, pointer, length).set(data);
+          const count = length >>> 0;
+          const data = readAt(offset, count);
+          if (data.length !== count) return 1;
+          wasmSpan(new Uint8Array(instance.exports.memory.buffer), pointer, count).set(data);
           return 0;
         } catch {
           return 1;
@@ -64,15 +75,16 @@ export async function loadConverter(bytes) {
   const memory = () => new Uint8Array(x.memory.buffer);
   function put(data) {
     const bytes = typeof data === "string" ? encoder.encode(data) : data;
-    const pointer = x.d64c_alloc(bytes.length);
-    memory().set(bytes, pointer);
+    const pointer = x.d64c_alloc(bytes.length) >>> 0;
+    wasmSpan(memory(), pointer, bytes.length).set(bytes);
     return [pointer, bytes.length];
   }
   function release(...inputs) {
     for (const [pointer, length] of inputs) x.d64c_free(pointer, length);
   }
   function result() {
-    return memory().slice(x.d64c_result_ptr(), x.d64c_result_ptr() + x.d64c_result_len());
+    const pointer = x.d64c_result_ptr(), length = x.d64c_result_len();
+    return wasmSpan(memory(), pointer, length).slice();
   }
   function call(status) {
     const out = result();
@@ -102,8 +114,8 @@ export async function loadConverter(bytes) {
     isoInventory(size, readAtSync) {
       readAt = readAtSync;
       try {
-        const {layout: [stride, data], files} = JSON.parse(decoder.decode(call(x.d64c_iso_inventory(size))));
-        return {layout: {stride, data}, files: files.map(([path, offset, length]) => ({path, offset, length}))};
+        const {layout: [stride, data], files, aliases = {}} = JSON.parse(decoder.decode(call(x.d64c_iso_inventory(size))));
+        return {layout: {stride, data}, aliases, files: files.map(([path, offset, length]) => ({path, offset, length}))};
       } finally {
         readAt = null;
       }
@@ -167,6 +179,23 @@ export async function loadConverter(bytes) {
       }
     },
     // Löwenzahn's linked movies and external sounds (convert/quicktime.rs).
+    mpegInfo(data) {
+      const input = put(data);
+      try {
+        return JSON.parse(decoder.decode(call(x.d64c_mpeg_info(...input))));
+      } finally {
+        release(input);
+      }
+    },
+    mpegStreams(data) {
+      const input = put(data);
+      try {
+        const bytes = call(x.d64c_mpeg_demux(...input));
+        const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);
+        if (length > bytes.length - 4) throw new Error("invalid MPEG demux output");
+        return {video: bytes.subarray(4, 4 + length), audio: bytes.subarray(4 + length)};
+      } finally { release(input); }
+    },
     movInfo(data) {
       const input = put(data);
       try {

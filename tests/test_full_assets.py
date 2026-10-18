@@ -62,6 +62,35 @@ def manifest(root):
     return json.loads((root / f"{work_dir()}/director/packed.json").read_text())
 
 
+def test_readonly_data_exact_bytes_and_stale_file_removal(font_pack):
+    root, _, _, _ = font_pack
+    extracted = root / work_dir() / "extracted"
+    folder = extracted / "SOURCE/XML"
+    folder.mkdir(parents=True)
+    (folder / "TABLE.XML").write_bytes(b"<a>one</a>")
+    (folder / "EMPTY.XML").write_bytes(b"")
+    full_assets.pack(root, "test", data_folders=["SOURCE/XML"])
+    target = root / work_dir() / "filesystem/SOURCE/XML"
+    assert (target / "TABLE.XML").read_bytes() == b"<a>one</a>"
+    assert (target / "EMPTY.XML").read_bytes() == b""
+    assert manifest(root)["files"]["SOURCE/XML/TABLE.XML"]["conversion"]["tool"] == "copy"
+    # Equal-length edits must invalidate the shipped bytes, and removing a
+    # source must not leave a filesystem entry that hides a missing dependency.
+    (folder / "TABLE.XML").write_bytes(b"<a>two</a>")
+    (folder / "EMPTY.XML").unlink()
+    full_assets.pack(root, "test", data_folders=["SOURCE/XML"])
+    assert (target / "TABLE.XML").read_bytes() == b"<a>two</a>"
+    assert not (target / "EMPTY.XML").exists()
+    full_assets.pack(root, "test", data_folders=[])
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("folder", ["../escape", "/absolute", "images", "missing"])
+def test_readonly_data_plan_requires_safe_existing_folders(tmp_path, folder):
+    with pytest.raises(ValueError, match="data folder"):
+        full_assets.readonly_data_inputs(tmp_path, [folder])
+
+
 def test_font_manifest_and_cached_output(font_pack):
     root, source, conversions, _ = font_pack
     full_assets.pack(root, "test")
@@ -494,7 +523,7 @@ def test_codec_budget_promotes_cached_baseline_images(image_pack_root, monkeypat
     assert sorted(conversions) == sorted(n[len("images/") :] for n in promoted)
 
 
-def test_mask_ink_is_baked_for_images_every_scene_draws_masked(image_pack_root, monkeypatch):
+def test_mask_ink_preserves_source_pixels_for_runtime_masks(image_pack_root, monkeypatch):
     from director64 import image_pack
 
     root, names, conversions = image_pack_root
@@ -525,18 +554,36 @@ def test_mask_ink_is_baked_for_images_every_scene_draws_masked(image_pack_root, 
     monkeypatch.setattr(full_assets, "working_sets", lambda root: sets)
     full_assets.pack(root, "test")
     report = manifest(root)["pack"]
-    assert report["masks_baked"] == 1
+    assert report["masks_baked"] == 0
     files = manifest(root)["files"]
-    assert files[f"images/{names['a']}"]["conversion"]["mask"] == full_assets.digest(
-        directory / "images" / mask_name
-    )
+    assert "mask" not in files[f"images/{names['a']}"]["conversion"]
     assert "mask" not in files[f"images/{names['c']}"]["conversion"]
     pack = image_pack.read_pack((root / f"{work_dir()}/filesystem/images.pack").read_bytes())
     by_key = {e["key"]: e for e in pack["index"]}
-    assert by_key[image_pack.image_key(names["a"], 255)]["flags"] == image_pack.MASK_BAKED
+    assert by_key[image_pack.image_key(names["a"], 255)]["flags"] == 0
     assert by_key[image_pack.image_key(names["c"], 255)]["flags"] == 0
-    assert [e["flags"] for e in pack["scenes"][1]] == [image_pack.MASK_BAKED]
-    # The baked blob's pixels: the white mask pixel cut the first pixel.
+    assert [e["flags"] for e in pack["scenes"][1]] == [0]
+    # Source coverage survives packing, so a different neighbor or live ink
+    # uses the same authored pixels without a baked-in mask.
     cache = root / f"{work_dir()}/director/packed/images"
-    baked = (cache / names["a"]).read_bytes()
-    assert baked.endswith(b"\xff\xfe\x08\x41L3")
+    authored = (cache / names["a"]).read_bytes()
+    assert authored.endswith(b"\xff\xff\x08\x40L3")
+
+
+def test_catalog_only_shape_texture_is_manifested_and_packed(image_pack_root):
+    from director64 import image_pack
+
+    root, names, _ = image_pack_root
+    path = root / f"{work_dir()}/director/model.json"
+    model = json.loads(path.read_text())
+    model["movies"][1]["members"] = []
+    model["movies"][1]["casts"] = [{"number": 1, "file": "TWO.DXR",
+                                  "patternAssets": [names["c"]] + [None] * 7}]
+    path.write_text(json.dumps(model))
+    full_assets.pack(root, "test")
+    data = (root / f"{work_dir()}/filesystem/images.pack").read_bytes()
+    pack = image_pack.read_pack(data)
+    assert image_pack.image_key(names["c"], image_pack.AUTHORED) in {
+        entry["key"] for entry in pack["index"]
+    }
+    assert f"images/{names['c']}" in manifest(root)["files"]

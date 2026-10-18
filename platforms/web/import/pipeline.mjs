@@ -43,6 +43,37 @@ export function editionImages(profile) {
   return [profile.source, ...(profile.source.alternates ?? [])];
 }
 
+// Media-relative long names proven by the ISO's Joliet directory entries.
+// Primary ISO paths remain the stable source identities used by recovery.
+export function sourcePolicy(profile, sourcePathAliases) {
+  const mediaRoot = profile.port.media_root.replace(/^\/+|\/+$/g, "");
+  const prefix = mediaRoot ? mediaRoot + "/" : "";
+  const rootDepth = mediaRoot ? mediaRoot.split("/").length : 0;
+  const aliases = Object.fromEntries(Object.entries(sourcePathAliases)
+    .filter(([, short]) => short.startsWith(prefix))
+    .map(([long, short]) => [long.split("/").slice(rootDepth).join("/"), short.slice(prefix.length)]));
+  return {...profile.policy, source_path_aliases: aliases};
+}
+
+// The same original installer bytes as native recovery. Hash validation
+// happens before the converter or its worker pool sees a resource.
+export function installSystemFonts(vfs, media, policy, resources, sha256) {
+  for (const resource of policy.system_font_resources ?? []) {
+    const path = resource.path;
+    if (typeof path !== "string" || !path || path.startsWith("/") ||
+        path.split("/").includes("..") || /[\\:]/.test(path))
+      throw new ImportError(`System-font resource must be media-relative: ${path}`);
+    const target = `${media}/${path}`;
+    const bytes = vfs.isFile(target) ? vfs.read(target) : resources?.[resource.sha256];
+    if (!(bytes instanceof Uint8Array))
+      throw new ImportError(`Missing original system-font resource: ${path}`);
+    if (sha256(bytes) !== resource.sha256)
+      throw new ImportError(`System-font resource hash mismatch: ${path}`);
+    vfs.mkdir(target.slice(0, target.lastIndexOf("/")), true);
+    vfs.write(target, bytes);
+  }
+}
+
 // The profile whose pinned edition this image is, verified by its full
 // digest; a size match only nominates candidates.
 export function identify(source, profiles, converter, onProgress, signal) {
@@ -197,11 +228,13 @@ export async function importGame({source, profile, tools, onProgress = () => {},
       throw new ImportError("This disc image is not the edition this game profile supports.", "edition");
   });
 
+  let sourcePathAliases = {};
   await stage("extract", async (progress) => {
     const read = (offset, length) => source.readAt(offset, length);
     // An edition is catalogued as a disc image or as a ZIP of the disc's files.
     const zip = profile.source.kind === "zip";
     const disc = zip ? null : tools.converter.isoInventory(source.size, read);
+    sourcePathAliases = disc?.aliases ?? {};
     const entries = zip ? tools.converter.zipInventory(source.size, read) : disc.files;
     vfs.mkdir("/work/extracted", true);
     let done = 0;
@@ -215,7 +248,7 @@ export async function importGame({source, profile, tools, onProgress = () => {},
       // projectors) are inflated now; only the rest waits.
       if (!zip)
         vfs.writeLazy(target, entry.length, () => readLogical(read, disc.layout, entry.offset, entry.length));
-      else if (/\.(dxr|cxt|cst|dir|dcr|cct|exe)$/i.test(entry.path))
+      else if (/\.(dxr|cxt|cst|dir|dcr|cct|exe|dll)$/i.test(entry.path))
         vfs.write(target, tools.converter.zipFile(source.size, entry.index, read));
       else
         vfs.writeLazy(target, entry.length, () => tools.converter.zipFile(source.size, entry.index, read));
@@ -225,7 +258,8 @@ export async function importGame({source, profile, tools, onProgress = () => {},
   });
 
   const media = `/work/extracted/${profile.port.media_root}`;
-  const policy = profile.policy;
+  const policy = sourcePolicy(profile, sourcePathAliases);
+  installSystemFonts(vfs, media, policy, tools.systemFonts, sha256);
   const dumps = "/work/analysis/dumps";
   // ProjectorRays parses each Director file once; every later stage reads
   // what it saw.
@@ -341,18 +375,20 @@ export async function importGame({source, profile, tools, onProgress = () => {},
       const record = {source: path, source_sha256: source, source_bytes: bytes.length, video: "", audio: ""};
       let wav;
       if (path.endsWith(".MPG")) {
-        // DirectMedia's MPEG-1 movies need the embedder's decoder (FFmpeg in
-        // the Android export); without one they stay silent and blank.
+        // Both video Xtras require a converted picture stream. Missing codecs
+        // fail during member binding rather than creating an ended clip.
         if (!tools.encodeMpeg) {
           records.push(record);
           continue;
         }
+        record.duration = tools.converter.mpegInfo(bytes).duration_seconds;
         record.video = `${source.slice(0, 24)}.vp8`;
         videoSources.push({path: `${base}/${path}`, name: record.video, mpeg: true});
         wav = await tools.mpegAudio(bytes);
       } else if (path.endsWith(".MOV")) {
         const info = tools.converter.movInfo(bytes);
         record.duration = info.duration_seconds;
+        record.audioOnly = !info.video;
         if (info.video) {
           record.video = `${source.slice(0, 24)}.h264`;
           videoSources.push({path: `${base}/${path}`, name: record.video});
@@ -368,7 +404,7 @@ export async function importGame({source, profile, tools, onProgress = () => {},
         record.channels = view.getUint16(22, true);
         record.rate = view.getUint32(24, true);
         record.frames = view.getUint32(40, true) / (2 * record.channels);
-        if (path.endsWith(".AIF") || path.endsWith(".MPG")) record.duration = record.frames / record.rate;
+        if (path.endsWith(".AIF")) record.duration = record.frames / record.rate;
         record.audio = `${name}.wav64`;
       }
       records.push(record);

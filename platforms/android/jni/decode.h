@@ -25,5 +25,6 @@ sound_t *decode_wav(const uint8_t *data, size_t length);
 double wav_duration(const uint8_t *data, size_t length);
 // Anything else the platform decodes (MP3 playFile streams), from `length`
 // bytes at `offset` in an open file. Blocks while it decodes.
-sound_t *decode_media(int fd, uint64_t offset, uint64_t length);
+sound_t *decode_media(int fd, uint64_t offset, uint64_t length, char *error,
+                      size_t error_capacity);
 #endif

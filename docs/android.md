@@ -9,31 +9,43 @@ controller.
 
 **The APK contains the converted game.** Like a ROM, it is for your own
 use: build it into the ignored `dist/`, install it on your own devices, and
-never commit, upload or share it.
+never commit, publish or redistribute it.
 
-| Game | Director | APK | Checked in the emulator |
+| Game | Director | ARM32 APK | Earlier emulator check |
 | --- | --- | --- | --- |
-| Pettersson und Findus (Workshop) | D6 | 95 MB | plays: intro, farmyard, menu, controller cursor |
-| Autos bauen mit Willy Werkel | extended D6 | 85 MB | plays: name entry, save and reload |
-| Findus wartet auf Weihnachten | D7 | 92 MB | boots |
-| Findus bei den Mucklas | D8 | 297 MB | boots |
-| Löwenzahn 1 | D5 | 524 MB | boots, intro video plays |
-| Lernerfolg Deutsch 1/2 | D10 | 486 MB | boots to the login, MP3 and WAV streams play |
-| Löwenzahn 6 | D8.5 | 1.9 GB | boots to the login |
-| Löwenzahn 7 | D8.5 | 1.3 GB | boots to the login |
-| Löwenzahn 8 | D8.5 | 1.5 GB | plays: login, intro video |
-| 25 Jahre Löwenzahn: Optik + Mechanik | D8.5 | 1.5 GB | boots to the Bauwagen |
-| Löwenzahn Adventskalender | D8.5 | 252 MB | boots to the December countdown |
+| Pettersson und Findus (Workshop) | D6 | 61 MB | intro, farmyard, menu, controller cursor |
+| Autos bauen mit Willy Werkel | extended D6 | 64 MB | name entry, save and reload |
+| Findus wartet auf Weihnachten | D7 | 55 MB | boots |
+| Findus bei den Mucklas | D8 | 192 MB | boots |
+| Findus: Der Torten werfende Geburtstagskater | D8.5 | 150 MB | not rechecked |
+| Findus: Hühnertanz und Katerzirkus | D8.5 | 117 MB | not rechecked |
+| Findus: Die Gespenster-Erschreckmaschine | D8.5 | 101 MB | not rechecked |
+| Löwenzahn 1 | D5 | 323 MB | intro video plays |
+| Lernerfolg Deutsch 1/2 | D10 | 343 MB | login, MP3 and WAV streams |
+| Löwenzahn 6 | D8.5 | 325 MB | login |
+| Löwenzahn 7 | D8.5 | blocked by damaged source | login on an earlier build |
+| Löwenzahn 8 | D8.5 | 371 MB | login, intro video |
+| 25 Jahre Löwenzahn: Optik + Mechanik | D8.5 | blocked by damaged source | Bauwagen on an earlier build |
+| Löwenzahn Adventskalender | D8.5 | 165 MB | December countdown |
 
-These checks ran on an Android 14 emulator (x86_64). On the EF-62N all six
-install, and Mucklas, Christmas and Lernerfolg run; its userland is 32-bit
-only (`armeabi-v7a`). Mucklas held 60 ticks per second there with no dropped
-time at about 15% CPU and 130 MB resident, and Christmas's day 5 (Not
-Transparent ink) plays there.
-Lernerfolg's scene covers were checked in the emulator; its masked helper
-characters are not yet confirmed on the projector. Scene entry on the other
-games is unmeasured; the diagnostics line in the menu shows ticks per
-second, redraws and dropped time.
+Sizes describe the current single-ABI `armeabi-v7a` packages. The emulator
+observations above came from earlier Android 14 x86_64 builds; they are not
+fresh gameplay qualification of these APKs. The EF-62N runs a 32-bit userland.
+Earlier projector measurements showed Mucklas holding 60 service ticks per
+second with no dropped time at about 15% CPU and 130 MB resident, and Christmas's
+day 5 (Not Transparent ink) playing. Lernerfolg's scene covers were checked in
+the emulator; its masked helper characters still need projector confirmation.
+The diagnostics line in the menu shows ticks, redraws and dropped time.
+
+Strict fresh export currently rejects Löwenzahn 7's damaged MP2 stream and
+Optik's damaged MPEG program stream; see [video.md](video.md). Existing installed
+copies are retained when a rebuild fails. A successful install and matching APK
+hash establish deployment, not a startup check or a complete playthrough.
+
+On 2026-10-18, all twelve buildable ARM32 APKs were installed on the EF-62N
+with in-place updates. Their original installation identities were retained;
+Löwenzahn 7 and Optik kept their earlier versions. The running foreground app
+was left in place, so this deployment did not repeat the gameplay checks above.
 
 ## Building
 
@@ -75,10 +87,11 @@ A build:
 
    Löwenzahn 6 went from 1.9 GB to under 0.6 GB.
 
-   A
-   conversion by the same importer revision and runtime ABI is reused;
-   `--reconvert` forces a new one. The importer's tools are built first when
-   `build/web/tools` is missing.
+   A conversion is reused only when the importer, runtime ABI, selected source,
+   profile/policy and Android exporter match, and every packed asset has its
+   recorded size and SHA-256. `--reconvert` forces a new one. Importer tools are
+   rebuilt when their source fingerprint or any generated tool hash changes;
+   an old browser-site manifest cannot authorize stale conversion tools.
 2. **Compiles the game's runtime** with the NDK: the browser runtime's sources
    and flags (`platforms/web/web_runtime.c`, its software compositor, the
    engine, the game's adapter, package mode) without its Emscripten glue,
@@ -93,6 +106,11 @@ A build:
 
 ## Installing
 
+A successful build writes an adjacent `.apk.json` receipt containing the selected
+source, ABIs, build-input identity, APK hash and asset manifest. Starting a rebuild
+invalidates the old receipt; a failed build cannot leave an installable stale APK.
+The CLI checks that receipt against current sources and APK bytes before ADB runs.
+
 Over the network: enable developer options on the projector (Settings →
 System → About → press Build seven times), turn on network debugging, then
 
@@ -100,6 +118,21 @@ System → About → press Build seven times), turn on network debugging, then
 adb connect <projector-ip>:5555
 uv run --locked director64 android install --game findus-workshop --serial <projector-ip>:5555
 ```
+
+For wireless debugging with pairing, use the addresses shown on its settings
+screen. The pairing port and connection port differ, and can change:
+
+```sh
+adb pair <projector-ip>:<pairing-port>
+adb connect <projector-ip>:<connection-port>
+adb devices -l
+uv run --locked director64 android install --game findus-workshop --serial <projector-ip>:<connection-port>
+```
+
+`adb pair` prompts for the displayed pairing code. `adb mdns services` can
+discover the connection address. Updates use `adb install -r`; keeping the
+existing package and signing key preserves saves. Uninstalling the game
+removes its app data.
 
 Or copy the APK to a USB stick and open it with a file manager on the TV,
 allowing that app to install unknown apps.

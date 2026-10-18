@@ -99,7 +99,8 @@ def main():
             )
             record["duration"] = info["duration_seconds"]
             analysis["tracks"] = info["tracks"]
-            if any(t["kind"] == "video" for t in info["tracks"]):
+            record["audioOnly"] = not any(t["kind"] == "video" for t in info["tracks"])
+            if not record["audioOnly"]:
                 with (cache / "video.log").open("w") as log:
                     subprocess.run(
                         [

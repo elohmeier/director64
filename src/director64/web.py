@@ -57,6 +57,7 @@ EXPORTS = (
     "d64_image_bytes",
     "d64_image_loads",
     "d64_rpc",
+    "d64_probe_render",
     "d64_text_field",
     "d64_text_field_rect",
     "d64_text_value",
@@ -82,6 +83,7 @@ SITE_FILES = (
     "cache.js",
     "ui.js",
     "audio.js",
+    "flash-audio.js",
     "saves.js",
     "video.js",
     "gamepad.js",
@@ -294,10 +296,36 @@ def build_runtime(
 DROID_SANS = Path("third_party/libdragon/examples/fontgallery/assets/droid-sans.ttf")
 
 
+def import_source_digest(root: Path) -> str:
+    """Inputs that can change importer output, including tool and package schemas."""
+    paths = set()
+    for directory in (
+        "compiler/src", "compiler/wasm/src", "platforms/web/import", "platforms/web/tools",
+        "third_party/libdragon/tools", "third_party/libdragon/include", "third_party/libwebp/src",
+        "third_party/pl_mpeg", "tools/projectorrays",
+    ):
+        paths.update(p for p in (root / directory).rglob("*") if p.is_file())
+    for name in (
+        "compiler/Cargo.toml", "compiler/Cargo.lock", "compiler/wasm/Cargo.toml",
+        "compiler/wasm/Cargo.lock", "package.json", "package-lock.json",
+        "src/director64/web.py", "src/director64/system_fonts.py",
+        "runtime/director/director.h", "runtime/package/package.h",
+        "runtime/lingo/names.txt", "runtime/lingo/lingo_bytecode.h",
+        str(DROID_SANS), str(PARSER / "projectorrays.js"), str(PARSER / "projectorrays.wasm"),
+    ):
+        paths.add(root / name)
+    digest = hashlib.sha256()
+    for path in sorted(paths):
+        digest.update(path.relative_to(root).as_posix().encode() + b"\0")
+        digest.update(bytes.fromhex(sha256(path)))
+    return digest.hexdigest()
+
+
 def build_tools(root: Path, engine: str) -> dict:
     """The importer's tools under build/web/tools/, and their identities."""
     tools = root / "build/web/tools"
     tools.mkdir(parents=True, exist_ok=True)
+    source = import_source_digest(root)
     rustc = subprocess.run(["rustc", "-V"], capture_output=True, text=True, check=True).stdout
     subprocess.run(
         [
@@ -315,6 +343,7 @@ def build_tools(root: Path, engine: str) -> dict:
     shutil.copyfile(root / CONVERTER_WASM, tools / "convert.wasm")
     emscripten(root, engine, ["sh", "platforms/web/tools/build-fonttools.sh", "build/web/tools"])
     emscripten(root, engine, ["sh", "platforms/web/tools/build-webp.sh", "build/web/tools"])
+    emscripten(root, engine, ["sh", "platforms/web/tools/build-mpeg.sh", "build/web/tools"])
     subprocess.run(["node", root / "platforms/web/import/build.mjs", tools], cwd=root, check=True)
     if sha256(root / PARSER / "projectorrays.wasm") != PARSER_WASM_SHA256:
         raise ValueError("unsupported ProjectorRays WASM; restore the locked npm dependency")
@@ -330,6 +359,7 @@ def build_tools(root: Path, engine: str) -> dict:
     files = {
         "converterModule": "convert.mjs",
         "importer": "importer.js",
+        "pipeline": "pipeline.mjs",
         "pool": "pool.js",
         "converter": "convert.wasm",
         "mkfont": "mkfont.js",
@@ -338,17 +368,31 @@ def build_tools(root: Path, engine: str) -> dict:
         "mkspriteWasm": "mksprite.wasm",
         "webp": "webp.js",
         "webpWasm": "webp.wasm",
+        "mpeg": "mpeg.js",
+        "mpegWasm": "mpeg.wasm",
         "parserGlue": "projectorrays.js",
         "parserWasm": "projectorrays.wasm",
         "names": "names.txt",
         "substituteFont": "droid-sans.ttf",
         "bytecodeHeader": "lingo_bytecode.h",
     }
+    from .system_fonts import INSTALLERS, installer
+
+    for digest, spec in INSTALLERS.items():
+        # The original redistributable includes its license; keep its name
+        # and bytes intact. The shared Rust converter reads its CAB as data.
+        shutil.copyfile(installer(root, digest), tools / spec["file"])
+        files[f"systemFont{digest}"] = spec["file"]
     digests = {key: sha256(tools / name) for key, name in files.items()}
     revision = hashlib.sha256(
         json.dumps(digests, sort_keys=True).encode() + abi_digest(root)
     ).hexdigest()
-    return {"files": files, "sha256": digests, "revision": revision, "rustc": rustc.strip()}
+    if import_source_digest(root) != source:
+        raise ValueError("importer source changed during build; rebuild the tools")
+    result = {"files": files, "sha256": digests, "revision": revision,
+              "rustc": rustc.strip(), "source_sha256": source}
+    (tools / "manifest.json").write_text(json.dumps(result, indent=2) + "\n")
+    return result
 
 
 def web_policy(game: GameSpec) -> dict:

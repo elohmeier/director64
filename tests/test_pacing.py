@@ -113,7 +113,8 @@ def test_legacy_logs_without_extended_fields_still_parse():
     assert report["summary"]["measurable_windows"] == 0
     assert report["summary"]["min_tick_delivery"] is None
     assert report["windows"][1]["work_us"] == 5_324_201 + 1_878_015 + 145_168
-    assert_pacing(report)
+    with pytest.raises(ValueError, match="insufficient pacing measurements"):
+        assert_pacing(report)
 
 
 def test_events_attribute_to_the_following_window_and_streams_reset_safely():
@@ -130,6 +131,20 @@ def test_events_attribute_to_the_following_window_and_streams_reset_safely():
 def test_parse_windows_requires_paired_reports():
     orphan = "DIRECTOR64 NATIVE_COST ticks_us=1 render_us=1 audio_us=1 renders=1 steps=1\n"
     assert parse_windows(orphan) == []
+
+
+def test_incomplete_capture_cannot_pass_a_sustained_budget():
+    report = analyze(log_from(report_lines(i) for i in range(3)))
+    assert report["summary"]["measurable_windows"] == 2
+    with pytest.raises(ValueError, match="need at least 3"):
+        assert_pacing(report)
+    assert_pacing(report, {"sustained_windows": 2})
+
+
+def test_missing_step_counter_cannot_pass_a_requested_service_budget():
+    report = analyze(log_from(report_lines(i) for i in range(6)))
+    with pytest.raises(ValueError, match="missing service cost measurement"):
+        assert_pacing(report, {"max_service_us_per_step": 50})
 
 
 def test_service_cost_per_step_gates_an_interpreter_regression():

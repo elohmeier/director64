@@ -1,8 +1,10 @@
 #ifndef DIRECTOR64_ANDROID_VIDEO_H
 #define DIRECTOR64_ANDROID_VIDEO_H
-// Director 5 digital video, one player per sprite channel showing a video
-// member, as the page's VideoPlayers (platforms/web/site/video.js): the
-// runtime tells each player its time every service step; the player decodes
+// Director digital video, one player per runtime-assigned host identity.
+// Identities include linked movie instances, so a parent and child can both
+// use the same score channel without sharing a player. As in the page's
+// VideoPlayers (platforms/web/site/video.js), the runtime tells each player
+// its time every service step; the player decodes
 // with MediaCodec up to the frame for that time and keeps it for the
 // compositor, and plays the movie's sound in step with it.
 #include "packs.h"
@@ -19,4 +21,5 @@ bool video_frame(unsigned sprite, uint32_t *out, uint32_t cap, unsigned *width,
 // Changes whenever a player has a new frame.
 unsigned video_revision(void);
 void video_close_all(void);
+const char *video_error(void);
 #endif

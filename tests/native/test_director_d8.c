@@ -154,9 +154,9 @@ static const lv_handler_t handlers[] = {
 };
 static const lv_movie_t code = {"D8.DXR", 9, handlers,NULL, NULL, NULL, NULL, 0};
 static const dg_cast_t casts[] = {
-    {"c1", 1, 1}, {"c2", 1, 2},   {"c3", 1, 3},   {"c4", 1, 4},
-    {"c5", 1, 5}, {"c6", 1, 6},   {"c7", 1, 7},   {"c8", 1, 8},
-    {"c9", 1, 9}, {"c10", 1, 10}, {"c11", 1, 11}, {"c12", 1, 12}};
+    {.name="c1",.file=1,.cast=1}, {.name="c2",.file=1,.cast=2},   {.name="c3",.file=1,.cast=3},   {.name="c4",.file=1,.cast=4},
+    {.name="c5",.file=1,.cast=5}, {.name="c6",.file=1,.cast=6},   {.name="c7",.file=1,.cast=7},   {.name="c8",.file=1,.cast=8},
+    {.name="c9",.file=1,.cast=9}, {.name="c10",.file=1,.cast=10}, {.name="c11",.file=1,.cast=11}, {.name="c12",.file=1,.cast=12}};
 static const dg_member_t members[] = {
     {.id = 0x2c0001,
      .number = 1,

@@ -1,0 +1,20 @@
+-- Synthetic pixel inputs only; see docs/reference-capture.md.
+global p, q, out
+out = new(xtra("fileio"))
+out.createFile("C:\ink-precision.txt")
+out.openFile("C:\ink-precision.txt",2)
+p=image(1,1,32)
+q=image(1,1,32)
+repeat with ink in [40,41]
+ repeat with sc in [0,1,63,64,127,128,254,255]
+  repeat with fc in [0,50]
+   repeat with bc in [0,1,2,63,64,65,127,128,129,191,192,253,254,255]
+    p.setPixel(point(0,0),rgb(sc,sc,sc))
+    q.setPixel(point(0,0),rgb(10,20,30))
+    q.copyPixels(p,rect(0,0,1,1),rect(0,0,1,1),[#ink:ink,#color:rgb(fc,fc,fc),#bgColor:rgb(bc,bc,bc)])
+    out.writeString(string([ink,sc,fc,bc,q.getPixel(point(0,0))]) & RETURN)
+   end repeat
+  end repeat
+ end repeat
+end repeat
+out.closeFile()

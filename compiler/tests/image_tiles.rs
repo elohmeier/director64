@@ -14,7 +14,8 @@ use director64_aot::convert::fdi::{plane_pixels, tile_index, tiled};
 /// without a C compiler.
 fn run_c(name: &str, source: &str) -> Option<String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let dir: PathBuf = std::env::temp_dir().join(format!("d64-tiles-{}-{name}", std::process::id()));
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("d64-tiles-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let harness = dir.join(format!("{name}.c"));
     std::fs::write(&harness, source).unwrap();
@@ -35,7 +36,14 @@ fn run_c(name: &str, source: &str) -> Option<String> {
 
 #[test]
 fn plane_extent_agrees_with_the_runtime() {
-    let cases = [(1100, 40), (40, 1100), (1786, 149), (1182, 127), (1025, 1025), (640, 480)];
+    let cases = [
+        (1100, 40),
+        (40, 1100),
+        (1786, 149),
+        (1182, 127),
+        (1025, 1025),
+        (640, 480),
+    ];
     let rows: String = cases.iter().map(|(w, h)| format!("{{{w},{h}}},")).collect();
     let source = format!(
         "#include \"bitmap_tiles.h\"\n#include <stdio.h>\n\
@@ -46,12 +54,17 @@ fn plane_extent_agrees_with_the_runtime() {
                     bitmap_needs_tiles(cases[i][0], cases[i][1]));\n\
          }}\n"
     );
-    let Some(out) = run_c("extent", &source) else { return };
+    let Some(out) = run_c("extent", &source) else {
+        return;
+    };
     let runtime: Vec<(usize, bool)> = out
         .lines()
         .map(|line| {
             let mut parts = line.split_whitespace();
-            (parts.next().unwrap().parse().unwrap(), parts.next().unwrap() == "1")
+            (
+                parts.next().unwrap().parse().unwrap(),
+                parts.next().unwrap() == "1",
+            )
         })
         .collect();
     assert_eq!(runtime.len(), cases.len());
@@ -73,8 +86,12 @@ fn every_pixel_lands_on_the_slot_the_runtime_reads() {
                printf(\"%u\\n\", bitmap_tile_index({width}, x, y));\n\
          }}\n"
     );
-    let Some(out) = run_c("slots", &source) else { return };
+    let Some(out) = run_c("slots", &source) else {
+        return;
+    };
     let runtime: Vec<usize> = out.lines().map(|l| l.parse().unwrap()).collect();
-    let converter: Vec<usize> = (0..height).flat_map(|y| (0..width).map(move |x| tile_index(width, x, y))).collect();
+    let converter: Vec<usize> = (0..height)
+        .flat_map(|y| (0..width).map(move |x| tile_index(width, x, y)))
+        .collect();
     assert_eq!(converter, runtime);
 }

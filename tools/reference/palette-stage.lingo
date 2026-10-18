@@ -1,0 +1,26 @@
+-- Synthetic RGB samples distinguish the stage path from palette lookup.
+global out, pm, pixels, samples, sampleIndex, snapshot
+out=new(xtra("fileio"))
+out.createFile("C:\palette-stage.txt")
+out.openFile("C:\palette-stage.txt",2)
+samples=[rgb(187,0,0),rgb(238,238,238),rgb(34,34,34),rgb(255,204,0),rgb(128,0,0),rgb(240,240,240)]
+pixels=image(samples.count,1,32)
+repeat with sampleIndex=1 to samples.count
+ pixels.setPixel(point(sampleIndex-1,0),samples[sampleIndex])
+end repeat
+pm=new(#bitmap)
+pm.image=pixels
+pm.regPoint=point(0,0)
+puppetSprite(149,1)
+sprite(149).member=pm
+sprite(149).rect=rect(0,0,samples.count,1)
+sprite(149).ink=0
+sprite(149).blend=100
+sprite(149).visible=1
+updateStage
+snapshot=(the stage).image
+repeat with sampleIndex=1 to samples.count
+ out.writeString(string([samples[sampleIndex],snapshot.getPixel(point(sampleIndex-1,0))])&RETURN)
+end repeat
+out.writeString(string([#depth,the colorDepth])&RETURN)
+out.closeFile()

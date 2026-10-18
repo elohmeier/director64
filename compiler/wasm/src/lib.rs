@@ -34,7 +34,11 @@ fn finish(result: Result<Vec<u8>, String>) -> u32 {
     }
 }
 unsafe fn input<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
-    if len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(ptr, len) } }
+    if len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr, len) }
+    }
 }
 unsafe fn text<'a>(ptr: *const u8, len: usize) -> Result<&'a str, String> {
     std::str::from_utf8(unsafe { input(ptr, len) }).map_err(|_| "input is not UTF-8".to_string())
@@ -86,7 +90,11 @@ pub unsafe extern "C" fn d64c_sha256_update(handle: u32, ptr: *const u8, len: us
 pub extern "C" fn d64c_sha256_finish(handle: u32) -> u32 {
     let hash = unsafe { HASHES.get_mut(handle as usize).and_then(Option::take) };
     finish(hash.ok_or_else(|| "unknown hash".to_string()).map(|h| {
-        h.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>().into_bytes()
+        h.finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+            .into_bytes()
     }))
 }
 
@@ -121,7 +129,8 @@ pub extern "C" fn d64c_iso_inventory(size: f64) -> u32 {
         let entries = iso::inventory(&mut source)?;
         let rows: Vec<serde_json::Value> =
             entries.iter().map(|e| serde_json::json!([e.path, e.offset, e.length])).collect();
-        Ok(serde_json::json!({"layout": [layout.stride, layout.data], "files": rows}).to_string().into_bytes())
+        let aliases = iso::path_aliases(&mut source)?;
+        Ok(serde_json::json!({"layout": [layout.stride, layout.data], "files": rows, "aliases": aliases}).to_string().into_bytes())
     }))
 }
 
@@ -137,11 +146,16 @@ pub extern "C" fn d64c_zip_inventory(size: f64) -> u32 {
     if !(0.0..=9.0e15).contains(&size) {
         return finish(Err("invalid archive size".into()));
     }
-    finish(director64_aot::zip::inventory(&mut Embedder(size as u64)).map(|entries| {
-        let rows: Vec<serde_json::Value> = entries.iter().map(|e| serde_json::json!([e.path, e.length])).collect();
-        unsafe { ZIP_ENTRIES = entries };
-        serde_json::Value::Array(rows).to_string().into_bytes()
-    }))
+    finish(
+        director64_aot::zip::inventory(&mut Embedder(size as u64)).map(|entries| {
+            let rows: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|e| serde_json::json!([e.path, e.length]))
+                .collect();
+            unsafe { ZIP_ENTRIES = entries };
+            serde_json::Value::Array(rows).to_string().into_bytes()
+        }),
+    )
 }
 /// One inventoried file's bytes, inflated and CRC-checked.
 #[unsafe(no_mangle)]
@@ -159,7 +173,9 @@ pub extern "C" fn d64c_zip_file(size: f64, index: u32) -> u32 {
 /// A deflated file's bytes (files::inflate); any other file as it is.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn d64c_inflate(ptr: *const u8, len: usize) -> u32 {
-    finish(director64_aot::convert::files::inflate(unsafe { input(ptr, len) }))
+    finish(director64_aot::convert::files::inflate(unsafe {
+        input(ptr, len)
+    }))
 }
 
 /// One stored image of the compile stage's prescale queue at 4/5, for the
@@ -189,15 +205,33 @@ pub unsafe extern "C" fn d64c_prescale(ptr: *const u8, len: usize) -> u32 {
 /// duration in milliseconds (u32, little-endian), then the stream's bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn d64c_stream(ptr: *const u8, len: usize) -> u32 {
-    finish(director64_aot::convert::stream::browser_stream(unsafe { input(ptr, len) }).map(|(bytes, ms)| {
-        let mut out = ms.to_le_bytes().to_vec();
-        out.extend(bytes);
-        out
-    }))
+    finish(
+        director64_aot::convert::stream::browser_stream(unsafe { input(ptr, len) }).map(
+            |(bytes, ms)| {
+                let mut out = ms.to_le_bytes().to_vec();
+                out.extend(bytes);
+                out
+            },
+        ),
+    )
 }
 
 // ---- Linked movies, external sounds and print documents (Löwenzahn) ----
 
+/// MPEG-1 picture count, rational frame rate, dimensions and duration.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn d64c_mpeg_info(ptr: *const u8, len: usize) -> u32 {
+    finish(
+        director64_aot::convert::mpeg::info(unsafe { input(ptr, len) })
+            .map(|info| info.to_string().into_bytes()),
+    )
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn d64c_mpeg_demux(ptr: *const u8, len: usize) -> u32 {
+    finish(director64_aot::convert::mpeg::demux(unsafe {
+        input(ptr, len)
+    }))
+}
 /// A QuickTime movie's duration and video size: {duration_seconds, video,
 /// width, height}.
 #[unsafe(no_mangle)]
@@ -214,12 +248,17 @@ pub unsafe extern "C" fn d64c_mov_info(ptr: *const u8, len: usize) -> u32 {
 /// A movie's sound track as s16le WAV; empty without one.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn d64c_mov_audio(ptr: *const u8, len: usize) -> u32 {
-    finish(director64_aot::convert::quicktime::audio_wav(unsafe { input(ptr, len) }).map(Option::unwrap_or_default))
+    finish(
+        director64_aot::convert::quicktime::audio_wav(unsafe { input(ptr, len) })
+            .map(Option::unwrap_or_default),
+    )
 }
 /// An external AIFF as s16le WAV.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn d64c_aiff_wav(ptr: *const u8, len: usize) -> u32 {
-    finish(director64_aot::convert::quicktime::aiff_wav(unsafe { input(ptr, len) }))
+    finish(director64_aot::convert::quicktime::aiff_wav(unsafe {
+        input(ptr, len)
+    }))
 }
 
 // One movie's Cinepak frames at a time: its bytes stay with the iterator.
@@ -229,7 +268,8 @@ static mut FRAMES: Option<(*mut [u8], director64_aot::convert::cinepak::Frames<'
 #[allow(static_mut_refs)]
 pub unsafe extern "C" fn d64c_frames_open(ptr: *const u8, len: usize) -> u32 {
     unsafe { d64c_frames_close() };
-    let bytes: &'static mut [u8] = Box::leak(unsafe { input(ptr, len) }.to_vec().into_boxed_slice());
+    let bytes: &'static mut [u8] =
+        Box::leak(unsafe { input(ptr, len) }.to_vec().into_boxed_slice());
     let raw: *mut [u8] = bytes;
     match director64_aot::convert::cinepak::Frames::new(unsafe { &*raw }) {
         Ok(frames) => {
@@ -272,15 +312,19 @@ pub unsafe extern "C" fn d64c_frames_close() {
 /// A print PICT as PNG.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn d64c_pict_png(ptr: *const u8, len: usize) -> u32 {
-    finish(director64_aot::convert::print::pict_png(unsafe { input(ptr, len) }).map(|(png, _, _)| png))
+    finish(
+        director64_aot::convert::print::pict_png(unsafe { input(ptr, len) }).map(|(png, _, _)| png),
+    )
 }
 /// The print documents of a model (model.json in, documents JSON out).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn d64c_print_documents(ptr: *const u8, len: usize) -> u32 {
     finish((|| {
-        let model: serde_json::Value =
-            serde_json::from_slice(unsafe { input(ptr, len) }).map_err(|e| format!("model: {e}"))?;
-        Ok(director64_aot::convert::print::documents(&model)?.to_string().into_bytes())
+        let model: serde_json::Value = serde_json::from_slice(unsafe { input(ptr, len) })
+            .map_err(|e| format!("model: {e}"))?;
+        Ok(director64_aot::convert::print::documents(&model)?
+            .to_string()
+            .into_bytes())
     })())
 }
 
@@ -291,16 +335,23 @@ pub unsafe extern "C" fn d64c_print_documents(ptr: *const u8, len: usize) -> u32
 /// f32 samples.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn d64c_resample48(ptr: *const u8, len: usize) -> u32 {
-    finish(director64_aot::convert::resample::wav_to_48k(unsafe { input(ptr, len) }).map(|r| {
-        let mut out = Vec::with_capacity(16 + r.samples.len() * 4);
-        for v in [r.channels as u32, r.frames as u32, r.source_rate, r.source_frames as u32] {
-            out.extend_from_slice(&v.to_le_bytes());
-        }
-        for sample in &r.samples {
-            out.extend_from_slice(&sample.to_le_bytes());
-        }
-        out
-    }))
+    finish(
+        director64_aot::convert::resample::wav_to_48k(unsafe { input(ptr, len) }).map(|r| {
+            let mut out = Vec::with_capacity(16 + r.samples.len() * 4);
+            for v in [
+                r.channels as u32,
+                r.frames as u32,
+                r.source_rate,
+                r.source_frames as u32,
+            ] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            for sample in &r.samples {
+                out.extend_from_slice(&sample.to_le_bytes());
+            }
+            out
+        }),
+    )
 }
 
 // ---- Lingo and packaging ----
@@ -310,8 +361,8 @@ pub unsafe extern "C" fn d64c_resample48(ptr: *const u8, len: usize) -> u32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn d64c_lingo_program(ptr: *const u8, len: usize) -> u32 {
     finish((|| {
-        let files: Vec<(String, String)> =
-            serde_json::from_str(unsafe { text(ptr, len) }?).map_err(|e| format!("lingo input: {e}"))?;
+        let files: Vec<(String, String)> = serde_json::from_str(unsafe { text(ptr, len) }?)
+            .map_err(|e| format!("lingo input: {e}"))?;
         let program = director64_aot::lingo::program(&files)?;
         Ok((director64_aot::lingo::dumps_compact(&program) + "\n").into_bytes())
     })())
@@ -371,7 +422,15 @@ struct HostFiles;
 
 impl HostFiles {
     fn call(op: Op, path: &str, data: &[u8]) -> f64 {
-        unsafe { d64c_fs(op as u32, path.as_ptr(), path.len(), data.as_ptr(), data.len()) }
+        unsafe {
+            d64c_fs(
+                op as u32,
+                path.as_ptr(),
+                path.len(),
+                data.as_ptr(),
+                data.len(),
+            )
+        }
     }
     fn fetch(op: Op, path: &str) -> Result<Vec<u8>, String> {
         let length = Self::call(op, path, &[]);
@@ -383,7 +442,11 @@ impl HostFiles {
         Ok(out)
     }
     fn status(op: Op, path: &str, data: &[u8]) -> Result<(), String> {
-        if Self::call(op, path, data) < 0.0 { Err(format!("{path}: operation failed")) } else { Ok(()) }
+        if Self::call(op, path, data) < 0.0 {
+            Err(format!("{path}: operation failed"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -412,7 +475,11 @@ impl Files for HostFiles {
     }
     fn size(&self, path: &str) -> Result<u64, String> {
         let size = Self::call(Op::Size, path, &[]);
-        if size < 0.0 { Err(format!("{path}: no such file or directory")) } else { Ok(size as u64) }
+        if size < 0.0 {
+            Err(format!("{path}: no such file or directory"))
+        } else {
+            Ok(size as u64)
+        }
     }
 }
 
@@ -420,7 +487,11 @@ fn compile_options<'a>(
     request: &'a serde_json::Value,
     policy: &'a serde_json::Value,
 ) -> Result<director64_aot::convert::compile::Options<'a>, String> {
-    let arg = |key: &str| request[key].as_str().ok_or_else(|| format!("director request without {key}"));
+    let arg = |key: &str| {
+        request[key]
+            .as_str()
+            .ok_or_else(|| format!("director request without {key}"))
+    };
     Ok(director64_aot::convert::compile::Options {
         output: arg("output")?,
         recovery: arg("recovery")?,
@@ -439,9 +510,13 @@ pub unsafe extern "C" fn d64c_director(ptr: *const u8, len: usize) -> u32 {
     use director64_aot::convert::{analyze, audit, compile, plan, recover};
     use serde_json::{Value, json};
     finish((|| {
-        let request: Value =
-            serde_json::from_str(unsafe { text(ptr, len) }?).map_err(|e| format!("director request: {e}"))?;
-        let arg = |key: &str| request[key].as_str().ok_or_else(|| format!("director request without {key}"));
+        let request: Value = serde_json::from_str(unsafe { text(ptr, len) }?)
+            .map_err(|e| format!("director request: {e}"))?;
+        let arg = |key: &str| {
+            request[key]
+                .as_str()
+                .ok_or_else(|| format!("director request without {key}"))
+        };
         let mut host = HostFiles;
         // Converted images are kept deflated (files::DeflatingImages): the
         // stages read them back plain, the importer packs them as stored.
@@ -450,9 +525,25 @@ pub unsafe extern "C" fn d64c_director(ptr: *const u8, len: usize) -> u32 {
         let policy = &request["policy"];
         let result = match arg("stage")? {
             "plan" => plan::write_plan(fs, arg("media")?, policy, arg("dumps")?)?,
-            "analyze" => analyze::analyze(fs, arg("media")?, arg("dumps")?, arg("output")?, policy, arg("now")?)?,
-            "audit" => audit::audit(fs, arg("media")?, arg("dumps")?, arg("output")?, policy, arg("parser")?)?,
-            "recover" => recover::recover(fs, arg("manifest")?, arg("output")?, &recover::provenance())?,
+            "analyze" => analyze::analyze(
+                fs,
+                arg("media")?,
+                arg("dumps")?,
+                arg("output")?,
+                policy,
+                arg("now")?,
+            )?,
+            "audit" => audit::audit(
+                fs,
+                arg("media")?,
+                arg("dumps")?,
+                arg("output")?,
+                policy,
+                arg("parser")?,
+            )?,
+            "recover" => {
+                recover::recover(fs, arg("manifest")?, arg("output")?, &recover::provenance())?
+            }
             "compile" => {
                 let options = compile_options(&request, policy)?;
                 // With external_movies the importer converts each movie on its
@@ -462,7 +553,9 @@ pub unsafe extern "C" fn d64c_director(ptr: *const u8, len: usize) -> u32 {
                 // converts the movies here.
                 if request["external_movies"].as_bool().unwrap_or(false) {
                     let setup = compile::compile_setup(fs, &options)?;
-                    let inputs: Vec<Vec<String>> = (0..setup.jobs.len()).map(|k| setup.job_inputs(&options, k)).collect();
+                    let inputs: Vec<Vec<String>> = (0..setup.jobs.len())
+                        .map(|k| setup.job_inputs(&options, k))
+                        .collect();
                     json!({"movies": setup.jobs.len(), "names": setup.job_names(), "inputs": inputs})
                 } else if request["external_prescale"].as_bool().unwrap_or(false) {
                     let pending = compile::compile_start(fs, &options)?;
@@ -480,18 +573,24 @@ pub unsafe extern "C" fn d64c_director(ptr: *const u8, len: usize) -> u32 {
                 let setup = compile::compile_setup(fs, &options)?;
                 #[allow(static_mut_refs)]
                 let palettes = unsafe { PALETTES.get_or_insert_with(Default::default) };
-                let index = request["index"].as_u64().ok_or("compile-movie without an index")? as usize;
+                let index = request["index"]
+                    .as_u64()
+                    .ok_or("compile-movie without an index")? as usize;
                 compile::convert_job(fs, &options, &setup, palettes, index)?.to_json()
             }
             // The pool's movie records, in job order, from `results`.
             "compile-merge" => {
                 let options = compile_options(&request, policy)?;
                 let results = arg("results")?;
-                let count = request["movies"].as_u64().ok_or("compile-merge without a movie count")? as usize;
+                let count = request["movies"]
+                    .as_u64()
+                    .ok_or("compile-merge without a movie count")?
+                    as usize;
                 let mut converted = Vec::with_capacity(count);
                 for k in 0..count {
                     let path = format!("{results}/{k}.json");
-                    let value: Value = serde_json::from_slice(&fs.read(&path)?).map_err(|e| format!("{path}: {e}"))?;
+                    let value: Value = serde_json::from_slice(&fs.read(&path)?)
+                        .map_err(|e| format!("{path}: {e}"))?;
                     converted.push(director64_aot::convert::movie::Converted::from_json(value)?);
                 }
                 let pending = compile::compile_merge(fs, &options, converted)?;
@@ -502,7 +601,8 @@ pub unsafe extern "C" fn d64c_director(ptr: *const u8, len: usize) -> u32 {
             "compile-finish" => {
                 let options = compile_options(&request, policy)?;
                 #[allow(static_mut_refs)]
-                let pending = unsafe { PENDING.take() }.ok_or("compile-finish without a pending compile")?;
+                let pending =
+                    unsafe { PENDING.take() }.ok_or("compile-finish without a pending compile")?;
                 let renames: std::collections::HashMap<String, String> = request["renames"]
                     .as_object()
                     .into_iter()
@@ -515,33 +615,53 @@ pub unsafe extern "C" fn d64c_director(ptr: *const u8, len: usize) -> u32 {
             // The port's additions (compiler/src/ports.rs) over the importer's files.
             "port-plan" => {
                 let path = arg("model")?;
-                let model: Value = serde_json::from_slice(&fs.read(path)?).map_err(|e| format!("{path}: {e}"))?;
+                let model: Value =
+                    serde_json::from_slice(&fs.read(path)?).map_err(|e| format!("{path}: {e}"))?;
                 director64_aot::ports::plan(arg("slug")?, &model)?
             }
             "port-model" => {
                 let path = arg("model")?;
-                let mut model: Value = serde_json::from_slice(&fs.read(path)?).map_err(|e| format!("{path}: {e}"))?;
+                let mut model: Value =
+                    serde_json::from_slice(&fs.read(path)?).map_err(|e| format!("{path}: {e}"))?;
                 let port = port_of(&request)?;
-                let substitute = request.get("substitute").and_then(Value::as_str).map(|p| fs.read(p)).transpose()?;
+                let substitute = request
+                    .get("substitute")
+                    .and_then(Value::as_str)
+                    .map(|p| fs.read(p))
+                    .transpose()?;
                 // [[key, font64 path], ...], one per plan() measurement.
                 let measured: Vec<(String, String)> = request["measured"]
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .map(|m| (m[0].as_str().unwrap_or("").to_string(), m[1].as_str().unwrap_or("").to_string()))
+                    .map(|m| {
+                        (
+                            m[0].as_str().unwrap_or("").to_string(),
+                            m[1].as_str().unwrap_or("").to_string(),
+                        )
+                    })
                     .collect();
                 let mut measure = |key: &str| -> Result<Vec<u8>, String> {
-                    let (_, path) = measured.iter().find(|(k, _)| k == key).ok_or(format!("{key} not measured"))?;
+                    let (_, path) = measured
+                        .iter()
+                        .find(|(k, _)| k == key)
+                        .ok_or(format!("{key} not measured"))?;
                     fs.read(path)
                 };
                 let fonts = director64_aot::ports::PortFonts {
                     droid_sans: substitute.clone(),
                     data_files: request["data_files"].as_u64().unwrap_or(0) as usize,
-                    external_media: request["external_media"].as_array().cloned().unwrap_or_default(),
+                    external_media: request["external_media"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default(),
                 };
                 director64_aot::ports::postprocess_model(&mut model, &port, &fonts, &mut measure)?;
                 // The model names its substitute as a converted font asset.
-                if let (Some(asset), Some(bytes)) = (director64_aot::ports::substitute_asset(&port.slug), substitute) {
+                if let (Some(asset), Some(bytes)) = (
+                    director64_aot::ports::substitute_asset(&port.slug),
+                    substitute,
+                ) {
                     let output = arg("output")?;
                     fs.write(&format!("{output}/{asset}"), &bytes)?;
                 }
@@ -549,9 +669,15 @@ pub unsafe extern "C" fn d64c_director(ptr: *const u8, len: usize) -> u32 {
                 json!({"fonts": model["fonts"].as_array().map_or(0, Vec::len)})
             }
             "port-program" => {
-                let program: Value = serde_json::from_slice(&fs.read(arg("program")?)?).map_err(|e| e.to_string())?;
-                let manifest: Value = serde_json::from_slice(&fs.read(arg("manifest")?)?).map_err(|e| e.to_string())?;
-                let program = director64_aot::ports::executable_program(&program, &port_of(&request)?, &manifest)?;
+                let program: Value = serde_json::from_slice(&fs.read(arg("program")?)?)
+                    .map_err(|e| e.to_string())?;
+                let manifest: Value = serde_json::from_slice(&fs.read(arg("manifest")?)?)
+                    .map_err(|e| e.to_string())?;
+                let program = director64_aot::ports::executable_program(
+                    &program,
+                    &port_of(&request)?,
+                    &manifest,
+                )?;
                 fs.write(arg("output")?, (program.to_string() + "\n").as_bytes())?;
                 json!({"handlers": program["handlers"].as_array().map_or(0, Vec::len)})
             }
@@ -565,7 +691,10 @@ pub unsafe extern "C" fn d64c_director(ptr: *const u8, len: usize) -> u32 {
 fn port_of(request: &serde_json::Value) -> Result<director64_aot::ports::Port, String> {
     let port = &request["port"];
     Ok(director64_aot::ports::Port {
-        slug: port["slug"].as_str().ok_or("director request without a port slug")?.to_string(),
+        slug: port["slug"]
+            .as_str()
+            .ok_or("director request without a port slug")?
+            .to_string(),
         source_sha256: port["source_sha256"].as_str().unwrap_or("").to_string(),
         launcher_movie: port["launcher_movie"].as_str().map(str::to_string),
         native_compatibility: port["native_compatibility"].as_bool().unwrap_or(false),

@@ -9,12 +9,18 @@ import {inflateRawSync} from "node:zlib";
 import {createInterface} from "node:readline";
 import {join} from "node:path";
 import {pathToFileURL} from "node:url";
+import {videoProbe} from "./video.mjs";
+import {decodeWav, isOpusSound, readOpusHeader} from "../site/audio.js";
+import {validateFlashSound} from "../site/flash-audio.js";
 
-const [site, movie = "START", mode] = process.argv.slice(2);
-if (!site || mode !== "rpc") {
-  process.stderr.write("usage: probe.mjs SITE MOVIE rpc\n");
+const [site, movie = "START", mode, ...options] = process.argv.slice(2);
+if (!site || mode !== "rpc" || options.some(option => option !== "--state-only")) {
+  process.stderr.write("usage: probe.mjs SITE MOVIE rpc [--state-only]\n");
   process.exit(2);
 }
+// Render by default: a state-only RPC replay cannot detect compositor errors.
+// The opt-out is explicit for investigations of script-state parity alone.
+const render = !options.includes("--state-only");
 const build = JSON.parse(readFileSync(join(site, "build.json"), "utf8"));
 if (movie.toUpperCase() !== build.game.entry_movie.toUpperCase()) {
   process.stderr.write(`the browser runtime starts at ${build.game.entry_movie} only\n`);
@@ -36,42 +42,77 @@ function pack(kind) {
   };
 }
 const images = pack("images");
+const audio = pack("audio"), checkedSounds = new Set();
 const data = pack("data");
+const videos = videoProbe(pack("video"));
+const layout = (text, width, height, style) => {
+  const advance = style ? Math.max(1, Math.round(style.size * 0.55)) : 7;
+  const step = style ? (style.lineHeight > 0 ? style.lineHeight : Math.round(style.size * 1.2)) : 13;
+  const boxes = new Int16Array(text.length * 4);
+  let x = 0, y = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\r" || c === "\n") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      x = 0;
+      y += step;
+      continue;
+    }
+    if (c !== " " && x > 0 && style) {
+      let end = i;
+      while (end < text.length && !" \r\n".includes(text[end])) end++;
+      if ((i === 0 || text[i - 1] === " ") && x + (end - i) * advance > width) {
+        x = 0;
+        y += step;
+      }
+    }
+    boxes.set([x, y, advance, step], i * 4);
+    x += advance;
+  }
+  return boxes;
+};
 const {default: createDirector64} = await import(pathToFileURL(join(site, "director64.mjs")).href);
 const module = await createDirector64({
   director64Host: {
+    // The service clock models channel lifetime; this probe emits no sound.
+    soundBreakLoop() {},
+    flashSound(id, sound) {
+      if (!sound) return;
+      validateFlashSound(sound);
+      if (!checkedSounds.has(sound.name)) {
+        const bytes = audio(sound.name);
+        if (!bytes) throw new Error(`missing Flash event sound ${sound.name}`);
+        const decoded = isOpusSound(bytes) ? readOpusHeader(bytes) : decodeWav(bytes);
+        if ((decoded.sourceRate ?? decoded.rate) !== sound.rate ||
+            (decoded.sourceFrames ?? decoded.frames) !== sound.frames)
+          throw new Error(`Flash event sound metadata mismatch ${sound.name}`);
+        checkedSounds.add(sound.name);
+      }
+    },
     asset: images,
     data,
+    video: (...args) => { if (render) videos.update(...args); },
+    videoFrame: (slot) => videos.frame(slot),
+    videoRevision: () => videos.revision(),
     // The native probe holds a playFile stream's channel for a nominal second.
     stream: (channel, name) => (name ? 1000 : 0),
     // No fonts here: text lays out on a nominal fixed advance, wrapped as the
     // page wraps it, so text hit tests (pointToWord, hyperlinks) can be driven.
-    layout: (text, width, height, style) => {
-      const advance = style ? Math.max(1, Math.round(style.size * 0.55)) : 7;
-      const step = style ? (style.lineHeight > 0 ? style.lineHeight : Math.round(style.size * 1.2)) : 13;
-      const boxes = new Int16Array(text.length * 4);
-      let x = 0, y = 0;
+    layout,
+    // Nominal glyph coverage exercises live text and compositor paths. This
+    // probe is a render-error gate; projector/font pixel comparisons use the
+    // browser with its actual fonts and explicit image checkpoints.
+    text: (text, width, height, style) => {
+      const boxes = layout(text, width, height, style);
+      const plane = new Uint8Array(width * height);
       for (let i = 0; i < text.length; i++) {
-        const c = text[i];
-        if (c === "\r" || c === "\n") {
-          if (c === "\r" && text[i + 1] === "\n") i++;
-          x = 0;
-          y += step;
-          continue;
-        }
-        if (c !== " " && x > 0 && style) {
-          // Wrap a word that would cross the box edge.
-          let end = i;
-          while (end < text.length && !" \r\n".includes(text[end])) end++;
-          if ((i === 0 || text[i - 1] === " ") && x + (end - i) * advance > width) {
-            x = 0;
-            y += step;
-          }
-        }
-        boxes.set([x, y, advance, step], i * 4);
-        x += advance;
+        if (/\s/.test(text[i])) continue;
+        const [x, y, w, h] = boxes.subarray(i * 4, i * 4 + 4);
+        if (x >= width || y >= height) continue;
+        for (let row = Math.max(0, y); row < Math.min(height, y + h - 1); row++)
+          plane.fill(255, row * width + Math.max(0, x), row * width + Math.min(width, x + w - 1));
       }
-      return boxes;
+      return plane;
     },
     trace: (text) => process.stderr.write(`NATIVE_TRACE ${text}\n`),
   },
@@ -92,11 +133,25 @@ if (build.package) {
 // The native probe starts from erased flash; so does a fresh browser profile.
 module.HEAPU8.fill(255, module._d64_flash(), module._d64_flash() + module._d64_flash_bytes());
 const out = (text) => new Promise((resolve) => process.stdout.write(text, resolve));
-await out(module.ccall("d64_boot_rpc", "string", ["number"], [42]));
+if (render && typeof module._d64_probe_render !== "function") {
+  process.stderr.write("runtime lacks rendered RPC support; rebuild the browser runtime\n");
+  process.exit(2);
+}
+module._d64_probe_render?.(render ? 1 : 0);
+function checkpoint(context) {
+  if (render) module._d64_render(0, 0, 0);
+  const error = module.UTF8ToString(module._d64_error());
+  if (error) process.stderr.write(`runtime failure after ${context}: ${error}\n`);
+  return !error;
+}
+const boot = module.ccall("d64_boot_rpc", "string", ["number"], [42]);
+if (!checkpoint("boot")) process.exit(1);
+await out(boot);
 let status = 0;
 for await (const line of createInterface({input: process.stdin, crlfDelay: Infinity})) {
   const reply = module.ccall("d64_rpc", "string", ["string"], [line.trimEnd()]);
   if (reply === "") { status = 2; break; }
+  if (!checkpoint(JSON.stringify(line.trimEnd()))) { status = 1; break; }
   await out(reply);
 }
 if (!status && module.UTF8ToString(module._d64_error())) status = 1;

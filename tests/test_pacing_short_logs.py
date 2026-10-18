@@ -7,6 +7,8 @@ save and stops, so its log has no NATIVE_TICK at all, and the boot gate reads
 every case through the same path.
 """
 
+import pytest
+
 from director64.pacing import analyze, assert_pacing
 
 COMPLETE = (
@@ -22,8 +24,10 @@ def test_log_without_any_window_summarizes_to_nothing():
     assert report["windows"] == []
     assert report["summary"]["windows"] == 0
     assert report["summary"]["min_tick_delivery"] is None
-    # A budget cannot be violated by a run that reported no pacing at all.
-    assert_pacing(report, {"min_tick_delivery": 0.99, "sustained_windows": 2})
+    # Diagnostic parsing remains available, but no measurements cannot certify
+    # successful pacing. Expected corrupt-save refusals skip this assertion.
+    with pytest.raises(ValueError, match="insufficient pacing measurements"):
+        assert_pacing(report, {"min_tick_delivery": 0.99, "sustained_windows": 2})
 
 
 def test_partial_window_is_not_a_window():
@@ -37,4 +41,5 @@ def test_single_window_has_no_predecessor_to_difference():
     assert report["summary"]["windows"] == 1
     assert report["summary"]["measurable_windows"] == 0
     assert report["windows"][0]["tick_delivery"] is None
-    assert_pacing(report, {"min_tick_delivery": 0.99, "sustained_windows": 2})
+    with pytest.raises(ValueError, match="insufficient pacing measurements"):
+        assert_pacing(report, {"min_tick_delivery": 0.99, "sustained_windows": 2})

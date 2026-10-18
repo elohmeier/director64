@@ -13,7 +13,7 @@ static const char *const global_names[] = {
 };
 static lv_runtime_t values;
 static dg_runtime_t director;
-static unsigned busy_until[DG_SOUND_CHANNELS], sound_count;
+
 static unsigned char flash[131072];
 static bool flash_read(void *ctx, size_t offset, void *data, size_t length) {
   (void)ctx; if (offset > sizeof(flash) || length > sizeof(flash) - offset) return false;
@@ -45,13 +45,7 @@ static bool read_data(void *ctx, const char *name, char *data, unsigned cap, uns
 static bool write_file(void *ctx, const char *name, const char *data, unsigned length) {
   (void)ctx; return game_write_file(name, data, length);
 }
-static void sound(void *ctx, unsigned channel, const dg_member_t *m) {
-  (void)ctx;
-  busy_until[channel] = director.ticks + (m && m->rate ? (m->samples * 60u + m->rate - 1) / m->rate : 0);
-  if (m && m->looping) busy_until[channel] = UINT32_MAX;
-  sound_count++;
-}
-static bool busy(void *ctx, unsigned channel) { (void)ctx; return director.ticks < busy_until[channel]; }
+#include "audio.inc"
 static void trace(void *ctx, const char *text) { (void)ctx; fprintf(stderr, "TRACE %s\n", text); }
 static bool hit(void *ctx, const dg_member_t *m, unsigned ink, int x, int y) {
   (void)ctx; return native_image_hit(&values, m, ink, x, y);
@@ -99,14 +93,15 @@ static void play_file(void *ctx, unsigned channel, const char *name) {
   if (channel >= DG_SOUND_CHANNELS) return;
   // Converted streams play for their virtual name; the probe accounts time
   // with a nominal one-second busy window and logs the request.
-  busy_until[channel] = director.ticks + 60; sound_count++;
+  const dg_member_t nominal = {.samples=60, .rate=60};
+  sound(NULL, channel, &nominal);
   fprintf(stderr, "STREAM channel=%u name=%s tick=%u\n", channel + 1, name, director.ticks);
 }
 static void boot(void) {
-  memset(busy_until, 0, sizeof(busy_until));
+  memset(probe_voices, 0, sizeof(probe_voices));
   game_save_load((save_backend_t){flash_read, flash_write, NULL});
   dg_init(&director, &values, (dg_platform_t){.read_file=read_file, .write_file=write_file,
-    .nth_file=game_nth_file, .long_date=game_long_date, .sound=sound, .sound_busy=busy, .trace=trace, .hit=hit, .play_file=play_file, .find_movie=find_movie, .read_data=read_data},
+    .nth_file=game_nth_file, .long_date=game_long_date, .sound=sound, .sound_busy=busy, PROBE_AUDIO_POSITION .sound_pause=sound_pause, .sound_break_loop=sound_break_loop, .trace=trace, .hit=hit, .play_file=play_file, .find_movie=find_movie, .read_data=read_data},
     NULL, global_names, sizeof(global_names)/sizeof(*global_names), 42);
 }
 #include "probe_stats.inc"

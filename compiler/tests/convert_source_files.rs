@@ -20,9 +20,14 @@ impl Scratch {
         std::fs::write(self.0.join(name), text).unwrap();
     }
     fn sources(&self, directories: &[&str]) -> Result<Vec<(String, String)>, String> {
-        let fs = Disk { root: self.0.clone() };
+        let fs = Disk {
+            root: self.0.clone(),
+        };
         let directories: Vec<String> = directories.iter().map(|d| d.to_string()).collect();
-        Ok(source_files(&fs, ".", &directories)?.into_iter().map(|s| (s.name, s.path)).collect())
+        Ok(source_files(&fs, ".", &directories)?
+            .into_iter()
+            .map(|s| (s.name, s.path))
+            .collect())
     }
 }
 impl Drop for Scratch {
@@ -31,7 +36,10 @@ impl Drop for Scratch {
     }
 }
 fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
-    items.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+    items
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
 }
 
 #[test]
@@ -41,14 +49,31 @@ fn nested_casts_retain_original_paths_in_a_collision_free_runtime_namespace() {
     root.write("MAIN.DXR", "movie");
     root.write("CASTS/shared.cxt", "cast");
     root.write("CASTS/ignored.txt", "ordinary file");
-    assert_eq!(root.sources(&["."]).unwrap(), pairs(&[("MAIN.DXR", "MAIN.DXR")]));
-    assert_eq!(root.sources(&[".", "CASTS"]).unwrap(),
-        pairs(&[("MAIN.DXR", "MAIN.DXR"), ("SHARED.CXT", "CASTS/shared.cxt")]));
+    assert_eq!(
+        root.sources(&["."]).unwrap(),
+        pairs(&[("MAIN.DXR", "MAIN.DXR")])
+    );
+    assert_eq!(
+        root.sources(&[".", "CASTS"]).unwrap(),
+        pairs(&[("MAIN.DXR", "MAIN.DXR"), ("SHARED.CXT", "CASTS/shared.cxt")])
+    );
     root.write("SHARED.CXT", "ambiguous cast");
-    assert!(root.sources(&[".", "CASTS"]).unwrap_err().contains("duplicate"));
-    assert!(root.sources(&[".."]).unwrap_err().contains("escapes media root"));
+    assert!(
+        root.sources(&[".", "CASTS"])
+            .unwrap_err()
+            .contains("duplicate")
+    );
+    assert!(
+        root.sources(&[".."])
+            .unwrap_err()
+            .contains("escapes media root")
+    );
     std::os::unix::fs::symlink(root.0.join("MAIN.DXR"), root.0.join("ALIAS.DXR")).unwrap();
-    assert!(root.sources(&["."]).unwrap_err().contains("not a regular file"));
+    assert!(
+        root.sources(&["."])
+            .unwrap_err()
+            .contains("not a regular file")
+    );
 }
 
 #[test]
@@ -62,7 +87,14 @@ fn xtra_envelope_preserves_symbol_and_exact_payload_boundaries() {
     be32(&mut b, 24, 4);
     put(&mut b, 28, b"data");
     let xtra = xtra_model(&b).unwrap();
-    assert_eq!((xtra.symbol.as_str(), xtra.payload_offset, xtra.payload_length), ("text", 28, 4));
+    assert_eq!(
+        (
+            xtra.symbol.as_str(),
+            xtra.payload_offset,
+            xtra.payload_length
+        ),
+        ("text", 28, 4)
+    );
     for i in 0..b.len() {
         assert!(xtra_model(&b[..i]).is_err(), "truncated at {i}");
     }
@@ -77,7 +109,22 @@ fn xtra_envelope_preserves_symbol_and_exact_payload_boundaries() {
 fn unprotected_cst_files_retain_paths_and_share_the_protected_cast_namespace() {
     let root = Scratch::new("cst");
     root.write("Data.cst", "database");
-    assert_eq!(root.sources(&["."]).unwrap(), pairs(&[("DATA.CXT", "Data.cst")]));
+    assert_eq!(
+        root.sources(&["."]).unwrap(),
+        pairs(&[("DATA.CXT", "Data.cst")])
+    );
     root.write("DATA.CXT", "collision");
     assert!(root.sources(&["."]).unwrap_err().contains("duplicate"));
+}
+
+#[test]
+fn linked_dir_children_are_imported_and_shockwave_duplicates_are_deterministic() {
+    let root = Scratch::new("linked-dir");
+    root.write("Child.dir", "unprotected movie");
+    root.write("Only.dir", "linked child with no protected copy");
+    root.write("CHILD.DCR", "shipped Shockwave copy");
+    assert_eq!(
+        root.sources(&["."]).unwrap(),
+        pairs(&[("CHILD.DXR", "CHILD.DCR"), ("ONLY.DXR", "Only.dir")])
+    );
 }

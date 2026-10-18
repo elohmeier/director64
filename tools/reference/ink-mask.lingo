@@ -1,0 +1,40 @@
+-- Synthetic pixel inputs only; see docs/reference-capture.md.
+global out, pm, qm, nm, p, q
+out=new(xtra("fileio"))
+out.createFile("C:\ink-mask.txt")
+out.openFile("C:\ink-mask.txt",2)
+qm=new(#bitmap)
+pm=new(#bitmap)
+nm=new(#field)
+nm.text="synthetic mask neighbor"
+p=image(8,8,32)
+p.fill(rect(0,0,8,8),rgb(255,255,255))
+p.fill(rect(2,2,6,6),rgb(255,0,0))
+q=image(8,8,32)
+q.fill(rect(0,0,8,8),rgb(0,0,255))
+pm.image=p
+qm.image=q
+puppetSprite(148,1)
+puppetSprite(149,1)
+sprite(148).member=qm
+sprite(149).member=pm
+sprite(148).rect=rect(0,0,8,8)
+sprite(149).rect=rect(0,0,8,8)
+sprite(148).ink=0
+sprite(149).color=rgb(0,0,0)
+sprite(149).bgColor=rgb(255,255,255)
+out.writeString(string([pm.number,nm.number]) & RETURN)
+repeat with neighbor in [#field,#empty]
+ if neighbor=#empty then nm.erase()
+ repeat with ink in [0,8,9]
+  repeat with blend in [50,100]
+   sprite(149).ink=ink
+   sprite(149).blend=blend
+   updateStage
+   exterior=(the stage).image.getPixel(point(0,0))
+   interior=(the stage).image.getPixel(point(4,4))
+   out.writeString(string([neighbor,ink,blend,exterior,interior]) & RETURN)
+  end repeat
+ end repeat
+end repeat
+out.closeFile()

@@ -12,6 +12,7 @@ from director64.rom import (
     ROM_TARGET_MIB,
     RomError,
     dfs_files,
+    overlay_symbol_names,
     packed_dfs_names,
     validate_header,
     validate_image_pack,
@@ -78,11 +79,7 @@ def validate_rom(root, profile):
     files = dfs_files(dfs)
     aot = json.loads((game.work / "aot/c/manifest.json").read_text())
     code = {"code/" + m["movie"].replace(".", "_").lower() + ".dso" for m in aot["movies"]}
-    symbols = {
-        "code/" + m["movie"].replace(".", "_").lower() + ".dso.sym"
-        for m in aot["movies"]
-        if m["native_functions"]
-    }
+    symbols = overlay_symbol_names(aot)
     speech = {
         f"{folder}/{p.name}"
         for folder in ("voc", "sfx")

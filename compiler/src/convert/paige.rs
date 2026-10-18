@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::js::{mac_roman, num};
 
@@ -19,7 +19,12 @@ pub struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     pub fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, position: 0, previous: None, repeat: 0 }
+        Self {
+            bytes,
+            position: 0,
+            previous: None,
+            repeat: 0,
+        }
     }
     fn next_byte(&mut self) -> Option<u8> {
         let b = self.bytes.get(self.position).copied();
@@ -32,7 +37,9 @@ impl<'a> Reader<'a> {
             return Ok(self.previous.unwrap());
         }
         let marker = self.next_byte();
-        let marker = marker.filter(|m| [1, 2, 0x81, 0x82, 0xc1, 0xc2].contains(m)).ok_or("invalid Paige number marker")?;
+        let marker = marker
+            .filter(|m| [1, 2, 0x81, 0x82, 0xc1, 0xc2].contains(m))
+            .ok_or("invalid Paige number marker")?;
         if marker & 0x80 != 0 {
             let previous = self.previous.ok_or("Paige repeat before first number")?;
             if marker & 0x40 != 0 {
@@ -58,7 +65,12 @@ impl<'a> Reader<'a> {
             Some(d) => (true, d),
             None => (false, raw),
         };
-        if digits.is_empty() || digits.len() > 8 || !digits.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b)) {
+        if digits.is_empty()
+            || digits.len() > 8
+            || !digits
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
+        {
             return Err("invalid Paige numeric value".into());
         }
         let value = i64::from_str_radix(digits, 16).unwrap() * if negative { -1 } else { 1 };
@@ -78,9 +90,17 @@ impl<'a> Reader<'a> {
         if self.repeat > 0 || self.next_byte() != Some(0) {
             return Err("invalid Paige byte marker".into());
         }
-        let comma = self.bytes[self.position.min(self.bytes.len())..].iter().position(|&b| b == 44).map(|c| c + self.position);
+        let comma = self.bytes[self.position.min(self.bytes.len())..]
+            .iter()
+            .position(|&b| b == 44)
+            .map(|c| c + self.position);
         let raw = comma.map(|c| &self.bytes[self.position..c]).unwrap_or(&[]);
-        let valid = comma.is_some() && !raw.is_empty() && raw.len() <= 6 && raw.iter().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(b));
+        let valid = comma.is_some()
+            && !raw.is_empty()
+            && raw.len() <= 6
+            && raw
+                .iter()
+                .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(b));
         if !valid {
             return Err("invalid Paige byte length".into());
         }
@@ -102,10 +122,38 @@ impl<'a> Reader<'a> {
 }
 
 const NAMES: [&str; 32] = [
-    "bold", "italic", "underline", "outline", "shadow", "condense", "extend", "doubleUnderline", "wordUnderline",
-    "dottedUnderline", "hidden", "strikeout", "superscript", "subscript", "rotation", "allCaps", "allLower",
-    "smallCaps", "overline", "boxed", "relativePoint", "superImpose", "revision", "nestedSubset", "blink", "index",
-    "toc", "custom27", "custom28", "custom29", "custom30", "custom31",
+    "bold",
+    "italic",
+    "underline",
+    "outline",
+    "shadow",
+    "condense",
+    "extend",
+    "doubleUnderline",
+    "wordUnderline",
+    "dottedUnderline",
+    "hidden",
+    "strikeout",
+    "superscript",
+    "subscript",
+    "rotation",
+    "allCaps",
+    "allLower",
+    "smallCaps",
+    "overline",
+    "boxed",
+    "relativePoint",
+    "superImpose",
+    "revision",
+    "nestedSubset",
+    "blink",
+    "index",
+    "toc",
+    "custom27",
+    "custom28",
+    "custom29",
+    "custom30",
+    "custom31",
 ];
 
 fn font_name(b: &[u8]) -> Result<String, String> {
@@ -119,9 +167,13 @@ fn font_name(b: &[u8]) -> Result<String, String> {
 pub type Records = BTreeMap<u64, (Vec<u8>, u64)>;
 
 fn record_reader(records: &Records, kind: u64) -> Result<(Reader<'_>, u64), String> {
+    // A document retains unused edit styles: the table can exceed the
+    // number of active runs by thousands. Style indices fit in u16, while
+    // fonts and paragraphs retain the smaller allocation bound.
+    let maximum = if kind == 6 { u16::MAX as u64 } else { 4096 };
     let (bytes, count) = records
         .get(&kind)
-        .filter(|r| r.1 <= 4096)
+        .filter(|r| r.1 <= maximum)
         .ok_or_else(|| format!("missing or excessive Paige section {kind}"))?;
     Ok((Reader::new(bytes), *count))
 }
@@ -183,7 +235,9 @@ pub fn paige_styles(records: &Records, text_length: usize) -> Result<Value, Stri
         if !(0..=32).contains(&tab_count) {
             return Err("unsupported Paige tab count".into());
         }
-        let tabs: Vec<Vec<i64>> = (0..tab_count).map(|_| pr.numbers(4)).collect::<Result<_, _>>()?;
+        let tabs: Vec<Vec<i64>> = (0..tab_count)
+            .map(|_| pr.numbers(4))
+            .collect::<Result<_, _>>()?;
         let tail = pr.numbers(24)?;
         let mut raw = prefix.clone();
         raw.extend(tabs.iter().flatten());
@@ -204,7 +258,11 @@ pub fn paige_styles(records: &Records, text_length: usize) -> Result<Value, Stri
         for _ in 0..count {
             let pair = r.numbers(2)?;
             let (offset, index) = (pair[0], pair[1]);
-            if offset < previous || offset > text_length as i64 + 2 || index < 0 || index as usize >= limit {
+            if offset < previous
+                || offset > text_length as i64 + 2
+                || index < 0
+                || index as usize >= limit
+            {
                 return Err("invalid Paige style run".into());
             }
             result.push(json!({"offset": offset, "index": index}));
@@ -230,7 +288,9 @@ pub fn paige_styles(records: &Records, text_length: usize) -> Result<Value, Stri
 /// Each comes out as [first, last, data]: 1-based and inclusive, as Lingo's
 /// `the hyperlinks` reads them.
 pub fn paige_hyperlinks(records: &Records, text: &str) -> Result<Vec<Value>, String> {
-    let Some((bytes, count)) = records.get(&296) else { return Ok(Vec::new()) };
+    let Some((bytes, count)) = records.get(&296) else {
+        return Ok(Vec::new());
+    };
     if *count > 4096 {
         return Err("excessive Paige hyperlink count".into());
     }
@@ -240,7 +300,11 @@ pub fn paige_hyperlinks(records: &Records, text: &str) -> Result<Vec<Value>, Str
     for _ in 0..*count {
         let raw = reader.numbers(11)?;
         let (start, end, data_length) = (raw[0], raw[1], raw[10]);
-        let data = if data_length > 0 { mac_roman(reader.bytes_value()?) } else { String::new() };
+        let data = if data_length > 0 {
+            mac_roman(reader.bytes_value()?)
+        } else {
+            String::new()
+        };
         if start < 0 || end < start {
             return Err("invalid Paige hyperlink range".into());
         }

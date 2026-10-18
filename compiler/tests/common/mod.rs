@@ -56,11 +56,19 @@ impl Writer {
 
 /// A 60x40-twip stage rectangle: 3x2 pixels.
 pub fn stage_rect() -> Vec<u8> {
-    Writer::new().put(7, 5).put(0, 7).put(60, 7).put(0, 7).put(40, 7).done()
+    Writer::new()
+        .put(7, 5)
+        .put(0, 7)
+        .put(60, 7)
+        .put(0, 7)
+        .put(40, 7)
+        .done()
 }
 pub fn tag(kind: u16, payload: &[u8]) -> Vec<u8> {
     let long = payload.len() >= 63;
-    let mut out = ((kind << 6) | if long { 63 } else { payload.len() as u16 }).to_le_bytes().to_vec();
+    let mut out = ((kind << 6) | if long { 63 } else { payload.len() as u16 })
+        .to_le_bytes()
+        .to_vec();
     if long {
         out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     }

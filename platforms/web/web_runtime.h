@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "compositor.h"
+#include "flash_runtime.h"
 
 // The console's 128 KiB FlashRAM; every adapter's archive is laid out in it.
 #define WEB_FLASH_BYTES (128u * 1024u)
@@ -27,6 +28,8 @@ typedef struct {
   // Start (asset non-NULL) or stop a channel.
   void (*sound)(void *ctx, unsigned channel, const char *asset, bool looping,
                 uint32_t loop_start, uint32_t loop_end);
+  void (*sound_pause)(void *ctx, unsigned channel, bool paused);
+  void (*sound_break_loop)(void *ctx, unsigned channel);
   void (*gain)(void *ctx, unsigned channel, float gain);
   // The flash image holds a new save generation (ok) or a failed commit.
   void (*save_commit)(void *ctx, bool ok);
@@ -39,11 +42,12 @@ typedef struct {
   // A shipped read-only data file by its "folder/path" name; returns its
   // length, -1 when there is none.
   int32_t (*data)(void *ctx, const char *name, uint8_t *out, uint32_t cap);
-  // D5 digital video, per sprite channel (platforms/n64/d5_video.c): the
+  // Digital video, per runtime-assigned player ID (platforms/n64/d5_video.c): the
   // member's video and sound assets ("" for none; NULL video closes the
   // player), its time in 600ths of a second, rate, a serial that changes on
   // every seek or loop, and the gain. Called each service step while the
-  // sprite shows a video.
+  // sprite shows a video. IDs distinguish a child movie's channels from its
+  // parent's channels and remain stable for that child instance's lifetime.
   void (*video)(void *ctx, unsigned sprite, const char *video, const char *audio,
                 double time, double rate, unsigned serial, float gain);
   // The frame a sprite's player shows, RGBA8888; false while none decoded.
@@ -51,8 +55,16 @@ typedef struct {
                       unsigned *width, unsigned *height);
   // Changes whenever a player has decoded a new frame.
   unsigned (*video_revision)(void *ctx);
+#if DG_D10
+  // Independent SWF event voice. NULL stops it; repeated IDs update gain
+  // and pause state without restarting. The snapshot is borrowed this call.
+  void (*flash_sound)(void *ctx, uint32_t id, const dg_flash_audio_t *);
+#endif
   void *ctx;
 } web_host_t;
 
 void web_runtime_host(web_host_t);
+// Release the running engine and package while host services/assets are alive.
+// Idempotent; a new host and package can then be installed in the same process.
+void d64_shutdown(void);
 #endif

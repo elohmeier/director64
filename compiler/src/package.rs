@@ -6,11 +6,14 @@ use std::collections::HashMap;
 
 use sha2::{Digest, Sha256};
 
-use crate::emit::{fold, Compiled};
+use crate::emit::{Compiled, fold};
 use crate::names::Names;
-use crate::scene::{Profile, Scene, TextStyle};
+use crate::scene::{Profile, Scene, Spec, TextStyle};
 
-pub const FORMAT: u16 = 5;
+#[path = "package_flash.rs"]
+mod flash;
+
+pub const FORMAT: u16 = 9;
 
 /// The runtime ABI a package is compiled against: name ids and opcodes are
 /// positions in these two files.
@@ -107,8 +110,12 @@ pub fn write(
     for name in &compiled.globals {
         globals.u32(strings.add(name)?);
     }
-    let units: HashMap<&str, usize> =
-        compiled.units.iter().enumerate().map(|(i, u)| (u.stem.as_str(), i)).collect();
+    let units: HashMap<&str, usize> = compiled
+        .units
+        .iter()
+        .enumerate()
+        .map(|(i, u)| (u.stem.as_str(), i))
+        .collect();
     let mut movies = Out::default();
     movies.count(scenes.len())?;
     for scene in scenes {
@@ -147,7 +154,11 @@ pub fn write(
         for (name, used) in unit.names.iter().zip(&unit.symbol_use) {
             movies.u32(strings.add(name)?);
             movies.u16(names.id(name));
-            movies.u16(if *used { u16_of(compiled.symbol_ids[&fold(name)], "symbol id")? } else { 0xFFFF });
+            movies.u16(if *used {
+                u16_of(compiled.symbol_ids[&fold(name)], "symbol id")?
+            } else {
+                0xFFFF
+            });
         }
         movies.count(unit.doubles.len())?;
         for &value in &unit.doubles {
@@ -176,6 +187,12 @@ pub fn write(
             movies.u32(strings.add(&cast.name)?);
             movies.u16(cast.file);
             movies.u16(cast.cast);
+            if profile.modern() {
+                movies.u8(u8::from(!cast.pattern_assets.is_empty()));
+                for asset in &cast.pattern_assets {
+                    movies.u32(strings.add(asset)?);
+                }
+            }
         }
         movies.count(scene.members.len())?;
         for m in &scene.members {
@@ -196,9 +213,12 @@ pub fn write(
             for v in [m.filled, m.line_width, m.looping] {
                 movies.u8(v);
             }
-            movies.u16(m.film_assets.len() as u16);
+            movies.u16((m.film_assets.len() / m.flash_variant_count as usize) as u16);
             for v in [m.film_loop, m.line_direction] {
                 movies.u8(v);
+            }
+            if profile.version >= 10 {
+                movies.u8(m.flash_variant_count);
             }
             for asset in &m.film_assets {
                 movies.u32(strings.add(asset)?);
@@ -237,8 +257,14 @@ pub fn write(
                 movies.u8(m.source_xtra);
                 movies.u32(strings.add(&m.video_audio)?);
                 movies.u32(m.video_flags);
-                movies.u8(u8::try_from(m.flash_labels.len()).map_err(|_| "flash label count exceeds u8")?);
-                movies.u8(u8::try_from(m.flash_fields.len()).map_err(|_| "flash field count exceeds u8")?);
+                movies.count(m.film_sounds.len())?;
+                for &v in &m.film_sounds {
+                    movies.u32(v);
+                }
+                movies.u8(u8::try_from(m.flash_labels.len())
+                    .map_err(|_| "flash label count exceeds u8")?);
+                movies.u8(u8::try_from(m.flash_fields.len())
+                    .map_err(|_| "flash field count exceeds u8")?);
                 for (name, frame) in &m.flash_labels {
                     movies.u32(strings.add(name)?);
                     movies.u16(*frame);
@@ -247,7 +273,15 @@ pub fn write(
                     for s in [&f.name, &f.variable, &f.text] {
                         movies.u32(strings.add(s)?);
                     }
-                    for v in [f.x, f.y, f.width, f.height, f.margin_left, f.margin_right, f.indent] {
+                    for v in [
+                        f.x,
+                        f.y,
+                        f.width,
+                        f.height,
+                        f.margin_left,
+                        f.margin_right,
+                        f.indent,
+                    ] {
                         movies.i16(v);
                     }
                     movies.u8(f.align);
@@ -255,6 +289,11 @@ pub fn write(
                     movies.u8(f.multiline);
                     movies.i8(f.leading);
                     movies.u16(f.style.map_or(0, |i| i + 1));
+                    for &value in &f.local_bounds {
+                        movies.u32(value as u32);
+                    }
+                    movies.u8(u8::from(f.embed_fonts));
+                    movies.u16(f.id);
                 }
                 movies.u16(m.text_runs.len() as u16);
                 for &(offset, rgb) in &m.text_runs {
@@ -267,6 +306,59 @@ pub fn write(
                     movies.u32(*last);
                     movies.u32(strings.add(data)?);
                 }
+                movies.u16(m.linked_movie);
+                movies.u32(m.linked_flags);
+                movies.i16(m.linked_left);
+                movies.i16(m.linked_top);
+                movies.u16(u16_of(m.film_frames.len(), "runtime film frame count")?);
+                movies.i16(m.film_left);
+                movies.i16(m.film_top);
+                for frame in &m.film_frames {
+                    flash::frame(&mut movies, &mut strings, frame, profile)?;
+                }
+                movies.u32(m.film_flags);
+                movies.u16(u16_of(m.film_tracks.len(), "film track count")?);
+                for track in &m.film_tracks {
+                    movies.u16(track.channel);
+                    movies.u16(u16_of(track.keys.len(), "film key count")?);
+                    let data = film_track_data(track)?;
+                    movies.count(data.len())?;
+                    movies.0.extend_from_slice(&data);
+                }
+                movies.u16(u16_of(m.flash_stops.len(), "Flash stop count")?);
+                for &frame in &m.flash_stops {
+                    movies.u16(frame);
+                }
+                movies.u16(u16_of(m.flash_helpers.len(), "Flash helper count")?);
+                for h in &m.flash_helpers {
+                    movies.u32(strings.add(&h.name)?);
+                    movies.u32(strings.add(&h.target)?);
+                    movies.u32(strings.add(&h.property)?);
+                    movies.u8(h.operation);
+                    movies.u8(h.argument);
+                    movies.u8(u8::from(h.method));
+                }
+                movies.u32(m.flash_rate);
+                movies.u16(u16_of(
+                    m.flash_audio_positions.len(),
+                    "Flash audio position count",
+                )?);
+                for &position in &m.flash_audio_positions {
+                    movies.u32(position);
+                }
+                movies.u8(m.flash_playback_mode);
+                movies.u32(m.flash_fixed_rate);
+                movies.u8(m.flash_direct_to_stage);
+                movies.u8(m.flash_version);
+                flash::runtime(&mut movies, &mut strings, &m.flash_runtime, profile)?;
+                movies.u16(u16_of(m.flash_fonts.len(), "Flash font count")?);
+                for &style in &m.flash_fonts {
+                    movies.u16(style + 1);
+                }
+            }
+            movies.u16(u16_of(m.palette.len(), "palette color count")?);
+            for &color in &m.palette {
+                movies.u32(color);
             }
         }
         for &(hash, member) in &scene.member_index {
@@ -286,30 +378,7 @@ pub fn write(
             let s = &delta.spec;
             movies.u16(delta.channel);
             movies.u16(delta.mask);
-            movies.u32(s.member);
-            movies.u32(s.script);
-            for v in [s.x, s.y, s.width, s.height] {
-                movies.i16(v);
-            }
-            for v in [s.ink, s.blend, s.kind, s.flags, s.fore, s.back, s.thickness, s.stretch, s.trails] {
-                movies.u8(v);
-            }
-            if profile.modern() {
-                movies.i16(s.loc_z);
-                movies.u16(s.tempo);
-                movies.u16(s.delay);
-                movies.u32(s.fore_rgb);
-                movies.u32(s.back_rgb);
-                movies.i32(s.rotation);
-                movies.i32(s.skew);
-            }
-            if profile.extended {
-                movies.u8(u8::try_from(s.behaviors.len()).map_err(|_| "behavior count exceeds u8")?);
-                for (script, parameters) in &s.behaviors {
-                    movies.u32(*script);
-                    movies.u32(strings.add(parameters)?);
-                }
-            }
+            write_spec(&mut movies, &mut strings, s, profile)?;
         }
         movies.u16(u16_of(scene.labels.len(), "label count")?);
         for (name, frame) in &scene.labels {
@@ -346,16 +415,123 @@ pub fn write(
     Ok(out.0)
 }
 
-/// One dg_text_style_t: str font name; u8 font id, size, align; i16 ascent,
-/// descent, leading, line height; u32 color; in extended runtimes u16
-/// advance count (0xFFFF: none) with the advances, u32 kerning pair count and
-/// u32 kerning value count with the values.
-fn write_style(out: &mut Out, strings: &mut Strings, style: &TextStyle, profile: Profile) -> Result<(), String> {
+/// Native-film field deltas; the shared C decoder is film_track.h.
+pub fn film_track_data(track: &crate::scene::FilmTrack) -> Result<Vec<u8>, String> {
+    fn groups(s: &Spec) -> [Vec<u8>; 14] {
+        [
+            s.member.to_le_bytes().to_vec(),
+            s.x.to_le_bytes().to_vec(),
+            s.y.to_le_bytes().to_vec(),
+            s.width.to_le_bytes().to_vec(),
+            s.height.to_le_bytes().to_vec(),
+            vec![s.ink, s.blend],
+            vec![s.kind, s.flags],
+            vec![s.fore, s.back],
+            vec![s.thickness, s.stretch, s.trails],
+            s.loc_z.to_le_bytes().to_vec(),
+            s.fore_rgb.to_le_bytes().to_vec(),
+            s.back_rgb.to_le_bytes().to_vec(),
+            s.rotation.to_le_bytes().to_vec(),
+            s.skew.to_le_bytes().to_vec(),
+        ]
+    }
+    if track.keys.is_empty() {
+        return Err("empty native film track".into());
+    }
+    let mut previous = groups(&Spec::default());
+    let mut result = Vec::new();
+    let mut last = None;
+    for key in &track.keys {
+        let s = &key.value;
+        if s.script != 0 || s.tempo != 0 || s.delay != 0 || !s.behaviors.is_empty() {
+            return Err("native film key contains unsupported main-channel/script state".into());
+        }
+        if last.is_some_and(|frame| key.frame <= frame) {
+            return Err("native film keys are not in frame order".into());
+        }
+        let next = groups(s);
+        let mut mask = 0u16;
+        for i in 0..14 {
+            if next[i] != previous[i] {
+                mask |= 1 << i;
+            }
+        }
+        if mask == 0 {
+            return Err("redundant native film key".into());
+        }
+        result.extend_from_slice(&key.frame.to_le_bytes());
+        result.extend_from_slice(&mask.to_le_bytes());
+        for i in 0..14 {
+            if mask & (1 << i) != 0 {
+                result.extend_from_slice(&next[i]);
+            }
+        }
+        previous = next;
+        last = Some(key.frame);
+    }
+    Ok(result)
+}
+
+fn write_spec(
+    out: &mut Out,
+    strings: &mut Strings,
+    s: &Spec,
+    profile: Profile,
+) -> Result<(), String> {
+    out.u32(s.member);
+    out.u32(s.script);
+    for v in [s.x, s.y, s.width, s.height] {
+        out.i16(v);
+    }
+    for v in [
+        s.ink,
+        s.blend,
+        s.kind,
+        s.flags,
+        s.fore,
+        s.back,
+        s.thickness,
+        s.stretch,
+        s.trails,
+    ] {
+        out.u8(v);
+    }
+    if profile.modern() {
+        out.i16(s.loc_z);
+        out.u16(s.tempo);
+        out.u16(s.delay);
+        out.u32(s.fore_rgb);
+        out.u32(s.back_rgb);
+        out.i32(s.rotation);
+        out.i32(s.skew);
+    }
+    if profile.extended {
+        out.u8(u8::try_from(s.behaviors.len()).map_err(|_| "behavior count exceeds u8")?);
+        for (script, parameters) in &s.behaviors {
+            out.u32(*script);
+            out.u32(strings.add(parameters)?);
+        }
+    }
+    Ok(())
+}
+
+/// One dg_text_style_t with measured advances/kerning in extended profiles.
+fn write_style(
+    out: &mut Out,
+    strings: &mut Strings,
+    style: &TextStyle,
+    profile: Profile,
+) -> Result<(), String> {
     out.u32(strings.add(&style.font_name)?);
     out.u8(style.font_id);
     out.u8(style.size);
     out.u8(style.align);
-    for v in [style.ascent, style.descent, style.leading, style.line_height] {
+    for v in [
+        style.ascent,
+        style.descent,
+        style.leading,
+        style.line_height,
+    ] {
         out.i16(v);
     }
     out.u32(style.color);
@@ -363,7 +539,11 @@ fn write_style(out: &mut Out, strings: &mut Strings, style: &TextStyle, profile:
         match &style.advances {
             Some(advances) => {
                 out.u16(u16_of(advances.len(), "advance count").and_then(|n| {
-                    if n == 0xFFFF { Err("advance count 65535".into()) } else { Ok(n) }
+                    if n == 0xFFFF {
+                        Err("advance count 65535".into())
+                    } else {
+                        Ok(n)
+                    }
                 })?);
                 out.0.extend_from_slice(advances);
                 out.u32(style.kerning_count);

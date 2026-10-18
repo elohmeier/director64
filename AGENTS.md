@@ -11,6 +11,15 @@ ignored `*.local.toml` files.
 
 # Project references
 
+Implement the behavior of the selected Director version, including features
+missing from other players. Use original-projector experiments, contemporary
+Macromedia/Adobe documentation, and recovered game requirements to resolve
+ambiguities. Keep synthetic experiments reproducible and record the projector
+version, input, expected output, and execution environment. Wine results are
+original-projector evidence under Wine, not native Windows or N64 validation.
+Check loaded runtime DLLs as well as the launcher: a thin projector executable
+can advertise a different Director version from its actual playback engine.
+
 For Director/Lingo behavior and recovered score formats, use a local checkout
 of [ScummVM](https://github.com/scummvm/scummvm) as a behavioral reference.
 Check its revision and worktree before relying on it, and cite the commit.
@@ -25,3 +34,7 @@ versions have different tempo encodings and event semantics.
 Corroborate reference behavior with the recovered local game data and focused
 tests. ScummVM implementation agreement is distinct from a successful original
 projector comparison or N64 hardware validation.
+
+Capability failures protect builds while implementation is incomplete; they do
+not count as implementing the rejected feature. Replace silent success with
+actionable diagnostics, then implement and test the required behavior.

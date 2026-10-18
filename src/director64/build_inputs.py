@@ -16,8 +16,6 @@ def identity(game):
     paths += sorted((game.directory / "host").glob("*.json"))
     if postprocessor := game.data.get("port", {}).get("asset_postprocessor"):
         paths.append(game.directory / "host" / (postprocessor + ".py"))
-    if game.data.get("port", {}).get("native_compatibility"):
-        paths.append(game.directory / "host/compatibility.py")
     for relative in game.data.get("port", {}).get("asset_inputs", []):
         paths.append(game.directory / relative)
     # Ignored local overrides: adding, changing or removing one invalidates
@@ -25,6 +23,10 @@ def identity(game):
     optional = [
         game.directory / r for r in game.data.get("port", {}).get("optional_asset_inputs", [])
     ]
+    if game.data.get("port", {}).get("native_compatibility"):
+        # New ports use compiler/src/ports.rs; retain an absent-file marker so
+        # adding a host override also invalidates an existing receipt.
+        optional.append(game.directory / "host/compatibility.py")
     paths += [
         game.root / "src/director64" / name
         for name in (
@@ -35,7 +37,14 @@ def identity(game):
             "full_assets.py",
             "image_pack.py",
             "build_inputs.py",
+            "accountability.py",
+            "cli.py",
+            "video.py",
         )
+    ]
+    paths += [
+        p for name in ("flash_native.py", "system_fonts.py")
+        if (p := game.root / "src/director64" / name).is_file()
     ]
     # The Rust compiler stage is the bytecode generator; tests' synthetic
     # roots have no crate, and their receipts cover what they have.
@@ -57,6 +66,9 @@ def identity(game):
         game.root / "runtime/director/director.h",
         game.root / "runtime/director/cursor.h",
         game.root / "runtime/lingo/lingo_runtime.h",
+        game.root / "runtime/lingo/names.txt",
+        game.root / "runtime/lingo/lingo_names.h",
+        game.root / "runtime/lingo/lingo_bytecode.h",
     ]
     return {
         "schema_version": 1,
@@ -80,7 +92,9 @@ def generated(game):
         paths.append(game.work / "aot/native-program.json")
     font_dir = game.work / "director/fonts"
     if font_dir.exists():
-        paths += [p for p in sorted(font_dir.iterdir()) if p.suffix in {".otf", ".pfr", ".json"}]
+        paths += [
+            p for p in sorted(font_dir.iterdir()) if p.suffix in {".otf", ".ttf", ".pfr", ".json"}
+        ]
     paths += [
         p
         for directory in ("aot/c", "director/c")
@@ -90,10 +104,21 @@ def generated(game):
     return {str(p.relative_to(game.work)): file_sha256(p) for p in paths}
 
 
-def record(game):
+def begin(game):
+    """Invalidate prior success before any assets can be overwritten."""
+    (game.work / "build-inputs.json").unlink(missing_ok=True)
+    return identity(game)
+
+
+def record(game, expected=None):
     value = identity(game)
+    if expected is not None and value != expected:
+        raise ValueError("inputs changed during asset build; rebuild assets for the selected game")
     value["generated"] = generated(game)
-    (game.work / "build-inputs.json").write_text(json.dumps(value, indent=2) + "\n")
+    path = game.work / "build-inputs.json"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(value, indent=2) + "\n")
+    temporary.replace(path)
 
 
 def verify(game):

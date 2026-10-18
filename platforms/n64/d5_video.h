@@ -8,5 +8,6 @@ void d5_video_update(dg_runtime_t *d, float volume);
 // Advances whenever a slot decodes a new frame, opens or closes: a composited
 // stage stays valid only while this holds still.
 unsigned d5_video_revision(void);
-void d5_video_draw(unsigned sprite, int left, int top, int right, int bottom);
+bool d5_video_dimensions(const dg_runtime_t *owner, unsigned sprite, unsigned *width, unsigned *height);
+void d5_video_draw(const dg_runtime_t *owner, unsigned sprite, int left, int top, int right, int bottom);
 #endif

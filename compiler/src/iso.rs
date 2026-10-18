@@ -37,7 +37,10 @@ pub struct Layout {
     pub data: u64,
 }
 
-pub const COOKED: Layout = Layout { stride: SECTOR, data: 0 };
+pub const COOKED: Layout = Layout {
+    stride: SECTOR,
+    data: 0,
+};
 
 impl Layout {
     /// The user-data offset of a raw sector after checking its sync
@@ -58,7 +61,8 @@ impl Layout {
         let size = source.size();
         let mut probe = |offset: u64, length: u64| -> Option<Vec<u8>> {
             let mut buffer = vec![0u8; length as usize];
-            (offset + length <= size && source.read_at(offset, &mut buffer).is_ok()).then_some(buffer)
+            (offset + length <= size && source.read_at(offset, &mut buffer).is_ok())
+                .then_some(buffer)
         };
         if probe(16 * SECTOR, 7).is_some_and(|d| &d[1..7] == b"CD001\x01") {
             return Ok(COOKED);
@@ -68,7 +72,10 @@ impl Layout {
                 if let Some(data) = Self::raw_data(&sector) {
                     let at = data as usize;
                     if &sector[at + 1..at + 7] == b"CD001\x01" {
-                        return Ok(Layout { stride: RAW_SECTOR, data });
+                        return Ok(Layout {
+                            stride: RAW_SECTOR,
+                            data,
+                        });
                     }
                 }
             }
@@ -88,7 +95,11 @@ pub struct Cooked<'a> {
 impl<'a> Cooked<'a> {
     pub fn new(inner: &'a mut dyn Source) -> Result<Self, String> {
         let layout = Layout::detect(inner)?;
-        Ok(Cooked { inner, layout, strict: true })
+        Ok(Cooked {
+            inner,
+            layout,
+            strict: true,
+        })
     }
 }
 
@@ -113,12 +124,16 @@ impl Source for Cooked<'_> {
             self.inner.read_at(sector * RAW_SECTOR, &mut raw)?;
             for (i, frame) in raw.chunks_exact(RAW_SECTOR as usize).enumerate() {
                 if self.strict && Layout::raw_data(frame) != Some(self.layout.data) {
-                    return Err(format!("raw sector {} is not ISO 9660 data", sector + i as u64));
+                    return Err(format!(
+                        "raw sector {} is not ISO 9660 data",
+                        sector + i as u64
+                    ));
                 }
                 let start = (sector + i as u64) * SECTOR;
                 let from = offset.max(start) - start;
                 let to = end.min(start + SECTOR) - start;
-                let data = &frame[(self.layout.data + from) as usize..(self.layout.data + to) as usize];
+                let data =
+                    &frame[(self.layout.data + from) as usize..(self.layout.data + to) as usize];
                 buffer[done..done + data.len()].copy_from_slice(data);
                 done += data.len();
             }
@@ -134,7 +149,9 @@ fn read(source: &mut dyn Source, offset: u64, length: u64) -> Result<Vec<u8>, St
         return Err("ISO extent outside image".into());
     }
     let mut data = vec![0u8; length as usize];
-    source.read_at(offset, &mut data).map_err(|_| "short ISO read".to_string())?;
+    source
+        .read_at(offset, &mut data)
+        .map_err(|_| "short ISO read".to_string())?;
     Ok(data)
 }
 
@@ -160,10 +177,47 @@ fn dual(data: &[u8], offset: usize, width: usize) -> Result<u64, String> {
 /// Ridge), sorted by path. Associated streams are listed under
 /// `__associated__/`. Offsets are logical; read them with `file`.
 pub fn inventory(source: &mut dyn Source) -> Result<Vec<Entry>, String> {
-    inventory_cooked(&mut Cooked::new(source)?)
+    inventory_cooked(&mut Cooked::new(source)?, false)
 }
 
-fn inventory_cooked(source: &mut dyn Source) -> Result<Vec<Entry>, String> {
+/// Long authored paths mapped to the same physical files in the primary
+/// directory. Keep canonical short paths stable for recovered movie IDs.
+pub fn path_aliases(
+    source: &mut dyn Source,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let mut cooked = Cooked::new(source)?;
+    let primary = inventory_cooked(&mut cooked, false)?;
+    let joliet = inventory_cooked(&mut cooked, true)?;
+    let mut aliases = std::collections::BTreeMap::new();
+    for long in joliet {
+        if long.path.starts_with("__associated__/") {
+            continue;
+        }
+        let matches: Vec<_> = primary
+            .iter()
+            .filter(|p| {
+                !p.path.starts_with("__associated__/")
+                    && p.offset == long.offset
+                    && p.length == long.length
+            })
+            .collect();
+        let target = matches
+            .iter()
+            .find(|p| p.path.eq_ignore_ascii_case(&long.path))
+            .copied()
+            .or_else(|| (matches.len() == 1).then(|| matches[0]));
+        if let Some(target) = target {
+            if target.path != long.path {
+                aliases.insert(long.path, target.path.clone());
+            }
+        } else if !matches.is_empty() {
+            return Err(format!("ambiguous Joliet extent for {}", long.path));
+        }
+    }
+    Ok(aliases)
+}
+
+fn inventory_cooked(source: &mut dyn Source, joliet: bool) -> Result<Vec<Entry>, String> {
     let size = source.size();
     let mut primary: Option<Vec<u8>> = None;
     let mut terminated = false;
@@ -172,7 +226,11 @@ fn inventory_cooked(source: &mut dyn Source) -> Result<Vec<Entry>, String> {
         if &descriptor[1..7] != b"CD001\x01" {
             return Err("invalid ISO volume descriptor".into());
         }
-        if descriptor[0] == 1 {
+        if (!joliet && descriptor[0] == 1)
+            || (joliet
+                && descriptor[0] == 2
+                && matches!(&descriptor[88..91], b"%/@" | b"%/C" | b"%/E"))
+        {
             if primary.is_some() {
                 return Err("duplicate primary volume descriptor".into());
             }
@@ -188,6 +246,7 @@ fn inventory_cooked(source: &mut dyn Source) -> Result<Vec<Entry>, String> {
     }
     let primary = match primary {
         Some(p) if dual(&p, 128, 2)? == SECTOR => p,
+        None if joliet => return Ok(Vec::new()),
         _ => return Err("unsupported logical block size or missing primary volume".into()),
     };
     // The declared size may exceed the image (copy protection overstates
@@ -245,15 +304,34 @@ fn inventory_cooked(source: &mut dyn Source) -> Result<Vec<Entry>, String> {
             if name_bytes == b"\x00" || name_bytes == b"\x01" {
                 continue;
             }
-            if !name_bytes.is_ascii() {
-                return Err("non-ASCII ISO identifier".into());
-            }
-            let text = std::str::from_utf8(name_bytes).unwrap();
+            let text = if joliet {
+                if name_bytes.len() % 2 != 0 {
+                    return Err("odd Joliet identifier length".into());
+                }
+                let words: Vec<_> = name_bytes
+                    .chunks_exact(2)
+                    .map(|b| u16::from_be_bytes([b[0], b[1]]))
+                    .collect();
+                String::from_utf16(&words).map_err(|_| "invalid Joliet identifier")?
+            } else {
+                if !name_bytes.is_ascii() {
+                    return Err("non-ASCII ISO identifier".into());
+                }
+                std::str::from_utf8(name_bytes).unwrap().to_string()
+            };
             let name = text.split(';').next().unwrap().trim_end_matches('.');
-            if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':', '\0']) {
+            if name.is_empty()
+                || name == "."
+                || name == ".."
+                || name.contains(['/', '\\', ':', '\0'])
+            {
                 return Err("unsafe ISO identifier".into());
             }
-            let mut path = if parent.is_empty() { name.to_string() } else { format!("{parent}/{name}") };
+            let mut path = if parent.is_empty() {
+                name.to_string()
+            } else {
+                format!("{parent}/{name}")
+            };
             if record[25] & 4 != 0 {
                 path = format!("__associated__/{path}");
             }
@@ -265,7 +343,11 @@ fn inventory_cooked(source: &mut dyn Source) -> Result<Vec<Entry>, String> {
             if record[25] & 2 != 0 {
                 pending.push((path, child_offset, child_length, depth + 1));
             } else {
-                files.push(Entry { path, offset: child_offset, length: child_length });
+                files.push(Entry {
+                    path,
+                    offset: child_offset,
+                    length: child_length,
+                });
             }
         }
     }
@@ -332,7 +414,12 @@ mod tests {
         image[term] = 255;
         image[term + 1..term + 7].copy_from_slice(b"CD001\x01");
         let mut at = 20 * 2048;
-        for r in [record(b"\x00", 20, 2048, 2), record(b"\x01", 20, 2048, 2), record(b"DIR", 21, 2048, 2), record(b"A.TXT;1", 22, 5, 0)] {
+        for r in [
+            record(b"\x00", 20, 2048, 2),
+            record(b"\x01", 20, 2048, 2),
+            record(b"DIR", 21, 2048, 2),
+            record(b"A.TXT;1", 22, 5, 0),
+        ] {
             image[at..at + r.len()].copy_from_slice(&r);
             at += r.len();
         }
@@ -350,11 +437,63 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                Entry { path: "A.TXT".into(), offset: 22 * 2048, length: 5 },
-                Entry { path: "__associated__/DIR/B.BIN".into(), offset: 23 * 2048, length: 3 },
+                Entry {
+                    path: "A.TXT".into(),
+                    offset: 22 * 2048,
+                    length: 5
+                },
+                Entry {
+                    path: "__associated__/DIR/B.BIN".into(),
+                    offset: 23 * 2048,
+                    length: 3
+                },
             ]
         );
         assert_eq!(file(&mut source, &entries[0]).unwrap(), b"hello");
+    }
+
+    fn joliet_image(name: &str) -> Vec<u8> {
+        let mut bytes = image();
+        bytes.resize(26 * 2048, 0);
+        put_dual(&mut bytes, 16 * 2048 + 80, 26, 4);
+        let pvd = bytes[16 * 2048..17 * 2048].to_vec();
+        let term = bytes[17 * 2048..18 * 2048].to_vec();
+        bytes[17 * 2048..18 * 2048].copy_from_slice(&pvd);
+        bytes[17 * 2048] = 2;
+        bytes[17 * 2048 + 88..17 * 2048 + 91].copy_from_slice(b"%/E");
+        let root = record(b"\x00", 24, 2048, 2);
+        bytes[17 * 2048 + 156..17 * 2048 + 156 + root.len()].copy_from_slice(&root);
+        bytes[18 * 2048..19 * 2048].copy_from_slice(&term);
+        let name: Vec<u8> = name.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let entry = record(&name, 22, 5, 0);
+        bytes[24 * 2048..24 * 2048 + entry.len()].copy_from_slice(&entry);
+        bytes
+    }
+
+    #[test]
+    fn joliet_aliases_keep_canonical_paths_and_require_identical_extents() {
+        let mut source = Memory(joliet_image("Längerer Dateiname.txt;1"));
+        let aliases = path_aliases(&mut source).unwrap();
+        assert_eq!(
+            aliases.get("Längerer Dateiname.txt").map(String::as_str),
+            Some("A.TXT")
+        );
+        assert_eq!(inventory(&mut source).unwrap()[0].path, "A.TXT");
+        assert!(path_aliases(&mut Memory(image())).unwrap().is_empty());
+        for mode in [1, 2] {
+            assert_eq!(
+                path_aliases(&mut Memory(raw(&source.0, mode))).unwrap(),
+                aliases
+            );
+        }
+        // A Joliet-only file is not an alias of another primary file.
+        put_dual(&mut source.0, 24 * 2048 + 2, 25, 4);
+        assert!(path_aliases(&mut source).unwrap().is_empty());
+        assert!(
+            path_aliases(&mut Memory(joliet_image("../escape")))
+                .unwrap_err()
+                .contains("unsafe")
+        );
     }
 
     /// The cooked image framed as a raw Mode 1 (or Mode 2 Form 1) rip with
@@ -378,7 +517,10 @@ mod tests {
     fn reads_raw_sector_images() {
         for (mode, data) in [(1, 16), (2, 24)] {
             let mut source = Memory(raw(&image(), mode));
-            assert_eq!(Layout::detect(&mut source).unwrap(), Layout { stride: 2352, data });
+            assert_eq!(
+                Layout::detect(&mut source).unwrap(),
+                Layout { stride: 2352, data }
+            );
             let cooked = inventory(&mut Memory(image())).unwrap();
             let entries = inventory(&mut source).unwrap();
             assert_eq!(entries, cooked);
@@ -418,7 +560,10 @@ mod tests {
         let mut source = Memory(overstated);
         let entries = inventory(&mut source).unwrap();
         let data = file(&mut source, &entries[0]).unwrap();
-        assert_eq!((&data[..3], data.len(), data[2048..].iter().all(|&b| b == 0)), (&b"abc"[..], 4096, true));
+        assert_eq!(
+            (&data[..3], data.len(), data[2048..].iter().all(|&b| b == 0)),
+            (&b"abc"[..], 4096, true)
+        );
     }
 
     #[test]

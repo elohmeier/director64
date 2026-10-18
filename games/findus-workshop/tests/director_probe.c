@@ -16,8 +16,6 @@ static const char *const global_names[] = {
 static lv_runtime_t values;
 static dg_runtime_t director;
 static pointer_control_t pointer;
-static unsigned busy_until[2];
-static unsigned sound_count;
 static char saves[9][16384];
 static unsigned save_lengths[9];
 static archive_t archive;
@@ -49,19 +47,7 @@ static bool write_file(void *ctx, const char *name, const char *data,
   save_lengths[id] = length;
   return true;
 }
-static void sound(void *ctx, unsigned channel, const dg_member_t *m) {
-  (void)ctx;
-  busy_until[channel] =
-      director.ticks +
-      (m && m->rate ? (m->samples * 60u + m->rate - 1) / m->rate : 0);
-  if (m && m->looping)
-    busy_until[channel] = UINT32_MAX;
-  sound_count++;
-}
-static bool busy(void *ctx, unsigned channel) {
-  (void)ctx;
-  return director.ticks < busy_until[channel];
-}
+#include "audio.inc"
 static void trace(void *ctx, const char *text) {
   (void)ctx;
   (void)text;
@@ -112,10 +98,10 @@ static void global(const char *name, lv_t value) {
     values.globals[id] = value;
 }
 static void boot(bool activity_fixture) {
-  memset(busy_until, 0, sizeof(busy_until));
+  memset(probe_voices, 0, sizeof(probe_voices));
   dg_init(&director, &values,
           (dg_platform_t){.nth_file = workshop_nth_file, .read_file = read_file, .write_file = write_file,
-                          .sound = sound, .sound_busy = busy, .trace = trace, .hit = hit},
+                          .sound = sound, .sound_busy=busy, PROBE_AUDIO_POSITION .sound_pause=sound_pause, .sound_break_loop=sound_break_loop, .trace = trace, .hit = hit},
           NULL, global_names, sizeof(global_names) / sizeof(*global_names), 42);
   archive_load(&archive, (save_backend_t){flash_read, flash_write, NULL});
   unsigned offset = 0;

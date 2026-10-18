@@ -19,6 +19,15 @@ sha2 = "0.10"
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 # Shockwave bitmaps stored as JPEG (ediM).
 jpeg-decoder = { version = "0.3", default-features = false }
+# Shockwave sound casts can retain MPEG Layer III bytes in ediM.
+symphonia = { version = "=0.5.5", default-features = false, features = ["mp3"] }
+# Original system-font installers use Microsoft's MSZIP cabinet format.
+cab = "=0.6.0"
+
+# Embedded SWF VP6 video, shared by native and browser import. MIT-relicensed
+# decoder maintained by Ruffle; exact revision is part of both Cargo locks.
+nihav_core = { git = "https://github.com/ruffle-rs/nihav-vp6", rev = "12d0bdf10a85641dc2de3d6900c747894431ed77" }
+nihav_duck = { git = "https://github.com/ruffle-rs/nihav-vp6", rev = "12d0bdf10a85641dc2de3d6900c747894431ed77" }
 
 [profile.release]
 opt-level = 3

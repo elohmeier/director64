@@ -41,7 +41,7 @@ static const lv_handler_t handlers[]={
  {.name="mouseup",.member=2,.cast="Internal",.kind="MovieScript",.step=global},
 };
 static const lv_movie_t code={"D7.DXR",4,handlers,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t casts[]={{"Internal",1,1},{"Extra",1,2}};
+static const dg_cast_t casts[]={{.name="Internal",.file=1,.cast=1},{.name="Extra",.file=1,.cast=2}};
 static const dg_member_t members[]={
  {.id=0x22000a,.number=10,.cast=2,.type=1,.width=16,.height=16,.name="first"},
  {.id=0x22000b,.number=11,.cast=2,.type=1,.width=16,.height=16,.name="second"},

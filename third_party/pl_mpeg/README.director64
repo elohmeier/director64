@@ -1,0 +1,15 @@
+PL_MPEG, MIT licensed (license in pl_mpeg.h).
+Upstream: https://github.com/phoboslab/pl_mpeg
+Revision: c871f2be022ece7ef4f64230b4fb8e1fb9eb6023
+Single-header decoder for browser import tools. Local changes:
+- Accept legal MP2 bitrate and channel-mode changes at frame boundaries;
+  the shared importer independently validates frame sizes and sync.
+- Bound video slices at their next start code, report malformed VLCs and
+  macroblocks with plm_video_get_corrupt_slices(), and initialize frame storage
+  deterministically. Import rejects a nonzero corruption count; resynchronizing
+  the parser does not qualify the resulting pixels as repaired media.
+- Check two-dimensional motion bounds including half-pel neighbor reads.
+- Preserve caller-owned FIXED_MEM input instead of compacting it in place.
+- Replace a negative signed left shift in DC coefficient decoding with the
+  equivalent multiplication.
+The libdragon fork remains the N64 decoder; it depends on RSP facilities.

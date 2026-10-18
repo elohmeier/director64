@@ -29,7 +29,7 @@ static const lv_handler_t handlers[]={
  {.name="mouseup",.member=4,.cast="Internal",.kind="BehaviorScript",.arguments=1,.locals=1,.step=behavior},
  {.name="idle",.member=5,.cast="Internal",.kind="MovieScript",.step=idle}};
 static const lv_movie_t code={"LOOP.DXR",4,handlers,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t casts[]={{"Internal",1,1}};
+static const dg_cast_t casts[]={{.name="Internal",.file=1,.cast=1}};
 static const dg_member_t members[]={
  {.id=0x210001,.number=1,.cast=1,.type=11,.name="loop behavior"},
  {.id=0x210002,.number=2,.cast=1,.type=1,.width=10,.height=10,.name="Plane"}};

@@ -1,10 +1,20 @@
 #include "audio_bounds.h"
 #include "bitmap_tiles.h"
 #include "director.h"
+#include "memory_budget.h"
+#include "movie_names.h"
 #include "game.h"
 #include "ink.h"
+#include "film_render.h"
+#include "film_crop.h"
+#include "flash_render.h"
+#include "linked_geometry.h"
 #include "pack.h"
 #include "platform.h"
+// newlib's legacy BSD typedef alias must not rename Director sprite fields.
+#ifdef quad
+#undef quad
+#endif
 #include "pointer.h"
 #include "shape.h"
 #include "text_plain.h"
@@ -21,8 +31,11 @@
 #if DG_D8
 #include "controls.h"
 #endif
-#if DG_D5
+#if DG_D5 || DG_D10
 #include "d5_video.h"
+#if DG_D10
+#include "flash_audio.h"
+#endif
 #endif
 #ifdef DIRECTOR64_FULL_REPLAY
 #include "director_replay.h"
@@ -70,6 +83,7 @@ typedef struct {
   float gain[DG_SOUND_CHANNELS];
   double from[DG_SOUND_CHANNELS];
   bool pending[DG_SOUND_CHANNELS];
+  bool paused[DG_SOUND_CHANNELS];
   // The member to start, copied: its record and asset name live in the
   // movie overlay, which a scene change can unload before the swap.
   const dg_member_t *next[DG_SOUND_CHANNELS];
@@ -90,6 +104,11 @@ static rdpq_font_t *font;
 // Flash overlay total also contains), and the draw-order sort. Every version
 // reports these, so they must stay outside the styled-text guard below.
 static uint64_t phase_image_us, phase_text_us, phase_flash_us, phase_order_us;
+#if DG_D10
+static uint64_t phase_film_prepare_us, phase_film_draw_us, phase_film_composite_us;
+static uint64_t phase_stage_us, phase_bitmap_us, phase_preload_us;
+static uint64_t phase_cursor_us, phase_scene_us, phase_boundary_us, phase_shape_us;
+#endif
 // Image cache traffic splits again into the hit scan and the miss path's
 // stages, so a capture says which part of a load costs what.
 static uint64_t image_scan_us, image_open_us, image_headroom_us,
@@ -115,6 +134,7 @@ typedef struct {
   rdpq_font_t *font;
   unsigned last, color;
   uint8_t font_id, size;
+  uint8_t capture;
   bool styled, drawn;
 } cached_font_t;
 // Four slots: a Flash-card scene draws its prompt overlays beside a field
@@ -124,6 +144,21 @@ enum { TEXT_FONT_BASE = 2, TEXT_FONT_SLOTS = 4 }; // 1: debug
 static bool evict(void);
 static bool evict_arena(void);
 static unsigned font_serial;
+// RDP framebuffer alpha stores subpixel coverage, not the glyph's opacity.
+// Transparent text planes capture premultiplied color and coverage separately,
+// then reconstruct straight RGBA. Both passes retain glyph overlap blending.
+static unsigned text_capture;
+static void text_capture_mode(void *arg) {
+  if ((uintptr_t)arg == 2) {
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_mode_combiner(RDPQ_COMBINER1((0,0,0,1),(TEX0,0,PRIM,0)));
+  }
+}
+static rdpq_fontstyle_t text_style(color_t color) {
+  return (rdpq_fontstyle_t){.color=color,
+      .custom=text_capture ? text_capture_mode : NULL,
+      .custom_arg=(void *)(uintptr_t)text_capture};
+}
 static int source_state_id = -1;
 static char source_state[64];
 
@@ -207,11 +242,13 @@ static unsigned text_font(unsigned id, unsigned size, color_t color) {
   cached_font_t *entry = &text_fonts[slot];
   unsigned rgba = (unsigned)color.r << 24 | (unsigned)color.g << 16 |
                   (unsigned)color.b << 8 | color.a;
-  if (!entry->styled || entry->color != rgba) {
+  if (!entry->styled || entry->color != rgba || entry->capture != text_capture) {
     // The pinned SDK copies style values into each draw's queued commands.
-    rdpq_font_style(entry->font, 1, &(rdpq_fontstyle_t){.color = color});
+    rdpq_fontstyle_t style = text_style(color);
+    rdpq_font_style(entry->font, 1, &style);
     entry->styled = true;
     entry->color = rgba;
+    entry->capture = text_capture;
   }
   entry->last = ++font_serial;
   return slot + TEXT_FONT_BASE;
@@ -274,13 +311,35 @@ static void draw_text_uncounted(const dg_text_style_t *style,
                                 const char *text, color_t color,
                                 int l, int t, int r, int b, uint32_t member,
                                 int scroll) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  const dg_member_t *text_member = dg_member(director, member);
+  const dg_text_extra_t *extra = text_member && text_member->text && !strcmp(text, text_member->text)
+      ? dg_text_extra(director, member) : NULL;
+  for (unsigned j = 0; extra && j < director->field_count; j++)
+    if (director->field_members[j] == member &&
+        (director->field_text_changed[j] || lv_type(values->roots[DG_FIELD_COLOR_ROOT + j]) != LV_VOID))
+      extra = NULL;
+  unsigned run_count = extra ? extra->run_count : 0;
+  if (run_count > 254) run_count = 254;
+#endif
   text = text_as_utf8(text);
   unsigned id = style ? style->font_id : 0;
   if (override_font && *override_font &&
-      (!style || strcmp(override_font, style->font_name))) {
-    // The recovered corpus assigns only the two aliases of embedded Pettson.
+      (!style || !style->font_name || strcmp(override_font, style->font_name))) {
+    // Older assets use the two embedded Pettson aliases; newer packages can
+    // select any recovered font from a live member's text or insertion style.
     id = !strcmp(override_font, "Pettson") || !strcmp(override_font, "Pettson *")
              ? 1 : 0;
+    for (unsigned file = 0; file < director->loaded_count; file++) {
+      const dg_movie_t *movie = director->loaded[file];
+      for (unsigned i = 0; movie && i < movie->member_count; i++) {
+        const dg_member_t *candidate = &movie->members[i];
+        const dg_text_style_t *styles[] = {candidate->text_style, candidate->text_insert_style};
+        for (unsigned k = 0; k < 2; k++)
+          if (styles[k] && styles[k]->font_name && !strcmp(styles[k]->font_name, override_font))
+            id = styles[k]->font_id;
+      }
+    }
   }
   unsigned draw_size = style ? style->size : 12;
   int draw_ascent = style ? style->ascent : 12;
@@ -292,14 +351,25 @@ static void draw_text_uncounted(const dg_text_style_t *style,
   draw_size = (draw_size * 4 + 2) / 5;
   draw_ascent = (draw_ascent * 4 + 2) / 5;
   line_height = (line_height * 4 + 2) / 5;
+  scroll = dg_prescale_size(scroll);
 #endif
   unsigned selected = id ? text_font(id, draw_size, color) : 1;
   if (!selected || !*text || r <= l || b <= t || r <= 0 || b <= 0 ||
       l >= 640 || t >= 480)
     return;
   if (selected == 1) {
-    rdpq_font_style(font, 1, &(rdpq_fontstyle_t){.color = color});
+    rdpq_fontstyle_t style = text_style(color);
+    rdpq_font_style(font, 1, &style);
   }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  rdpq_font_t *selected_font = selected == 1 ? font : text_fonts[selected - TEXT_FONT_BASE].font;
+  for (unsigned i = 0; i < run_count; i++) {
+    uint32_t rgb = extra->runs[i].rgb;
+    rdpq_fontstyle_t style = text_style(RGBA32(rgb >> 16, (rgb >> 8) & 255, rgb & 255, color.a));
+    rdpq_font_style(selected_font, i + 2, &style);
+  }
+  unsigned character = 0, run = 0;
+#endif
   if (line_height <= 0)
     line_height = (int)draw_size;
   int baseline = t + draw_ascent - scroll;
@@ -330,6 +400,18 @@ static void draw_text_uncounted(const dg_text_style_t *style,
       *line = (rdpq_paragraph_t){.capacity = capacity,
           .flags = RDPQ_PARAGRAPH_FLAG_MALLOC};
       rdpq_paragraph_builder_begin(&params, selected, line);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      if (run_count) {
+        for (const char *p = text; p < end; character++) {
+          const char *next = p + 1;
+          while (next < end && ((unsigned char)*next & 0xc0) == 0x80) next++;
+          while (run + 1 < run_count && extra->runs[run + 1].offset <= character) run++;
+          rdpq_paragraph_builder_style(extra->runs[run].offset <= character ? run + 2 : 1);
+          rdpq_paragraph_builder_span(p, next - p);
+          p = next;
+        }
+      } else
+#endif
       rdpq_paragraph_builder_span(text, end - text);
       if (line->nchars) {
         line = rdpq_paragraph_builder_end();
@@ -352,10 +434,16 @@ static void draw_text_uncounted(const dg_text_style_t *style,
     text = end;
     if (*text == '\r') {
       text++;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      character++;
+#endif
       if (*text == '\n')
         text++;
     } else if (*text == '\n')
       text++;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    if (*end == '\n' || (*end == '\r' && end[1] == '\n')) character++;
+#endif
   }
   rdpq_set_scissor(0, 0, 640, 480);
 }
@@ -367,16 +455,18 @@ static void draw_text_uncounted(const dg_text_style_t *style,
 // the textHeight the scripts already read agree.
 static char flash_overlay_text[2048];
 static void draw_flash_overlays(unsigned channel, const dg_sprite_t *s,
-                                const dg_member_t *m) {
+                                const dg_member_t *m, const char *only, bool local) {
   if (!m || !m->flash_field_count)
     return;
   for (unsigned f = 0; f < m->flash_field_count; f++) {
     const dg_flash_field_t *field = &m->flash_fields[f];
+    if (only && dg_flash_field_find(m, only) != field) continue;
     // A field the scripts have addressed reads its live state from the
     // object bag; an untouched one shows its authored initial text.
     lv_t bag = {0};
     for (unsigned n = 0; n < director->flash_object_count; n++)
       if (director->flash_objects[n].sprite == channel &&
+          director->flash_objects[n].member == m->id &&
           dg_flash_field_find(m, director->flash_objects[n].name) == field) {
         bag = values->roots[DG_FLASH_ROOT + n];
         break;
@@ -384,6 +474,7 @@ static void draw_flash_overlays(unsigned channel, const dg_sprite_t *s,
     const char *text = field->text;
     int fx = field->x, fy = field->y, fw = field->width, fh = field->height;
     unsigned size = field->style->size;
+    unsigned opacity = dg_opacity(s);
     color_t color = RGBA32(field->style->color >> 16,
                            (field->style->color >> 8) & 255,
                            field->style->color & 255, 255);
@@ -395,6 +486,11 @@ static void draw_flash_overlays(unsigned channel, const dg_sprite_t *s,
         continue;
       text = lv_cstr(values, text_value);
       lv_t v;
+      if (lv_type((v = lv_get(values, NULL, "_alpha", bag))) == LV_NUMBER) {
+        double alpha = lv_numeric(v);
+        if (!isfinite(alpha)) { lv_fail(values, "invalid Flash text alpha"); return; }
+        opacity = (unsigned)(opacity * (alpha < 0 ? 0 : alpha > 100 ? 100 : alpha) / 100);
+      }
       if (lv_type((v = lv_get(values, NULL, "_x", bag))) == LV_NUMBER) fx = (int)lv_numeric(v);
       if (lv_type((v = lv_get(values, NULL, "_y", bag))) == LV_NUMBER) fy = (int)lv_numeric(v);
       if (lv_type((v = lv_get(values, NULL, "_width", bag))) == LV_NUMBER) fw = (int)lv_numeric(v);
@@ -406,11 +502,11 @@ static void draw_flash_overlays(unsigned channel, const dg_sprite_t *s,
         color = RGBA32(rgb >> 16, (rgb >> 8) & 255, rgb & 255, 255);
       }
     }
+    if (local) { fx = fy = 0; fw = s->value.width; fh = s->value.height; opacity = 100; }
     if (!*text)
       continue;
     if (size != field->style->size && field->style->font_id) {
-      // An authored runtime size without a packed variant falls back to the
-      // descriptor size, visibly traced.
+      // A missing live size must not silently display the authored size.
       char path[64];
       snprintf(path, sizeof(path), "rom:/fonts/f%u-%u.font64",
                field->style->font_id, (size * 4 + 2) / 5);
@@ -420,12 +516,13 @@ static void draw_flash_overlays(unsigned channel, const dg_sprite_t *s,
       else {
         debugf("DIRECTOR64 FLASH_FONT_VARIANT_MISSING font=%u size=%u\n",
                field->style->font_id, size);
-        size = field->style->size;
+        lv_fail(values,"missing live Flash font size");
+        return;
       }
     }
     dg_flash_field_wrap(field, size, text, fw, flash_overlay_text,
                         sizeof(flash_overlay_text));
-    color.a = (uint8_t)(dg_opacity(s) * 255 / 100);
+    color.a = (uint8_t)(opacity * 255 / 100);
     dg_text_style_t style = *field->style;
     if (size != style.size) {
       style.ascent = (int16_t)((int)style.ascent * (int)size /
@@ -528,7 +625,9 @@ enum {
   IMAGE_BLOCK_MIN_BYTES = 1024u * 1024u,
   IMAGE_BLOCK_STEP = 128u * 1024u,
 };
+#if !DG_D10
 static unsigned bundle_block_size; // decided at the first scene with rows, never grown
+#endif
 #define BUNDLE_UNPLACED UINT32_MAX
 typedef struct {
   dg_pack_entry_t entry;
@@ -583,10 +682,17 @@ static void audio_pump(void);
 static bool release_bitmap_blocks(void);
 #endif
 static unsigned cache_bytes, render_serial;
+#if DG_D10
+// A stage may use more images than fit simultaneously. At sprite boundaries
+// all preceding texture reads can be drained, allowing draw-order streaming
+// without retaining the whole frame's decoded working set.
+static bool image_streaming;
+static uint32_t cache_reload_us[IMAGE_CACHE_SLOTS];
+static bool scene_prefix_release(void);
+static bool scene_prefix_reclaim(void);
+#endif
 // One sprite skipped on a fragmented allocation; the next render repacks.
-static bool image_alloc_soft_fail;
 #if DG_EXTENDED
-static unsigned compact_serial;
 #endif
 static cached_image_t *image(const dg_member_t *, unsigned);
 // Largest allocatable block, probed by trial: the heap reports total free
@@ -690,6 +796,14 @@ static bool read_file(void *ctx, const char *name, char *out, unsigned cap,
   return game_read_file(name, out, cap, length);
 }
 #if DG_D10
+__attribute__((weak)) const char *game_movie_path(void *ctx) {
+  (void)ctx;
+  return NULL;
+}
+__attribute__((weak)) const char *game_data_folder(void *ctx) {
+  (void)ctx;
+  return NULL;
+}
 // Shipped read-only data (the exercise task databases) lives on the ROM
 // filesystem under its authored folder tail. Not "read_data": the SDK's
 // rsp.h already claims that name.
@@ -777,7 +891,7 @@ static void sound(void *ctx, unsigned channel, const dg_member_t *member) {
     fade_to(channel, member); // the latest request wins, as it would have
     return;
   }
-  if (audio_live && fades && voice_open[channel] && mixer_ch_playing(channel * 2) &&
+  if (audio_live && fades && !fades->paused[channel] && voice_open[channel] && mixer_ch_playing(channel * 2) &&
       fades->gain[channel] > 0.0f) {
     fades->pending[channel] = true;
     fading |= (uint16_t)(1u << channel);
@@ -806,7 +920,21 @@ static void sound_settle(unsigned channel, bool force) {
   float gain = fades->gain[channel] < 0.0f ? 0.7f : fades->gain[channel];
   mixer_ch_set_vol_ramp(channel * 2, gain, gain, 0);
 }
+// The pinned mixer accepts frequency zero: retain its decoder/ring and
+// sample position while muting the stationary sample. Seeking a compressed
+// waveform on resume would discard state or require a codec seek point.
+static void sound_pause(void *ctx, unsigned channel, bool paused) {
+  (void)ctx;
+  if (channel >= DG_SOUND_CHANNELS || !fades) return;
+  sound_settle(channel, true);
+  if (!voice_open[channel] || !mixer_ch_playing(channel * 2)) return;
+  fades->paused[channel] = paused;
+  mixer_ch_set_freq(channel * 2, paused ? 0.0f : voices[channel].wave.frequency);
+  float gain = paused ? 0.0f : fades->gain[channel] < 0.0f ? 0.7f : fades->gain[channel];
+  mixer_ch_set_vol_ramp(channel * 2, gain, gain, 0);
+}
 static void sound_start(unsigned channel, const dg_member_t *member) {
+  if (fades) fades->paused[channel] = false;
   mixer_ch_stop(channel * 2);
   // Closing a wav64 decoder releases buffers which queued audio can reference.
   if (voice_open[channel]) {
@@ -844,6 +972,16 @@ static void sound_start(unsigned channel, const dg_member_t *member) {
          channel + 1, (unsigned long)member->id,
          (unsigned long)director->ticks);
 }
+static void sound_break_loop(void *ctx, unsigned channel) {
+  (void)ctx;
+  if (channel >= DG_SOUND_CHANNELS) return;
+  if (fades && fades->pending[channel]) {
+    if (fades->next[channel]) fades->member[channel].looping = false;
+    return;
+  }
+  if (voice_open[channel] && mixer_ch_playing(channel * 2))
+    mixer_ch_set_loop(channel * 2, false);
+}
 #if DG_D10
 static void play_file(void *ctx, unsigned channel, const char *name) {
   (void)ctx;
@@ -857,6 +995,7 @@ static void play_file(void *ctx, unsigned channel, const char *name) {
     float gain = fades->gain[channel] < 0.0f ? 0.7f : fades->gain[channel];
     mixer_ch_set_vol_ramp(channel * 2, gain, gain, 0);
   }
+  if (fades) fades->paused[channel] = false;
   mixer_ch_stop(channel * 2);
   if (voice_open[channel]) {
     rspq_wait();
@@ -1024,16 +1163,35 @@ static void preload_shared_cast(void) {
 // Overlays the focused-window model must keep across a stage transition:
 // the controller window's movies, their cast archives, and any castLib
 // fileName swap target.
+static bool linked_resident_overlay(const dg_runtime_t *scene, unsigned id) {
+  for (unsigned i = 0; i < scene->loaded_count; i++)
+    if (scene->loaded[i] && scene->loaded[i]->id == id) return true;
+  for (unsigned i = 1; i < DG_SPRITES; i++) {
+    const dg_runtime_t *child = dg_linked_movie(scene, i);
+    if (child && linked_resident_overlay(child, id)) return true;
+  }
+  return false;
+}
 static bool d10_resident_overlay(unsigned id) {
-  const dg_movie_t *w[2] = {director->window_home, director->window_movie};
+  const dg_runtime_t *root = director;
+  while (root->linked_parent) root = root->linked_parent;
+  // Nested movies and their cast libraries remain alive while their scores,
+  // scripts, and image member pointers can still reference the overlays.
+  for (unsigned i = 1; i < DG_SPRITES; i++) {
+    const dg_runtime_t *child = dg_linked_movie(root, i);
+    if (child && linked_resident_overlay(child, id)) return true;
+  }
+  // An image allocation inside a child must also retain its host's libraries.
+  if (root != director && linked_resident_overlay(root, id)) return true;
+  const dg_movie_t *w[2] = {root->window_home, root->window_movie};
   for (unsigned n = 0; n < 2; n++) {
     if (!w[n]) continue;
     if (w[n]->id == id) return true;
     for (unsigned i = 0; i < w[n]->cast_count; i++)
       if (w[n]->casts[i].file == id) return true;
   }
-  for (unsigned i = 0; i < director->cast_swap_count; i++)
-    if (director->cast_swaps[i].target && director->cast_swaps[i].target->id == id)
+  for (unsigned i = 0; i < root->cast_swap_count; i++)
+    if (root->cast_swaps[i].target && root->cast_swaps[i].target->id == id)
       return true;
   return false;
 }
@@ -1043,16 +1201,18 @@ static const dg_movie_t *find_movie(void *ctx, const char *stem, unsigned file) 
   if (!stem) {
     id = file;
   } else {
-    char lowered[64];
-    snprintf(lowered, sizeof(lowered), "%s", stem);
-    for (char *p = lowered; *p; p++)
-      if (*p >= 'A' && *p <= 'Z') *p += 32;
-    size_t n = strlen(lowered);
-    for (unsigned i = 0; i < sizeof(movie_names) / sizeof(*movie_names); i++)
-      if (!strncmp(movie_names[i], lowered, n) && movie_names[i][n] == '_') {
-        id = i + 1;
-        break;
+    id = n64_movie_lookup(stem, "", director->movie ? director->movie->code->name : "",
+                          movie_names, sizeof(movie_names) / sizeof(*movie_names), NULL, 0);
+    if (!strchr(stem, '.')) {
+      char cast[96];
+      if (snprintf(cast, sizeof(cast), "%s.cxt", stem) < (int)sizeof(cast)) {
+        unsigned cast_id = n64_movie_lookup(cast, "", "", movie_names,
+                              sizeof(movie_names) / sizeof(*movie_names), NULL, 0);
+        // The service accepts cast libraries too; preserve registry order
+        // when both extensions have the same stem. Stage entry requests DXR.
+        if (cast_id && (!id || cast_id < id)) id = cast_id;
       }
+    }
   }
   if (!id || id > sizeof(movie_names) / sizeof(*movie_names)) return NULL;
   return load_movie(id);
@@ -1113,25 +1273,19 @@ static bool release_spare_overlay(void) {
   return false;
 }
 #endif
-static unsigned movie_id(const char *name) {
-  char stem[64];
-  snprintf(stem, sizeof(stem), "%s", name);
-  for (char *p = stem; *p; p++) {
-    if (*p >= 'A' && *p <= 'Z')
-      *p += 32;
-    if (*p == '.')
-      *p = '_';
-  }
-  if (!strchr(stem, '_'))
-    strcat(stem, "_dxr");
-  for (unsigned i = 0; i < sizeof(movie_names) / sizeof(*movie_names); i++)
-    if (!strcmp(movie_names[i], stem))
-      return i + 1;
-  return 0;
-}
 static bool enter(const char *name, unsigned frame) {
+#if DG_D10
+  scene_prefix_release();
+#endif
   uint64_t enter_started = get_ticks_us();
-  unsigned id = movie_id(name);
+  char alias[40] = {0};
+  const char *path = "", *current = "";
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  path = director->next_movie_path;
+  if (director->movie) current = director->movie->code->name;
+#endif
+  unsigned id = n64_movie_lookup(name, path, current, movie_names,
+                                 sizeof(movie_names) / sizeof(*movie_names), alias, sizeof(alias));
   if (!id) {
     debugf("DIRECTOR64 NATIVE_MISSING_MOVIE name=%s\n", name);
     lv_fail(values, "unresolved movie transition");
@@ -1142,7 +1296,7 @@ static bool enter(const char *name, unsigned frame) {
   // a fade, and the scene cut hides the cut sound.
   for (unsigned ch = 0; ch < DG_SOUND_CHANNELS; ch++)
     sound_settle(ch, true);
-#if DG_D5
+#if DG_D5 || DG_D10
   d5_video_close();
 #endif
   rspq_wait();
@@ -1176,6 +1330,9 @@ static bool enter(const char *name, unsigned frame) {
     if (cache[i].region_offset) cache[i].data = NULL;
     free(cache[i].data);
     memset(&cache[i], 0, sizeof(cache[i]));
+#if DG_D10
+    cache_reload_us[i] = 0;
+#endif
     cache_key[i] = 0;
   }
   bundle_release();
@@ -1397,7 +1554,7 @@ static bool enter(const char *name, unsigned frame) {
       for (unsigned k = 0; k < movie->member_count; k++) {
         const dg_member_t *m = &movie->members[k];
         if (m->id != member_id) continue;
-        if (m->type == 1 && (unsigned)m->width * m->height >= 100000) {
+        if ((m->type == 1 || m->type == 5 || m->type == 12) && (unsigned)m->width * m->height >= 100000) {
           unsigned plane_ink = delta->value.ink;
           if (plane_ink == 0 || plane_ink == 8 || plane_ink == 9 ||
               plane_ink == 32 || plane_ink == 36 || plane_ink == 39)
@@ -1412,6 +1569,9 @@ static bool enter(const char *name, unsigned frame) {
 #endif
   uint64_t dg_started = get_ticks_us();
   enter_load_us += dg_started - enter_started;
+#if DG_D10
+  memcpy(director->movie_alias, alias, sizeof(director->movie_alias));
+#endif
   bool entered = dg_enter(director, movie, frame ? frame : 1, shared, count);
   enter_script_us += get_ticks_us() - dg_started;
   if (!entered)
@@ -1455,8 +1615,8 @@ static bool release_bitmap_blocks(void) {
 #if DG_D10
 // Mask ink takes the member directly after the image as its mask when that
 // member is one by name (ink.h dg_mask_pair). Mask ink over any other
-// neighbour copies, as the original does with an unsuitable mask member
-// (the class panel's full-stage base).
+// neighbour retains the recovered matte, as observed with the Birthday
+// DIRAPI/IML32 8.5.1r104 renderer.
 static bool mask_pair(const dg_member_t *member, const dg_member_t *mask) {
   return dg_mask_pair(member->name, mask->name, (int)mask->width - (int)member->width,
                       (int)mask->height - (int)member->height);
@@ -1473,6 +1633,9 @@ enum { IMAGE_LIVE_RENDERS = 8 };
 // releases only what the scene has stopped drawing.
 static void evict_entry(cached_image_t *entry) {
   cache_key[entry - cache] = 0;
+#if DG_D10
+  cache_reload_us[entry - cache] = 0;
+#endif
   cache_bytes -= entry->bytes;
 #if DG_CAP_CACHE_STATS
   cache_evictions++;
@@ -1493,6 +1656,28 @@ static void evict_entry(cached_image_t *entry) {
 // not open room in the block, or the reverse, so a sweep that is making
 // space names the class it needs; ANY is for pressure on the heap at large.
 typedef enum { IMAGE_ANY, IMAGE_REGION, IMAGE_ARENA } image_storage_t;
+static bool image_evict_before(const cached_image_t *candidate, const cached_image_t *oldest) {
+  if (!oldest) return true;
+#if DG_D10
+  if (image_streaming) {
+    bool candidate_stale = candidate->last + IMAGE_LIVE_RENDERS <= render_serial;
+    bool oldest_stale = oldest->last + IMAGE_LIVE_RENDERS <= render_serial;
+    if (candidate_stale != oldest_stale) return candidate_stale;
+    if (!candidate_stale) {
+      // Cyclic draw-order LRU can reload an expensive background each frame
+      // to retain cheap masks. Among the recent completed planes, reclaim
+      // bytes from the cheapest measured reload first. No pinned plane is
+      // eligible, and stale assets still leave before this comparison.
+      uint32_t candidate_cost = cache_reload_us[candidate - cache];
+      uint32_t oldest_cost = cache_reload_us[oldest - cache];
+      uint64_t a = (uint64_t)candidate_cost * oldest->bytes;
+      uint64_t b = (uint64_t)oldest_cost * candidate->bytes;
+      if (a != b) return a < b;
+    }
+  }
+#endif
+  return candidate->last < oldest->last;
+}
 static bool evict_lru_of(bool keep_live, image_storage_t storage) {
   cached_image_t *oldest = NULL;
   for (unsigned i = 0; i < IMAGE_CACHE_SLOTS; i++) {
@@ -1500,7 +1685,7 @@ static bool evict_lru_of(bool keep_live, image_storage_t storage) {
     if (storage == IMAGE_ARENA && cache[i].region_offset) continue;
     if (cache[i].data && cache[i].last <= completed_serial &&
         !(keep_live && cache[i].last + IMAGE_LIVE_RENDERS > render_serial) &&
-        (!oldest || cache[i].last < oldest->last))
+        image_evict_before(&cache[i], oldest))
       oldest = &cache[i];
   }
   if (!oldest)
@@ -1511,13 +1696,40 @@ static bool evict_lru_of(bool keep_live, image_storage_t storage) {
 static bool evict_lru(bool keep_live) {
   return evict_lru_of(keep_live, IMAGE_ANY);
 }
+#if DG_D10
+static void image_stream_boundary(void) {
+  if (!image_streaming) return;
+  uint64_t started = get_ticks_us();
+  rspq_wait();
+  for (unsigned i = 0; i < IMAGE_CACHE_SLOTS; i++)
+    if (cache[i].data && cache[i].last > completed_serial)
+      cache[i].last = completed_serial;
+  phase_boundary_us += get_ticks_us()-started;
+}
+#endif
 // Reclaim malloc-arena bytes. Every sweep that is buying room for something
 // that is not an image — a font atlas, an overlay, a save generation — wants
 // this one: evicting a block-backed image returns nothing to the arena, so
 // a plain LRU sweep would empty the cache and still not free a byte.
 static bool evict_arena(void) {
-  if (image_region) return evict_lru_of(false, IMAGE_ARENA);
-  return evict_lru_of(false, IMAGE_ANY);
+  bool evicted = evict_lru_of(false, image_region ? IMAGE_ARENA : IMAGE_ANY);
+#if DG_D10
+  if (!evicted) evicted = scene_prefix_reclaim();
+#endif
+  return evicted;
+}
+static surface_t image_temporary_surface(tex_format_t format, unsigned width, unsigned height) {
+  surface_t surface = surface_alloc(format, width, height);
+  // Sprite-boundary streaming has already completed and released texture
+  // reads. A film/text intermediate can reclaim those same cache bytes;
+  // reserving headroom only inside image() would miss these allocations.
+  while (!surface.buffer && evict_arena()) surface = surface_alloc(format, width, height);
+  if (!surface.buffer) {
+    heap_stats_t stats; sys_get_heap_stats(&stats);
+    debugf("DIRECTOR64 NATIVE_SURFACE_FAIL width=%u height=%u format=%u free=%d cache=%u\n",
+           width, height, (unsigned)format, stats.free, cache_bytes);
+  }
+  return surface;
 }
 // Free extents of the block's dynamic area, ordered by offset and always
 // coalesced. Every dynamic block belongs to a cache entry, so the entries
@@ -1933,10 +2145,9 @@ static void bundle_enter(unsigned id, unsigned largest) {
          id, (unsigned)count, resident, pinned, bytes, total, largest, (void *)bundle_block);
 }
 static bool evict(void) { return evict_lru(false); }
-// Make the cache ceiling hold for one more image. Failing means the frame's
-// own live set already fills the budget, which is a reason to skip one
-// sprite for one render — the original skipped updates under memory
-// pressure too — and never a reason to stop the movie.
+// Make the cache ceiling hold for one more image. Once queued work drains and
+// all evictable images are gone, failure is a target-capacity error. Reporting
+// a successful frame with a missing visible sprite would hide that error.
 // What the arena may hold of images: with a block, only the bounded
 // overflow; without one (a scene with no directory), the cache the arena
 // always gave. Lending the arena more beside a block measured 24 KB of
@@ -1948,7 +2159,17 @@ static unsigned image_budget(void) {
   if (image_region) return image_region_bytes - image_region_base + image_arena_budget();
   return IMAGE_CACHE_BYTES;
 }
-static bool image_room(unsigned stored, const char *asset) {
+static void image_capacity_failure(const dg_member_t *member, unsigned bytes, const char *reason) {
+  heap_stats_t stats;
+  sys_get_heap_stats(&stats);
+  debugf("DIRECTOR64 NATIVE_IMAGE_FAIL member=%u asset=%s reason=%s bytes=%u free=%d cache=%u budget=%u\n",
+         (unsigned)member->id, member->asset, reason, bytes, stats.free, cache_bytes, image_budget());
+  static char message[160];
+  snprintf(message, sizeof(message), "N64 image %u %s: need %u bytes, free %d, cache %u/%u",
+           (unsigned)member->id, reason, bytes, stats.free, cache_bytes, image_budget());
+  lv_fail(values, message);
+}
+static bool image_room(unsigned stored, const dg_member_t *member) {
   bool drained = false;
   while (cache_bytes + stored > image_budget())
     if (!evict()) {
@@ -1973,9 +2194,9 @@ static bool image_room(unsigned stored, const char *asset) {
         }
       debugf("DIRECTOR64 NATIVE_IMAGE_BUDGET asset=%s bytes=%u live=%u "
              "live_bytes=%u largest=%u serial=%u completed=%u\n",
-             asset, stored, live, live_bytes, largest, render_serial,
+             member->asset, stored, live, live_bytes, largest, render_serial,
              completed_serial);
-      image_alloc_soft_fail = true;
+      image_capacity_failure(member, stored, "cache capacity");
       return false;
     }
   return true;
@@ -1984,6 +2205,7 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink);
 // Whether an image is decoded and resident, in the bundle or the overflow
 // cache, without loading it.
 static inline bool image_cached(const char *asset, unsigned ink) {
+  if (ink == 9) ink = 8; // a mask belongs to the sprite, never to a shared image
   uint32_t key = dg_image_key(asset, ink);
   int row = bundle_find(key);
   if (row >= 0 && bundle_images[row].data) return true;
@@ -1996,10 +2218,16 @@ static inline bool image_cached(const char *asset, unsigned ink) {
 static cached_image_t *image(const dg_member_t *member, unsigned ink) {
   uint64_t started = get_ticks_us();
   cached_image_t *result = image_uncounted(member, ink);
-  phase_image_us += get_ticks_us() - started;
+  uint64_t elapsed = get_ticks_us() - started;
+  phase_image_us += elapsed;
+#if DG_D10
+  if (result && !result->bundled && !cache_reload_us[result - cache])
+    cache_reload_us[result - cache] = elapsed > UINT32_MAX ? UINT32_MAX : elapsed ? (uint32_t)elapsed : 1;
+#endif
   return result;
 }
 static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) {
+  if (ink == 9) ink = 8;
   // Legacy copy ink is opaque; D8 FollowAlpha retains its authored coverage.
   uint64_t scan_started = get_ticks_us();
   uint32_t key = dg_image_key(member->asset, ink);
@@ -2035,22 +2263,21 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
       }
   image_scan_us += get_ticks_us() - scan_started;
   bool rgba32 = false, alpha_plane = false;
-#if DG_MODERN
   size_t name_length = strlen(member->asset);
   rgba32 = name_length >= 4 && !strcmp(member->asset + name_length - 4, ".fd2");
   alpha_plane = name_length >= 4 && !strcmp(member->asset + name_length - 4, ".fda");
-#endif
   unsigned stride = rgba32 ? 4u : 2u;
   // A .fdi asset is FDI1 or, when the packer indexed its colours, FDIC,
   // which is smaller than the extent below; the header decides after the
   // load, so the size checks before it are only ceilings.
   const bool maybe_indexed = !rgba32 && !alpha_plane;
   uint32_t alpha_offset = 0;
-  unsigned width = member->width, height = member->height;
+  bool tile_dimensions = member->type == 8;
+  unsigned width = tile_dimensions ? 1 : member->width, height = tile_dimensions ? 1 : member->height;
 #if DG_D10
   // Converted assets are prescaled to the 640x480 stage; the member keeps
   // its authored dimensions for every layout and script answer.
-  dg_prescale_dims(member->width, member->height, &width, &height);
+  if (!tile_dimensions) dg_prescale_dims(member->width, member->height, &width, &height);
 #endif
   // Images past the texture limit are stored tile-packed by the converter, so
   // the stored extent is the padded one and the console never rearranges a
@@ -2064,7 +2291,7 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
     lv_fail(values, "invalid native image dimensions");
     return NULL;
   }
-  unsigned expected = (unsigned)extent;
+  unsigned expected = tile_dimensions ? 32 : (unsigned)extent;
   uint64_t open_started = get_ticks_us();
   if (!have_entry &&
       !pack_index_find(dg_image_key(member->asset, DG_PACK_INK_AUTHORED), &entry)) {
@@ -2087,7 +2314,7 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
     // The slot is exactly the decompressor's allocation.
     stored = (unsigned)allocation;
   } else {
-    if (!image_room((unsigned)stored, member->asset)) return NULL;
+    if (!image_room((unsigned)stored, member)) return NULL;
     for (unsigned i = 0; i < IMAGE_CACHE_SLOTS; i++)
       if (!cache[i].data) {
         slot = &cache[i];
@@ -2106,7 +2333,7 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
     if (!maybe_indexed && (uint64_t)allocation < stored)
       allocation = (int)stored;
     stored = (unsigned)allocation;
-    if (!image_room((unsigned)stored, member->asset)) return NULL;
+    if (!image_room((unsigned)stored, member)) return NULL;
 #if DG_CAP_ALLOCATION_CHAIN
     // The image ceiling alone cannot account for overlays, fonts and recorded
     // commands. Release completed LRU images before those allocations crowd
@@ -2203,6 +2430,9 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
       // help before this one may help after it.
       compacted = false;
       if (!evict()) {
+#if DG_D10
+        if (scene_prefix_reclaim()) continue;
+#endif
         if (!drained) {
           // Images referenced by in-flight frames are unevictable and can
           // fragment the heap around a large allocation (the login preview is
@@ -2214,11 +2444,9 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
         }
         heap_stats_t stats;
         sys_get_heap_stats(&stats);
-        // Nothing evictable is left: what remains is this frame's own live
-        // set. Skip this sprite for one frame and let the next render's
-        // pre-pass repack the whole set, as the original skipped updates
-        // under memory pressure rather than stopping the movie. Not a *FAIL*
-        // marker: the capture validation treats those as fatal.
+        // Nothing evictable is left: what remains is this frame's live set.
+        // The pre-pass already attempted compaction; preserve the capacity
+        // failure instead of silently omitting this sprite from the frame.
         // The trial-allocation largest-hole probe is too expensive here: this
         // path can run every frame under pressure. The malloc arena's
         // fragmented-bytes figure is free and trends the same way.
@@ -2226,7 +2454,7 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
                "cache=%u serial=%u completed=%u frag=%d\n", member->asset,
                allocation, stats.free, cache_bytes, render_serial,
                completed_serial, stats.fragmented);
-        image_alloc_soft_fail = true;
+        image_capacity_failure(member, allocation, "allocation");
         return NULL;
       }
     }
@@ -2237,6 +2465,12 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
                 asset_loadf_into(pack_file, &length, data, &allocation);
   image_read_us += get_ticks_us() - read_started;
   audio_pump();
+  if (tile_dimensions && loaded && length >= 32) {
+    width = dg_fdi_be16(data + 8); height = dg_fdi_be16(data + 10);
+    uint64_t tile_extent = alpha_plane ? dg_fdia_size(width, height, &alpha_offset)
+        : 32u + bitmap_plane_pixels(width, height) * stride;
+    expected = width && height && tile_extent <= IMAGE_CACHE_BYTES ? (unsigned)tile_extent : 0;
+  }
   unsigned ci_bits = 0, colors = 0;
   uint32_t index_offset = 0;
   bool indexed = loaded && maybe_indexed && length >= 32 && !memcmp(data, "FDIC", 4);
@@ -2264,12 +2498,35 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
 #if DG_MODERN
   follow_alpha = dg_fdi_follow_alpha(data);
 #endif
+  bool rich_text = dg_fdi_rich_text(data);
+  if (rich_text) follow_alpha = ink == 36;
   // Every ink but matte (36) and opaque copy (0/32 over an image that does
   // not carry its own coverage) leaves the pixels exactly as authored. Walking
   // a megabyte plane to write back what it already holds is pure loss, so the
   // decision is hoisted out of the loop and the identity cases skip it.
-  bool ink_rewrites = ink == 36 || ((ink == 0 || ink == 32) && !follow_alpha);
-  if (alpha_plane) {
+  bool ink_rewrites = ink == 36 || (dg_ink_whole_rect(ink) && !follow_alpha);
+  if (rich_text) {
+    if (ink != 36) {
+      unsigned count = indexed ? colors : plane_pixels;
+      for (unsigned i = 0; i < count; i++) {
+        uint32_t pixel;
+        if (rgba32) pixel = ((uint32_t *)(data + 32))[i];
+        else {
+          unsigned word = ((uint16_t *)(data + 32))[i];
+          unsigned red = word >> 11, green = word >> 6 & 31, blue = word >> 1 & 31;
+          unsigned alpha = alpha_plane ? data[alpha_offset + i] : word & 1 ? 255 : 0;
+          pixel = (red << 3 | red >> 2) << 24 | (green << 3 | green >> 2) << 16 |
+                  (blue << 3 | blue >> 2) << 8 | alpha;
+        }
+        pixel = dg_rich_pixel32(pixel, data, ink);
+        if (rgba32) ((uint32_t *)(data + 32))[i] = pixel;
+        else ((uint16_t *)(data + 32))[i] = (pixel >> 16 & 0xf800) |
+                                            (pixel >> 13 & 0x7c0) | (pixel >> 10 & 0x3e) | 1;
+        if (alpha_plane) data[alpha_offset + i] = 255;
+        if (!(i & 0xffff)) audio_pump();
+      }
+    }
+  } else if (alpha_plane) {
     // The alpha pass only ever clears matte-ink white; coverage is authored.
     if (ink == 36) {
       const uint16_t *pixels = (const uint16_t *)(data + 32);
@@ -2302,77 +2559,6 @@ static cached_image_t *image_uncounted(const dg_member_t *member, unsigned ink) 
     }
   }
   image_ink_us += get_ticks_us() - ink_started;
-#if DG_D10
-  uint64_t mask_started = get_ticks_us();
-  // The packer bakes the mask into the coverage of every image the scenes
-  // draw with mask ink (image_pack.apply_mask), and says so in the entry;
-  // the per-pixel walk below is the fallback for an image it could not.
-  if (ink == 9 && !(entry.flags & DG_PACK_MASK_BAKED)) {
-    // Director mask ink: the cast member after the sprite's member is its
-    // mask. Dark mask pixels keep the image; light ones become transparent.
-    // The member after the image is its mask (mask_pair).
-    const dg_member_t *mask_member = dg_member(director, member->id + 1);
-    bool masked = false;
-    if (mask_member && mask_member->type == 1 && !rgba32 && !indexed &&
-        mask_member->asset[0] && mask_pair(member, mask_member)) {
-      // Authored masks can differ by a pixel from their image; sample with
-      // clamped coordinates over the overlap, exactly like the original.
-      unsigned mask_width = mask_member->width, mask_height = mask_member->height;
-      dg_prescale_dims(mask_member->width, mask_member->height, &mask_width,
-                       &mask_height);
-      dg_pack_entry_t mask_entry;
-      if (pack_index_find(dg_image_key(mask_member->asset, DG_PACK_INK_AUTHORED),
-                          &mask_entry)) {
-        int mask_length = (int)mask_entry.compressed;
-        int mask_allocation = (int)mask_entry.allocation;
-        uint8_t *mask_data = NULL;
-        if (mask_allocation > 32)
-          while (!(mask_data = memalign(32, mask_allocation)) && evict()) {}
-        if (mask_data) {
-          bool mask_loaded =
-              !fseek(pack_file, mask_entry.offset, SEEK_SET) &&
-              asset_loadf_into(pack_file, &mask_length, mask_data,
-                               &mask_allocation) &&
-              !memcmp(mask_data, "FDI1", 4) &&
-              *(uint16_t *)(mask_data + 8) == mask_width &&
-              *(uint16_t *)(mask_data + 10) == mask_height &&
-              mask_width && mask_height;
-          if (mask_loaded) {
-            // Two sequential streams and a read-modify-write per pixel: this
-            // walk runs at the console's memory bandwidth, and lifting the
-            // clamp, the row products and the plane test out of it measured
-            // 1.89 s against 1.84 s. Only removing it can make it cheaper.
-            const uint16_t *mask_pixels = (const uint16_t *)(mask_data + 32);
-            for (unsigned y = 0; y < height; y++) {
-              unsigned mask_y = y < mask_height ? y : mask_height - 1;
-              for (unsigned x = 0; x < width; x++) {
-                unsigned mask_x = x < mask_width ? x : mask_width - 1;
-                uint16_t p = mask_pixels[mask_y * mask_width + mask_x];
-                unsigned luminance = ((p >> 11) & 31) * 77 +
-                                     ((p >> 6) & 31) * 151 +
-                                     ((p >> 1) & 31) * 28;
-                unsigned i = y * width + x;
-                if (alpha_plane) {
-                  if (luminance >= 3968) (data + alpha_offset)[i] = 0;
-                } else {
-                  uint16_t *pixels = (uint16_t *)(data + 32);
-                  pixels[i] = luminance >= 3968 ? pixels[i] & 65534u
-                                                : pixels[i] | 1u;
-                }
-              }
-            }
-            masked = true;
-          }
-          free(mask_data);
-        }
-      }
-    }
-    if (!masked)
-      debugf("DIRECTOR64 NATIVE_MASK_MEMBER_MISSING member=%lu\n",
-             (unsigned long)member->id);
-  }
-  image_mask_us += get_ticks_us() - mask_started;
-#endif
   slot->follow_alpha = follow_alpha;
   slot->format = rgba32 ? IMAGE_RGBA32 : ci_bits == 4 ? IMAGE_CI4 : ci_bits == 8 ? IMAGE_CI8 : IMAGE_RGBA16;
   slot->alpha_offset = alpha_offset;
@@ -2425,6 +2611,14 @@ static const dg_member_t *cursor_member(uint32_t id) {
 #endif
   return m;
 }
+static bool cursor_is_color(const dg_member_t *m) {
+#if DG_D10
+  return m && m->source_xtra == 5;
+#else
+  (void)m;
+  return false;
+#endif
+}
 static bool cursor_plane(const dg_member_t *m, uint16_t pixels[256]) {
   cached_image_t *texture = image(m, 0);
   if (!texture) return false;
@@ -2437,7 +2631,12 @@ static bool cursor_plane(const dg_member_t *m, uint16_t pixels[256]) {
         pixels[y * 16 + x] = dg_fdic_texel((const uint8_t *)texture->data, image_ci_bits(texture),
                                            image_index_offset(texture), m->width, m->height, x, y);
       } else if (texture->format == IMAGE_RGBA32) {
-        unsigned rgb = ((const uint32_t *)data)[i] >> 8;
+        uint32_t pixel = ((const uint32_t *)data)[i], rgb = pixel >> 8;
+        if (cursor_is_color(m)) {
+          pixels[y * 16 + x] = (uint16_t)(((pixel >> 27) << 11) | (((pixel >> 19) & 31) << 6) |
+              (((pixel >> 11) & 31) << 1) | ((pixel & 255) >= 128));
+          continue;
+        }
         if (rgb && rgb != 0xffffff) {
           lv_fail(values, "unsupported color cursor bitmap");
           return false;
@@ -2480,8 +2679,9 @@ static const dg_cursor_bitmap_t *cursor_bitmap(dg_cursor_t cursor) {
   uint16_t pixels[256], coverage[256];
   if (!cursor_plane(m, pixels) || (mask && !cursor_plane(mask, coverage))) return NULL;
   dg_cursor_bitmap_t bitmap;
-  if (!dg_cursor_compose(&bitmap, pixels, m->width, m->height,
-      mask ? coverage : NULL, mw, mh, m->reg_x, m->reg_y)) {
+  if (!(cursor_is_color(m) ? dg_cursor_color(&bitmap, pixels, m->width, m->height, m->reg_x, m->reg_y) :
+      dg_cursor_compose(&bitmap, pixels, m->width, m->height,
+      mask ? coverage : NULL, mw, mh, m->reg_x, m->reg_y))) {
     lv_fail(values, "unsupported color cursor bitmap");
     return NULL;
   }
@@ -2529,15 +2729,6 @@ static bool hit(void *ctx, const dg_member_t *m, unsigned ink, int x, int y) {
    * sprites still receive input throughout their rectangular bounds. */
   if (ink != 8)
     return true;
-#if DG_D10
-  // A script-driven poll must not pull a full-stage plane into the heap
-  // mid-frame: the render pre-pass places those with compaction. An uncached
-  // plane-sized matte answers throughout its bounds until it is drawn.
-  if ((unsigned)m->width * m->height >= 100000) {
-    if (!image_cached(m->asset, ink))
-      return true;
-  }
-#endif
   cached_image_t *texture = image(m, ink);
   if (!texture || x < 0 || y < 0 || x >= m->width || y >= m->height)
     return false;
@@ -2568,7 +2759,7 @@ static bool hit(void *ctx, const dg_member_t *m, unsigned ink, int x, int y) {
   return (pixels[pixel] & 1) != 0;
 }
 static color_t indexed_color(unsigned index) {
-  uint32_t rgb = director->movie->palette[index & 255];
+  uint32_t rgb = dg_stage_palette(director)[index & 255];
   return RGBA32(rgb >> 16, (rgb >> 8) & 255, rgb & 255, 255);
 }
 #if DG_MODERN
@@ -2578,10 +2769,94 @@ static color_t sprite_color(const dg_sprite_t *s, bool back) {
     return indexed_color(back ? s->value.back : s->value.fore);
   return RGBA32(rgb >> 16, (rgb >> 8) & 255, rgb & 255, 255);
 }
-static void dark_bitmap(surface_t *fb, const surface_t *texture,
+#if DG_D10
+static uint32_t image_pixel(const cached_image_t *, unsigned, unsigned, unsigned, unsigned);
+typedef struct {
+  const dg_member_t *source, *member;
+  const cached_image_t *cached;
+  const dg_pixel_image_t *mutable;
+  unsigned width, height;
+  unsigned source_width, source_height, authored_width, authored_height;
+  int offset_x, offset_y;
+} sprite_mask_t;
+static sprite_mask_t sprite_mask(const dg_sprite_t *s) {
+  sprite_mask_t result = {0};
+  if (s->value.ink != 9) return result;
+  result.source = dg_member(director, s->value.member);
+  const dg_member_t *mask = result.source ? dg_member(director, result.source->id + 1) : NULL;
+  if (!mask || mask->type != 1 || !mask_pair(result.source, mask)) return result;
+  result.member = mask;
+  result.mutable = dg_member_image(director, mask->id);
+  if (result.mutable) {
+    result.width = result.mutable->width; result.height = result.mutable->height;
+  } else {
+    dg_prescale_dims(mask->width, mask->height, &result.width, &result.height);
+    result.cached = image(mask, 8);
+  }
+  const dg_pixel_image_t *source = dg_member_image(director, result.source->id);
+  result.source_width = source ? source->width : result.source->width;
+  result.source_height = source ? source->height : result.source->height;
+  result.authored_width = result.mutable ? result.mutable->width : mask->width;
+  result.authored_height = result.mutable ? result.mutable->height : mask->height;
+  result.offset_x = (source ? source->reg_x : result.source->reg_x) -
+                    (result.mutable ? result.mutable->reg_x : mask->reg_x);
+  result.offset_y = (source ? source->reg_y : result.source->reg_y) -
+                    (result.mutable ? result.mutable->reg_y : mask->reg_y);
+  return result;
+}
+static int sprite_mask_coordinate(unsigned sample, unsigned source_size, unsigned texture_size,
+                                  int registration, unsigned authored_size, unsigned mask_size) {
+  if (!texture_size || !authored_size || !mask_size) return -1;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  // Map physical pixel centers through authored registration in one rational
+  // operation. Two integer rescalings shift even identical prescaled masks.
+  int64_t denominator = (int64_t)texture_size * 2;
+  int64_t authored = ((int64_t)sample * 2 + 1) * source_size -
+                     (int64_t)registration * denominator;
+  int64_t extent = (int64_t)authored_size * denominator;
+  if (authored < 0 || authored >= extent) return -1;
+  return (int)(authored * mask_size / extent);
+#else
+  (void)source_size; (void)registration;
+  return sample < mask_size ? sample : mask_size - 1;
+#endif
+}
+static unsigned sprite_mask_sample(const sprite_mask_t *mask, int x, int y,
+                                   unsigned alpha, bool follow) {
+  if (x < 0 || y < 0) return 0;
+  uint32_t pixel = mask->mutable ? mask->mutable->pixels[(size_t)y * mask->width + (unsigned)x]
+      : image_pixel(mask->cached, mask->width, mask->height, (unsigned)x, (unsigned)y);
+  return dg_mask_alpha(pixel, alpha, follow);
+}
+static unsigned sprite_mask_alpha(const sprite_mask_t *mask, unsigned x, unsigned y,
+    unsigned width, unsigned height, unsigned alpha, bool follow) {
+  if (!mask->member) return alpha;
+  if ((!mask->cached && !mask->mutable) || !mask->width || !mask->height) return 0;
+  int mx = sprite_mask_coordinate(x, mask->source_width, width, mask->offset_x,
+                                  mask->authored_width, mask->width);
+  int my = sprite_mask_coordinate(y, mask->source_height, height, mask->offset_y,
+                                  mask->authored_height, mask->height);
+  return sprite_mask_sample(mask, mx, my, alpha, follow);
+}
+#endif
+typedef struct { unsigned full_width, full_height, left, top; } bitmap_region_t;
+static void ink_bitmap_region(surface_t *fb, const surface_t *texture,
                         const surface_t *alpha, const cached_image_t *image,
                         const dg_sprite_t *s, int l, int t, int r, int b,
-                        unsigned opacity) {
+                        unsigned ink, unsigned opacity, bool stored_tiles,
+                        const dg_member_t *linked_member, const bitmap_region_t *region) {
+#if !DG_D10
+  (void)linked_member;
+#else
+  sprite_mask_t mask = sprite_mask(s);
+  // A mask load may compact the image arena; rebuild pointers after it.
+  surface_t refreshed = *texture, refreshed_alpha;
+  if (stored_tiles) {
+    refreshed.buffer = (uint8_t *)image->data + (image_ci_bits(image) ? image_index_offset(image) : 32);
+    texture = &refreshed;
+    if (alpha) { refreshed_alpha = *alpha; refreshed_alpha.buffer = (uint8_t *)image->data + image->alpha_offset; alpha = &refreshed_alpha; }
+  }
+#endif
   float q[8];
   dg_sprite_quad(director, s, q);
 #if DG_D10
@@ -2598,41 +2873,263 @@ static void dark_bitmap(surface_t *fb, const surface_t *texture,
     r = fb->width;
   if (b > fb->height)
     b = fb->height;
-  // Darken needs the already composited destination. The installed SDK owns
+  const bool wide_destination = surface_get_format(fb) == FMT_RGBA32;
+  const bool wide_source = surface_get_format(texture) == FMT_RGBA32;
+  const bool tiled_source = stored_tiles && bitmap_needs_tiles(texture->width, texture->height);
+  const unsigned source_stride = texture->stride / (wide_source ? 4u : 2u);
+  const unsigned source_width = region ? region->full_width : texture->width;
+  const unsigned source_height = region ? region->full_height : texture->height;
+  const color_t foreground = sprite_color(s, false), background = sprite_color(s, true);
+  const unsigned fore[] = {foreground.r, foreground.g, foreground.b};
+  const unsigned back[] = {background.r, background.g, background.b};
+  const uint32_t foreground_rgb = foreground.r | (uint32_t)foreground.g << 8 | (uint32_t)foreground.b << 16;
+  const uint32_t background_rgb = background.r | (uint32_t)background.g << 8 | (uint32_t)background.b << 16;
+  const bool copy_color = opacity == 100 && !foreground_rgb && background_rgb == 0xffffff &&
+      (ink == 0 || ink == 8 || ink == 9 || ink == 32 || ink == 36);
+  const float qw = q[2] - q[0], qh = q[7] - q[1], determinant = qw * qh;
+  const bool axis = q[0] == q[6] && q[2] == q[4] && q[1] == q[3] && q[5] == q[7] &&
+      fabsf(determinant) >= 0.0001f;
+  int sample_x[640];
+  const int sample_left = l;
+  bool axis_samples = axis && r - l <= (int)(sizeof(sample_x) / sizeof(*sample_x));
+#if DG_D10
+  axis_samples = axis_samples && !linked_member;
+#endif
+  if (axis_samples) for (int x = l; x < r; x++) {
+    float u = ((x + 0.5f - q[0]) * qh) / determinant;
+    sample_x[x - sample_left] = -1;
+    if (u >= 0 && u < 1) {
+      if (s->flip_h) u = 1 - u;
+      unsigned sx = u * source_width;
+      sample_x[x - sample_left] = sx < source_width ? (int)sx : (int)source_width - 1;
+    }
+  }
+#if DG_D10
+  int mask_sample_x[640];
+  bool mask_samples = axis_samples && mask.member && (mask.cached || mask.mutable) &&
+                      mask.width && mask.height;
+  if (mask_samples) for (int x = l; x < r; x++)
+    mask_sample_x[x - sample_left] = sample_x[x - sample_left] < 0 ? -1 :
+        sprite_mask_coordinate((unsigned)sample_x[x - sample_left], mask.source_width,
+            source_width, mask.offset_x, mask.authored_width, mask.width);
+#endif
+  if (region && axis_samples) {
+    while (l < r && (sample_x[l - sample_left] < (int)region->left ||
+           sample_x[l - sample_left] >= (int)(region->left + texture->width))) l++;
+    while (r > l && (sample_x[r - 1 - sample_left] < (int)region->left ||
+           sample_x[r - 1 - sample_left] >= (int)(region->left + texture->width))) r--;
+  }
+  // Arithmetic inks need the already composited destination. The SDK owns
   // uncached display surfaces; detach_wait completes RDP writes before CPU
   // access, then attach resumes later sprites on the same framebuffer.
   rdpq_detach_wait();
   for (int y = t; y < b; y++) {
     uint16_t *destination =
         (uint16_t *)((uint8_t *)fb->buffer + y * fb->stride);
+    const float row_v = axis ? (qw * (y + 0.5f - q[1])) / determinant : 0;
+    unsigned row_sy = 0;
+    if (axis_samples) {
+      if (row_v < 0 || row_v >= 1) continue;
+      row_sy = (s->flip_v ? 1 - row_v : row_v) * source_height;
+      if (row_sy >= source_height) row_sy = source_height - 1;
+      if (region && (row_sy < region->top || row_sy >= region->top + texture->height)) continue;
+    }
+#if DG_D10
+    int mask_row = mask_samples ? sprite_mask_coordinate(row_sy, mask.source_height,
+        source_height, mask.offset_y, mask.authored_height, mask.height) : -1;
+#endif
+    for (int x = l; x < r; x++) {
+      unsigned sx, sy;
+      if (axis_samples) {
+        int mapped = sample_x[x - sample_left];
+        if (mapped < 0) continue;
+        sx = (unsigned)mapped; sy = row_sy;
+      } else {
+        float u, v;
+        if (axis) {
+          u = ((x + 0.5f - q[0]) * qh) / determinant; v = row_v;
+          if (u < 0 || u >= 1 || v < 0 || v >= 1) continue;
+        } else if (!dg_quad_uv(q, x + 0.5f, y + 0.5f, &u, &v)) continue;
+        if (s->flip_h) u = 1 - u;
+        if (s->flip_v) v = 1 - v;
+#if DG_D10
+        if (linked_member && !dg_linked_uv(linked_member, s, &u, &v)) continue;
+#endif
+        sx = u * source_width; sy = v * source_height;
+        if (sx >= source_width) sx = source_width - 1;
+        if (sy >= source_height) sy = source_height - 1;
+      }
+#if DG_D10
+      unsigned mask_coverage = 255;
+      if (ink == 9 && mask.member) {
+        mask_coverage = mask_samples
+            ? sprite_mask_sample(&mask, mask_sample_x[x - sample_left], mask_row, 255, false)
+            : sprite_mask_alpha(&mask, sx, sy, source_width, source_height, 255, false);
+        // The mask can discard a pixel without fetching or decoding source
+        // color. Its coverage still multiplies explicit source alpha below.
+        if (!mask_coverage) continue;
+      }
+#endif
+      if (region) {
+        if (sx < region->left || sy < region->top || sx >= region->left + texture->width ||
+            sy >= region->top + texture->height) continue;
+        sx -= region->left; sy -= region->top;
+      }
+      unsigned pixel = tiled_source
+          ? bitmap_tile_index(texture->width, sx, sy)
+          : sy * source_stride + sx;
+      const void *source = texture->buffer;
+      uint32_t rgba;
+      if (wide_source) {
+        rgba = ((const uint32_t *)source)[pixel];
+      } else {
+        uint16_t word = image_ci_bits(image)
+            ? dg_fdic_texel((const uint8_t *)image->data, image_ci_bits(image),
+                image_index_offset(image), texture->width, texture->height, sx, sy)
+            : ((const uint16_t *)source)[pixel];
+        bool opaque_word = alpha ? ((const uint8_t *)alpha->buffer)[pixel] == 255 : (word & 1) != 0;
+#if DG_D10
+        if (ink == 9 && mask.member && !image->follow_alpha) opaque_word = true;
+        opaque_word = opaque_word && mask_coverage == 255;
+#endif
+        if (copy_color && ink != 36 && !wide_destination && opaque_word) {
+          destination[x] = word | 1u;
+          continue;
+        }
+        unsigned red = (word >> 11) & 31, green = (word >> 6) & 31, blue = (word >> 1) & 31;
+        rgba = ((red << 3 | red >> 2) << 24) | ((green << 3 | green >> 2) << 16) |
+               ((blue << 3 | blue >> 2) << 8) | (alpha ? ((const uint8_t *)alpha->buffer)[pixel]
+                                                              : word & 1 ? 255 : 0);
+      }
+      if (ink == 36 && !dg_fdi_rich_text(image->data)) {
+        color_t key = background;
+        if (!wide_source) {
+          key.r = (key.r & 248) | (key.r >> 5);
+          key.g = (key.g & 248) | (key.g >> 5);
+          key.b = (key.b & 248) | (key.b >> 5);
+        }
+        if (dg_fdi_depth(image->data) == 1) {
+          if (rgba >> 8) continue;
+          rgba = (uint32_t)foreground.r << 24 | (uint32_t)foreground.g << 16 | (uint32_t)foreground.b << 8 | 255;
+        } else if ((rgba >> 8) == ((uint32_t)key.r << 16 | (uint32_t)key.g << 8 | key.b)) continue;
+      }
+      unsigned source_alpha = rgba & 255u;
+#if DG_D10
+      if (ink == 9 && mask.member)
+        source_alpha = image->follow_alpha ? source_alpha * mask_coverage / 255 : mask_coverage;
+#endif
+      unsigned coverage = source_alpha * opacity;
+      if (!coverage) continue;
+      if (copy_color && source_alpha == 255) {
+        if (wide_destination) ((uint32_t *)((uint8_t *)fb->buffer + y * fb->stride))[x] = rgba | 255u;
+        else destination[x] = (uint16_t)((rgba >> 16 & 0xf800) | (rgba >> 13 & 0x7c0) | (rgba >> 10 & 0x3e) | 1);
+        continue;
+      }
+      if (wide_destination) {
+        uint32_t *wide=(uint32_t *)((uint8_t *)fb->buffer+y*fb->stride);
+        wide[x]=__builtin_bswap32(dg_rgba_sprite(__builtin_bswap32(wide[x]),__builtin_bswap32(rgba),
+            ink,source_alpha,opacity,foreground_rgb,background_rgb));
+        continue;
+      }
+      uint16_t result = 1;
+      for (unsigned component = 0; component < 3; component++) {
+        unsigned shift = 11 - component * 5;
+        unsigned sc = (rgba >> (24 - component * 8)) & 255;
+        unsigned dc = (destination[x] >> shift) & 31;
+        dc = dc << 3 | dc >> 2;
+        unsigned value = dg_sprite_ink_channel(sc, dc, ink, opacity, fore[component], back[component]);
+        unsigned mixed = dg_sprite_coverage_channel(value, dc, source_alpha, ink);
+        result |= (uint16_t)(mixed >> 3) << shift;
+      }
+      destination[x] = result;
+    }
+  }
+  rdpq_attach(fb, NULL);
+}
+static void ink_bitmap(surface_t *fb, const surface_t *texture,
+                       const surface_t *alpha, const cached_image_t *image,
+                       const dg_sprite_t *s, int l, int t, int r, int b,
+                       unsigned ink, unsigned opacity, bool stored_tiles,
+                       const dg_member_t *linked_member) {
+  ink_bitmap_region(fb, texture, alpha, image, s, l, t, r, b, ink, opacity,
+                    stored_tiles, linked_member, NULL);
+}
+
+#endif
+static uint32_t image_pixel(const cached_image_t *image, unsigned width, unsigned height,
+                            unsigned x, unsigned y) {
+  unsigned offset = bitmap_needs_tiles(width, height) ? bitmap_tile_index(width, x, y) : y * width + x;
+  const uint8_t *data = image->data;
+  if (image->format == IMAGE_RGBA32) {
+    const uint8_t *p = data + 32 + offset * 4;
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+  }
+  uint16_t word = image_ci_bits(image)
+      ? dg_fdic_texel(data, image_ci_bits(image), image_index_offset(image), width, height, x, y)
+      : ((const uint16_t *)(data + 32))[offset];
+  unsigned r = (word >> 11) & 31, g = (word >> 6) & 31, b = (word >> 1) & 31;
+  unsigned a = image->alpha_offset ? data[image->alpha_offset + offset] : word & 1 ? 255 : 0;
+  return (r << 3 | r >> 2) | (g << 3 | g >> 2) << 8 | (b << 3 | b >> 2) << 16 | a << 24;
+}
+#if DG_D10
+static void mutable_bitmap(surface_t *fb, const dg_pixel_image_t *image,
+                           const dg_sprite_t *sprite, int l, int t, int r, int b,
+                           unsigned opacity) {
+  float q[8];
+  dg_sprite_quad(director, sprite, q);
+  for (unsigned i = 0; i < 8; i++) q[i] *= 0.8f;
+  if (l < 0) l = 0;
+  if (t < 0) t = 0;
+  if (r > fb->width) r = fb->width;
+  if (b > fb->height) b = fb->height;
+  color_t key = sprite_color(sprite, true);
+  uint32_t key_rgb = (uint32_t)key.r | (uint32_t)key.g << 8 | (uint32_t)key.b << 16;
+  const uint8_t *matte = NULL;
+  sprite_mask_t mask = sprite_mask(sprite);
+  if (!image->use_alpha && !dg_ink_whole_rect(sprite->value.ink) && sprite->value.ink != 36) {
+    matte = dg_image_matte(director, image);
+    if (!matte) return;
+  }
+  rdpq_detach_wait();
+  for (int y = t; y < b; y++) {
+    uint16_t *row = (uint16_t *)((uint8_t *)fb->buffer + y * fb->stride);
     for (int x = l; x < r; x++) {
       float u, v;
-      if (!dg_quad_uv(q, x + 0.5f, y + 0.5f, &u, &v))
+      if (!dg_quad_uv(q, x + 0.5f, y + 0.5f, &u, &v)) continue;
+      if (sprite->flip_h) u = 1 - u;
+      if (sprite->flip_v) v = 1 - v;
+      unsigned sx = u * image->width, sy = v * image->height;
+      if (sx >= image->width) sx = image->width - 1;
+      if (sy >= image->height) sy = image->height - 1;
+      uint32_t pixel = image->pixels[(size_t)sy * image->width + sx];
+      if (sprite->value.ink == 36 && (pixel & 0xffffffu) == key_rgb) continue;
+      unsigned source_alpha = matte ? matte[(size_t)sy * image->width + sx]
+                              : image->use_alpha ? pixel >> 24 : 255;
+      if (sprite->value.ink == 9) source_alpha = sprite_mask_alpha(&mask, sx, sy, image->width,
+          image->height, source_alpha, image->use_alpha);
+      unsigned alpha = source_alpha * opacity;
+      if (!alpha) continue;
+      if (surface_get_format(fb)==FMT_RGBA32) {
+        uint32_t *wide=(uint32_t *)((uint8_t *)fb->buffer+y*fb->stride);
+        color_t fg=sprite_color(sprite,false),bg=sprite_color(sprite,true);
+        wide[x]=__builtin_bswap32(dg_rgba_sprite(__builtin_bswap32(wide[x]),pixel,
+            sprite->value.ink,source_alpha,opacity,fg.r|(uint32_t)fg.g<<8|(uint32_t)fg.b<<16,
+            bg.r|(uint32_t)bg.g<<8|(uint32_t)bg.b<<16));
         continue;
-      if (s->flip_h)
-        u = 1 - u;
-      if (s->flip_v)
-        v = 1 - v;
-      unsigned sx = u * texture->width, sy = v * texture->height;
-      if (sx >= texture->width)
-        sx = texture->width - 1;
-      if (sy >= texture->height)
-        sy = texture->height - 1;
-      unsigned pixel = bitmap_needs_tiles(texture->width, texture->height)
-          ? bitmap_tile_index(texture->width, sx, sy) : sy * texture->width + sx;
-      const void *source = texture->buffer;
-      destination[x] = alpha
-          ? dg_dark_alpha16(((const uint16_t *)source)[pixel],
-                            ((const uint8_t *)alpha->buffer)[pixel],
-                            destination[x], opacity)
-          : image_ci_bits(image)
-          ? dg_dark_rgba16(dg_fdic_texel((const uint8_t *)image->data, image_ci_bits(image),
-                                         image_index_offset(image), texture->width,
-                                         texture->height, sx, sy),
-                           destination[x], opacity)
-          : surface_get_format(texture) == FMT_RGBA32
-          ? dg_dark_rgba32(((const uint32_t *)source)[pixel], destination[x], opacity)
-          : dg_dark_rgba16(((const uint16_t *)source)[pixel], destination[x], opacity);
+      }
+      uint16_t result = 1;
+      for (unsigned c = 0; c < 3; c++) {
+        unsigned shift = 11 - c * 5;
+        unsigned dc = (row[x] >> shift) & 31;
+        dc = dc << 3 | dc >> 2;
+        unsigned sc = pixel >> (c * 8) & 255;
+        color_t fg = sprite_color(sprite, false), bg = sprite_color(sprite, true);
+        const unsigned fore[] = {fg.r, fg.g, fg.b}, back[] = {bg.r, bg.g, bg.b};
+        unsigned value = dg_sprite_ink_channel(sc, dc, sprite->value.ink, opacity, fore[c], back[c]);
+        unsigned mixed = dg_sprite_coverage_channel(value, dc, source_alpha, sprite->value.ink);
+        result |= (uint16_t)(mixed >> 3) << shift;
+      }
+      row[x] = result;
     }
   }
   rdpq_attach(fb, NULL);
@@ -2737,7 +3234,291 @@ static void tiled_bitmap(const surface_t *surface, const surface_t *alpha,
   else
     tiled_bitmap_impl(surface, alpha, s, l, t, r, b, false);
 }
-static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int offset_y) {
+static void draw_member_text(const dg_sprite_t *s, const dg_member_t *m,
+                             int l, int t, int r, int b) {
+        const char *text = m->text;
+        unsigned color = s->value.fore;
+#if DG_MODERN
+        const dg_text_style_t *text_style = m->text_style;
+        const char *override_font = NULL;
+        int text_scroll = 0;
+        color_t text_color = text_style
+            ? RGBA32(text_style->color >> 16, (text_style->color >> 8) & 255,
+                     text_style->color & 255, 255)
+            : sprite_color(s, false);
+#endif
+        for (unsigned j = 0; j < director->field_count; j++)
+          if (director->field_members[j] == m->id) {
+            text = lv_cstr(values, values->roots[DG_FIELD_TEXT_ROOT + j]);
+#if DG_MODERN
+            override_font = director->field_font_changed[j] ? director->field_fonts[j] : NULL;
+            text_scroll = director->field_scroll[j];
+            if (director->field_text_changed[j] && m->text_insert_style) {
+              text_style = m->text_insert_style;
+              text_color = RGBA32(text_style->color >> 16,
+                  (text_style->color >> 8) & 255, text_style->color & 255, 255);
+            }
+#endif
+            if (lv_type(values->roots[DG_FIELD_COLOR_ROOT + j]) != LV_VOID) {
+              color =
+                  lv_integer(values, values->roots[DG_FIELD_COLOR_ROOT + j]);
+#if DG_MODERN
+              text_color =
+                  lv_type(values->roots[DG_FIELD_COLOR_ROOT + j]) == LV_COLOR || color > 255
+                      ? RGBA32(color >> 16, (color >> 8) & 255, color & 255, 255)
+                      : indexed_color(color);
+#endif
+            }
+          }
+#if DG_MODERN
+        text_color.a = dg_opacity(s) * 255 / 100;
+        draw_text(text_style, override_font, text, text_color, l, t, r, b, m->id, text_scroll);
+#else
+        rdpq_font_style(font, 1,
+                        &(rdpq_fontstyle_t){.color = indexed_color(color)});
+        // Doubled markup characters: field text is the game's, not markup.
+        static char plain[4096];
+        rdpq_text_print(
+            &(rdpq_textparms_t){.style_id = 1, .width = r - l, .height = b - t},
+            1, l, t + 12, text_plain(text, plain, sizeof(plain)));
+#endif
+}
+#if DG_MODERN
+typedef void (*text_plane_draw_t)(void *, int, int);
+static surface_t capture_text_plane(unsigned width,unsigned height,
+                                    text_plane_draw_t draw,void *ctx) {
+  if (!width || !height || width>UINT16_MAX/4 || height>UINT16_MAX ||
+      (uint64_t)width*height>16u*1024u*1024u) {
+    lv_fail(values,"N64 text plane dimensions exceed stride/allocation bound");
+    return (surface_t){0};
+  }
+  surface_t plane=image_temporary_surface(FMT_RGBA32,width,height);
+  unsigned tw=width<640?width:640, th=height<480?height:480;
+  surface_t tile=image_temporary_surface(FMT_RGBA32,tw,th);
+  if (!plane.buffer || !tile.buffer) {
+    if (plane.buffer) surface_free(&plane);
+    if (tile.buffer) surface_free(&tile);
+    lv_fail(values,"text plane allocation"); return (surface_t){0};
+  }
+  for (unsigned y=0;y<height&&!values->failed;y+=th)
+    for (unsigned x=0;x<width&&!values->failed;x+=tw) {
+      unsigned rows=height-y<th?height-y:th, columns=width-x<tw?width-x:tw;
+      for (unsigned pass=1;pass<=2&&!values->failed;pass++) {
+        text_capture=pass;
+        rdpq_attach(&tile,NULL);
+        rdpq_set_mode_fill(RGBA32(0,0,0,0)); rdpq_fill_rectangle(0,0,tw,th);
+        draw(ctx,-(int)x,-(int)y);
+        rdpq_detach_wait();
+        for (unsigned row=0;row<rows;row++) {
+          uint32_t *out=(uint32_t *)((uint8_t *)plane.buffer+(y+row)*plane.stride)+x;
+          const uint32_t *in=(const uint32_t *)((const uint8_t *)tile.buffer+row*tile.stride);
+          for (unsigned column=0;column<columns;column++) {
+            if (pass==1) out[column]=in[column]&0xffffff00u;
+            else {
+              unsigned alpha=in[column]>>24;
+              uint32_t result=alpha;
+              for (unsigned shift=8;alpha&&shift<=24;shift+=8) {
+                unsigned value=((out[column]>>shift&255)*255+alpha/2)/alpha;
+                result|=(value>255?255:value)<<shift;
+              }
+              out[column]=result;
+            }
+          }
+        }
+      }
+    }
+  text_capture=0;
+  surface_free(&tile);
+  return plane;
+}
+typedef struct {
+  const dg_sprite_t *sprite;
+  const dg_member_t *member;
+  unsigned width,height;
+} member_text_plane_t;
+static void paint_member_text_plane(void *ctx,int x,int y) {
+  const member_text_plane_t *p=ctx;
+  draw_member_text(p->sprite,p->member,x,y,x+p->width,y+p->height);
+}
+static void draw_transformed_text(surface_t *fb, const dg_sprite_t *sprite,
+                                 const dg_member_t *member, int l, int t, int r, int b) {
+  dg_sprite_t flat = *sprite;
+  flat.value.rotation = flat.value.skew = 0;
+  flat.flip_h = flat.flip_v = flat.custom_quad = false;
+  flat.value.blend = 100; flat.value.thickness |= DG_HAS_BLEND;
+  int left, top, right, bottom;
+  dg_sprite_bounds(director,&flat,&left,&top,&right,&bottom);
+  if (right <= left || bottom <= top) return;
+  unsigned width = right-left, height = bottom-top;
+#if DG_D10
+  dg_prescale_plane_dims(width,height,&width,&height);
+#endif
+  if (width > 16384 || height > 16384 || (uint64_t)width*height > 16u*1024u*1024u) {
+    lv_fail(values,"transformed text dimensions exceed bound"); return;
+  }
+  rdpq_detach_wait();
+  member_text_plane_t paint={&flat,member,width,height};
+  surface_t plane=capture_text_plane(width,height,paint_member_text_plane,&paint);
+  rdpq_attach(fb,NULL);
+  if (!values->failed && plane.buffer) {
+    unsigned opacity=dg_opacity(sprite);
+    if (opacity<100)
+      for (unsigned y=0;y<height;y++) {
+        uint32_t *row=(uint32_t *)((uint8_t *)plane.buffer+y*plane.stride);
+        for (unsigned x=0;x<width;x++) row[x]=(row[x]&0xffffff00u)|(row[x]&255)*opacity/100;
+      }
+    uint8_t header[32]={0};
+    cached_image_t image={.data=header,.format=IMAGE_RGBA32,.follow_alpha=true};
+    dg_sprite_t parent=*sprite;
+    parent.value.fore_rgb=0; parent.value.back_rgb=0xffffffu; parent.value.flags|=48;
+    ink_bitmap(fb,&plane,NULL,&image,&parent,l,t,r,b,8,100,false,NULL);
+  }
+  if (plane.buffer) surface_free(&plane);
+}
+#endif
+#if DG_D5 || DG_D10
+static void draw_transformed_video(surface_t *fb, unsigned channel, const dg_sprite_t *sprite,
+                                  int l,int t,int r,int b) {
+  unsigned width=0,height=0;
+  if (!d5_video_dimensions(director,channel,&width,&height)) return;
+  if (!width || !height || width>1024 || height>1024) {
+    lv_fail(values,"transformed video dimensions exceed bound"); return;
+  }
+  surface_t plane=image_temporary_surface(FMT_RGBA16,width,height);
+  if (!plane.buffer) { lv_fail(values,"transformed video allocation"); return; }
+  rdpq_detach_wait(); rdpq_attach(&plane,NULL);
+  d5_video_draw(director,channel,0,0,width,height);
+  rdpq_detach_wait(); rdpq_attach(fb,NULL);
+  uint8_t header[32]={0};
+  cached_image_t image={.data=header,.format=IMAGE_RGBA16,.follow_alpha=true};
+  dg_sprite_t parent=*sprite;
+  parent.value.fore_rgb=0; parent.value.back_rgb=0xffffffu; parent.value.flags|=48;
+  ink_bitmap(fb,&plane,NULL,&image,&parent,l,t,r,b,0,dg_opacity(sprite),false,NULL);
+  surface_free(&plane);
+}
+#endif
+#if DG_D10
+typedef struct {
+  unsigned parent;
+  dg_sprite_t sprite;
+  const dg_member_t *member;
+  const char *name;
+} flash_text_plane_t;
+static void paint_flash_text_plane(void *ctx,int x,int y) {
+  flash_text_plane_t *p=ctx;
+  p->sprite.value.x=dg_stage_coord(x); p->sprite.value.y=dg_stage_coord(y);
+  draw_flash_overlays(p->parent,&p->sprite,p->member,p->name,true);
+}
+static void draw_flash_field(surface_t *fb, unsigned parent, const dg_member_t *member,
+    const dg_film_layer_t *layer, int ox, int oy) {
+  const dg_flash_field_t *field = dg_flash_field_find(member, layer->name);
+  if (!field) { lv_fail(values, "missing Flash field layer"); return; }
+  dg_flash_plane_t layout;
+  if (!dg_flash_field_plane(director, parent, member, field, layer, &layout)) return;
+  unsigned width, height;
+  dg_prescale_plane_dims(layout.width, layout.height, &width, &height);
+  dg_member_t local_member = *member;
+  local_member.width = (uint16_t)layout.width; local_member.height = (uint16_t)layout.height;
+  dg_sprite_t local_sprite = {.value = {.width = layout.width, .height = layout.height,
+      .type = 16, .blend = 100}, .visible = true, .stretch = true, .custom_quad = true,
+      .quad = {0, 0, (float)layout.width, 0, (float)layout.width, (float)layout.height, 0, (float)layout.height}};
+  rdpq_detach_wait();
+  flash_text_plane_t paint={parent,local_sprite,&local_member,layer->name};
+  surface_t plane=capture_text_plane(width,height,paint_flash_text_plane,&paint);
+  rdpq_attach(fb, NULL);
+  if (!values->failed && plane.buffer) {
+    layout.sprite.value.x += ox; layout.sprite.value.y += oy;
+    int l,t,r,b; dg_sprite_bounds(director, &layout.sprite, &l,&t,&r,&b);
+    l = dg_prescale_coord(l); r = dg_prescale_coord(r);
+    t = dg_prescale_coord(t); b = dg_prescale_coord(b);
+    if (r > l && b > t) {
+      uint8_t header[32] = {0};
+      cached_image_t texture = {.data = header, .format = IMAGE_RGBA32, .follow_alpha = true};
+      ink_bitmap(fb, &plane, NULL, &texture, &layout.sprite, l,t,r,b,8,
+                 dg_opacity(&layout.sprite), false, NULL);
+    }
+  }
+  if (plane.buffer) surface_free(&plane);
+}
+static bool n64_flash_asset(void *context,const dg_film_layer_t *layer,dg_flash_raster_t *out) {
+  (void)context;
+  image_stream_boundary();
+  dg_member_t member={.type=1,.asset=layer->asset,.width=layer->value.width,.height=layer->value.height};
+  cached_image_t *source=image(&member,8);if(!source)return false;
+  unsigned sw,sh;dg_prescale_dims(member.width,member.height,&sw,&sh);
+  unsigned width,height;dg_prescale_plane_dims(member.width,member.height,&width,&height);
+  int left=dg_prescale_coord(layer->value.x),top=dg_prescale_coord(layer->value.y);
+  if(!dg_flash_raster_allocate(director,out,left,top,left+(int)width,top+(int)height))return false;
+  for(unsigned y=0;y<height;y++)for(unsigned x=0;x<width;x++)
+    out->pixels[(size_t)y*width+x]=image_pixel(source,sw,sh,x*sw/width,y*sh/height);
+  return true;
+}
+static bool n64_flash_text(void *context,dg_flash_instance_t *instance,const dg_flash_field_t *field,dg_flash_raster_t *out) {
+  (void)context;dg_flash_view_t view;dg_flash_view(instance,&view);
+  dg_flash_field_t effective;dg_text_style_t style;if(!dg_flash_field_snapshot(director,instance,field,&effective,&style))return false;
+  unsigned width,height;dg_prescale_plane_dims(effective.width,effective.height,&width,&height);
+  int left=dg_prescale_coord((int)floorf(view.bounds[0])),top=dg_prescale_coord((int)floorf(view.bounds[1]));
+  if(!dg_flash_raster_allocate(director,out,left,top,left+(int)width,top+(int)height))return false;
+  dg_member_t member=*view.member;member.width=effective.width;member.height=effective.height;
+  member.flash_fields=&effective;member.flash_field_count=1;
+  dg_sprite_t sprite={.value={.type=16,.width=effective.width,.height=effective.height,.blend=100},
+    .visible=true,.stretch=true,.custom_quad=true,
+    .quad={0,0,effective.width,0,effective.width,effective.height,0,effective.height}};
+  flash_text_plane_t paint={DG_SPRITES,sprite,&member,NULL};
+  surface_t plane=capture_text_plane(width,height,paint_flash_text_plane,&paint);
+  if(!plane.buffer)return false;
+  for(unsigned y=0;y<height;y++) {
+    const uint32_t *row=(const uint32_t *)((const uint8_t *)plane.buffer+y*plane.stride);
+    for(unsigned x=0;x<width;x++)out->pixels[(size_t)y*width+x]=__builtin_bswap32(row[x]);
+  }
+  surface_free(&plane);return !values->failed;
+}
+static bool flash_field_hit(void *context, dg_runtime_t *owner,
+                            struct dg_flash_instance *instance, float x, float y) {
+  dg_flash_view_t view;
+  if (!dg_flash_view(instance, &view) || !view.field) return false;
+  dg_runtime_t *saved_director = director;
+  lv_runtime_t *saved_values = values;
+  director = owner; values = owner->values;
+  dg_flash_raster_t raster = {0};
+  bool ok = n64_flash_text(context, instance, view.field, &raster), hit = false;
+  int px = (int)floorf(x * 0.8f) - raster.left, py = (int)floorf(y * 0.8f) - raster.top;
+  if (ok && px >= 0 && py >= 0 && px < (int)raster.width && py < (int)raster.height)
+    hit = (raster.pixels[(size_t)py * raster.width + (unsigned)px] >> 24) != 0;
+  free(raster.pixels);
+  director = saved_director; values = saved_values;
+  return hit;
+}
+#endif
+#include "image_preload.inc"
+#include "scene_prefix.inc"
+static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int offset_y);
+static void draw_scene_frame(surface_t *fb, dg_runtime_t *scene, int offset_x, int offset_y
+#if DG_D10
+                             , const dg_film_frame_t *film_frame, const dg_member_t *film_parent, unsigned film_channel
+#endif
+) {
+#if DG_D10
+  const dg_pixel_image_t *stage = film_frame ? NULL : dg_stage_image(scene);
+  if (stage) {
+    rdpq_detach_wait();
+    int dx = dg_prescale_coord(offset_x), dy = dg_prescale_coord(offset_y);
+    for (unsigned y = 0; y < fb->height; y++) {
+      uint16_t *row = (uint16_t *)((uint8_t *)fb->buffer + y * fb->stride);
+      for (unsigned x = 0; x < fb->width; x++) {
+        int sx = (int)x - dx, sy = (int)y - dy;
+        uint32_t bg = scene->stage_color;
+        uint32_t pixel = sx >= 0 && sx < fb->width && sy >= 0 && sy < fb->height
+            ? stage->pixels[(size_t)((unsigned)sy * stage->height / fb->height) * stage->width +
+                            (unsigned)sx * stage->width / fb->width]
+            : (bg >> 16 & 255) | (bg & 0xff00) | (bg & 255) << 16;
+        row[x] = (uint16_t)((pixel & 248) << 8 | (pixel >> 8 & 248) << 3 | (pixel >> 16 & 248) >> 2 | 1);
+      }
+    }
+    rdpq_attach(fb, NULL);
+    return;
+  }
+#endif
   (void)fb;
   dg_runtime_t *previous=director;director=scene;
 #if DG_MODERN
@@ -2747,12 +3528,26 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
 #else
   rdpq_set_mode_fill(RGBA32(255, 255, 255, 255));
 #endif
-  rdpq_fill_rectangle(0, 0, 640, 480);
-  const uint16_t *order;
+#if DG_D10
+  if (film_frame) rdpq_set_mode_fill(RGBA32(0, 0, 0, 0));
+#endif
+  rdpq_fill_rectangle(0, 0, fb->width, fb->height);
+  const uint16_t *order = NULL;
   uint64_t order_started = get_ticks_us();
-  unsigned count = dg_draw_order(director, &order);
+  unsigned count =
+#if DG_D10
+      film_frame ? film_frame->count :
+#endif
+      dg_draw_order(director, &order);
   phase_order_us += get_ticks_us() - order_started;
   unsigned first_draw = 0;
+#if DG_D10
+  unsigned prefix_end = 0;
+  bool prefix_pending = false;
+#endif
+#if DG_D10
+  if (!film_frame) {
+#endif
 #if DG_EXTENDED
   // The screens stack several full-stage planes (login background, workshop
   // photo backdrop); everything beneath an opaque full-stage copy-ink plane
@@ -2761,18 +3556,15 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
     unsigned i = order[draw];
     const dg_sprite_t *s = &director->sprites[i];
     const dg_member_t *m = dg_member(director, s->value.member);
-    if (!m || m->type != 1 || !s->visible || !s->value.type)
+    if (!m || (m->type != 1 && m->type != 5 && m->type != 12) || !s->visible || !s->value.type)
       continue;
+#if DG_D10
+    if (dg_member_image(director, m->id)) continue;
+#endif
     unsigned cover_ink = s->value.ink;
 #if DG_D10
-    // Unpaired mask ink copies; the class panel's opaque full-stage base is
-    // authored that way and must release the login plane beneath it.
-    if (cover_ink == 9) {
-      const dg_member_t *mask_member = dg_member(director, m->id + 1);
-      if (!(mask_member && mask_member->type == 1 && mask_member->asset[0] &&
-            mask_pair(m, mask_member)))
-        cover_ink = 0;
-    }
+    // Missing masks fall back to matte; they cannot hide earlier channels.
+    if (cover_ink == 9) cover_ink = 8;
 #endif
     if (cover_ink != 0 || dg_opacity(s) != 100)
       continue;
@@ -2781,6 +3573,7 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
       continue;
     int l, t, r, b;
     dg_sprite_bounds(director, s, &l, &t, &r, &b);
+    l += offset_x; r += offset_x; t += offset_y; b += offset_y;
 #if DG_D10
     l = dg_prescale_coord(l); t = dg_prescale_coord(t);
     r = dg_prescale_coord(r); b = dg_prescale_coord(b);
@@ -2790,29 +3583,50 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
       break;
     }
   }
+#if DG_D10
+  if (!offset_x && !offset_y) {
+    bool prefix_hit = false;
+    prefix_end = scene_prefix_begin(fb, director, order, first_draw, count, &prefix_hit);
+    prefix_pending = prefix_end && !prefix_hit;
+    if (prefix_hit) first_draw = prefix_end;
+  }
+  image_preload_scene(director, order, first_draw, prefix_pending ? prefix_end : count, offset_x, offset_y);
+#else
   // Every image loaded while this frame is queued stays pinned, so loading in
   // draw order can fragment the heap until a full-stage plane (the login car
   // preview) no longer finds a contiguous block. Load the frame's missing
   // bitmaps largest-first while the free region is still coalesced.
   {
-    unsigned pending[DG_SPRITES], pixels[DG_SPRITES], pending_count = 0;
+    // Preloading finishes before any nested scene renders, so these scratch
+    // arrays may be shared without multiplying the 64 KiB CPU stack by nesting.
+    enum { PENDING_MASK = 0x8000, PENDING_CHANNEL = 0x7fff };
+    static unsigned pending[DG_SPRITES * 2], pixels[DG_SPRITES * 2];
+    unsigned pending_count = 0;
     for (unsigned draw = first_draw; draw < count; draw++) {
       unsigned i = order[draw];
       const dg_sprite_t *s = &director->sprites[i];
       const dg_member_t *m = dg_member(director, s->value.member);
       if (!m || !s->visible || !s->value.type || !dg_opacity(s))
         continue;
-      if (m->type != 1 && !(m->type == 2 && m->film_count))
+#if DG_D10
+      if (dg_member_image(director, m->id) || (m->type == 2 && dg_film_driven(director, i))) continue;
+#endif
+      if (m->type != 1 && m->type != 5 && m->type != 12 && !(m->type == 2 && m->film_count
+#if DG_D10
+          && !m->film_frames && !m->film_track_count
+#endif
+      ))
         continue;
       if (!m->width || !m->height)
         continue;
       int l, t, r, b;
       dg_sprite_bounds(director, s, &l, &t, &r, &b);
+      l += offset_x; r += offset_x; t += offset_y; b += offset_y;
 #if DG_D10
       l = dg_prescale_coord(l); t = dg_prescale_coord(t);
       r = dg_prescale_coord(r); b = dg_prescale_coord(b);
 #endif
-      if (r <= 0 || b <= 0 || l >= 640 || t >= 480 || r <= l || b <= t)
+      if (r <= 0 || b <= 0 || l >= fb->width || t >= fb->height || r <= l || b <= t)
         continue;
       pending[pending_count] = i;
       // Order by stored bytes, not authored pixels: an alpha plane stores
@@ -2820,7 +3634,7 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
       // claim the coalesced region first.
       const char *weight_asset = m->asset;
       if (m->type == 2)
-        weight_asset = m->film_assets[dg_film_pose(m, s)];
+        weight_asset = dg_film_asset(m, s);
       size_t weight_length = weight_asset ? strlen(weight_asset) : 0;
       unsigned weight_stride = 2;
       if (weight_length >= 4 && !strcmp(weight_asset + weight_length - 4, ".fda"))
@@ -2830,6 +3644,15 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
         weight_stride = 4;
       pixels[pending_count] = (unsigned)m->width * m->height * weight_stride;
       pending_count++;
+#if DG_D10
+      if (s->value.ink == 9) {
+        const dg_member_t *mask = dg_member(director, m->id + 1);
+        if (mask && mask->type == 1 && mask_pair(m, mask) && !dg_member_image(director, mask->id)) {
+          pending[pending_count] = i | PENDING_MASK;
+          pixels[pending_count++] = (unsigned)mask->width * mask->height * 2;
+        }
+      }
+#endif
     }
     // A large plane that is not cached yet must not fight the frame's other
     // pinned images for leftover holes; drain queued frames and evict
@@ -2842,29 +3665,53 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
     for (unsigned j = 0; j < pending_count; j++) {
       if (pixels[j] < 200000 || pixels[j] <= needed)
         continue;
-      const dg_sprite_t *s = &director->sprites[pending[j]];
-      const dg_member_t *m = dg_member(director, s->value.member);
+      const dg_sprite_t *s = &director->sprites[pending[j] & PENDING_CHANNEL];
+      bool is_mask = (pending[j] & PENDING_MASK) != 0;
+      const dg_member_t *m = dg_member(director, s->value.member + (is_mask ? 1u : 0u));
       const char *asset = m->asset;
       if (m->type == 2)
-        asset = m->film_assets[dg_film_pose(m, s)];
-      unsigned plane_ink = s->value.ink;
+        asset = dg_film_asset(m, s);
+      unsigned plane_ink = is_mask ? 8 : s->value.ink;
+      if (plane_ink == 0 && dg_blended_copy_matte(dg_opacity(s))) plane_ink = 8;
+      else if (plane_ink == 36) plane_ink = 0;
       if (!image_cached(asset, plane_ink))
         needed = pixels[j];
     }
     bool compact = false;
+#if DG_D10
+    uint64_t together = 0;
+#endif
     if (needed) {
+#if DG_D10
+      // A single successful trial can hide fragmentation: preloading the
+      // first large plane pins smaller cached images around the hole the
+      // second plane needs (Birthday's login transition). Before touching
+      // any current-frame image, test space for the complete unique set.
+      // Only do this on a large miss; unchanged frames retain their cache.
+      static uint32_t keys[DG_SPRITES * 2];
+      unsigned key_count = 0;
+      for (unsigned j = 0; j < pending_count; j++) {
+        const dg_sprite_t *sprite = &director->sprites[pending[j] & PENDING_CHANNEL];
+        bool is_mask = (pending[j] & PENDING_MASK) != 0;
+        const dg_member_t *member = dg_member(director, sprite->value.member + (is_mask ? 1u : 0u));
+        const char *asset = member->type == 2 ? dg_film_asset(member, sprite) : member->asset;
+        unsigned ink = is_mask ? 8 : sprite->value.ink;
+        if (ink == 9 || (ink == 0 && dg_blended_copy_matte(dg_opacity(sprite)))) ink = 8;
+        else if (ink == 36 && member->type != 12) ink = 0;
+        uint32_t key = dg_image_key(asset, ink);
+        bool duplicate = false;
+        for (unsigned k = 0; k < key_count; k++) if (keys[k] == key) duplicate = true;
+        if (duplicate) continue;
+        keys[key_count++] = key;
+        dg_pack_entry_t entry;
+        if (pack_index_find(dg_image_key(asset, DG_PACK_INK_AUTHORED), &entry))
+          together += (entry.allocation + 31u) & ~31u;
+      }
+      if (together > needed) needed = together > UINT32_MAX ? UINT32_MAX : (unsigned)together;
+#endif
       void *probe = memalign(32, needed);
       compact = !probe;
       free(probe);
-    }
-    // A fragmented allocation skipped a sprite last render; repack once so
-    // the frame's whole set reloads coalesced. Never two renders in a row:
-    // a genuinely over-budget scene must degrade to skipped sprites, not
-    // relive the compaction storm.
-    if (image_alloc_soft_fail) {
-      image_alloc_soft_fail = false;
-      if (compact_serial + 1 < render_serial)
-        compact = true;
     }
     if (compact) {
       // Also release the lazily built font atlases: they were allocated
@@ -2875,24 +3722,39 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
       rspq_wait();
       clear_text_fonts();
       while (evict()) {}
-      compact_serial = render_serial;
     }
+#if DG_D10
+    if (together) {
+      // The decoded planes must leave room for text, commands and temporary
+      // compositing surfaces. If the complete set cannot fit, render it in
+      // order and recycle textures only after their queued reads finish.
+      heap_stats_t stats;
+      sys_get_heap_stats(&stats);
+      if (together + 320u * 1024u > (uint64_t)stats.free + cache_arena_bytes) {
+        image_streaming = true;
+        pending_count = 0;
+      }
+    }
+#endif
     while (pending_count && !values->failed) {
       unsigned best = 0;
       for (unsigned j = 1; j < pending_count; j++)
         if (pixels[j] > pixels[best])
           best = j;
-      const dg_sprite_t *s = &director->sprites[pending[best]];
-      const dg_member_t *m = dg_member(director, s->value.member);
+      const dg_sprite_t *s = &director->sprites[pending[best] & PENDING_CHANNEL];
+      bool is_mask = (pending[best] & PENDING_MASK) != 0;
+      const dg_member_t *m = dg_member(director, s->value.member + (is_mask ? 1u : 0u));
       dg_member_t film;
       if (m->type == 2) {
         film = *m;
-        film.asset = m->film_assets[dg_film_pose(m, s)];
+        film.asset = dg_film_asset(m, s);
         film.type = 1;
         m = &film;
       }
-      unsigned ink = s->value.ink;
-      if (ink == 0 || ink == 8 || ink == 32 || ink == 36 || ink == 39
+      unsigned ink = is_mask ? 8 : s->value.ink;
+      if (ink == 0 && dg_blended_copy_matte(dg_opacity(s))) ink = 8;
+      else if (ink == 36 && m->type != 12) ink = 0;
+      if (ink == 0 || ink == 8 || ink == 32 || dg_ink_arithmetic(ink)
 #if DG_D10
           // Mask ink loads with the next member's mask baked into its alpha.
           || ink == 9
@@ -2904,29 +3766,98 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
     }
   }
 #endif
-  for (unsigned draw = first_draw; draw < count && !values->failed; draw++) {
-    unsigned i = order[draw];
-    for (unsigned pass = 0; pass <= director->trail_count; pass++) {
-      if (pass < director->trail_count && director->trails[pass].channel != i)
+#endif
+#if DG_D10
+  }
+#endif
+  for (unsigned direct=0;direct<2;direct++)
+  for (unsigned draw = direct?0:first_draw; draw < count && !values->failed; draw++) {
+#if DG_D10
+    if (!direct && prefix_pending && draw == prefix_end) {
+      scene_prefix_capture(fb); prefix_pending = false;
+      image_streaming = true; image_stream_boundary(); image_streaming = false;
+      image_preload_scene(director, order, prefix_end, count, offset_x, offset_y);
+    }
+#endif
+    unsigned i;
+    unsigned trail_count = director->trail_count;
+#if DG_D10
+    dg_sprite_t recorded = {0};
+    if (film_frame) {
+      i = DG_SPRITES;
+      const dg_film_layer_t *layer = &film_frame->layers[draw];
+      if (!layer->value.member && layer->name && *layer->name && (!layer->asset || !*layer->asset)) {
+        if (direct) continue;
+        dg_sprite_t field_parent = {.value = {.member = film_parent->id, .type = 16,
+            .x = film_parent->reg_x + offset_x, .y = film_parent->reg_y + offset_y,
+            .width = film_parent->width, .height = film_parent->height, .blend = 100},
+            .visible = true, .stretch = true};
+        if (layer->affine || surface_get_format(fb)==FMT_RGBA32)
+          draw_flash_field(fb, film_channel, film_parent, layer, offset_x, offset_y);
+        else draw_flash_overlays(film_channel, &field_parent, film_parent, layer->name, false);
         continue;
-      const dg_sprite_t *s = pass < director->trail_count
-                                 ? &director->trails[pass].sprite
-                                 : &director->sprites[i];
+      }
+      if (!dg_film_layer_sprite(director, film_channel, layer, &recorded)) continue;
+      trail_count = 0;
+    } else
+#endif
+      i = order[draw];
+#if DG_D10
+    const dg_member_t *ordered=dg_member(director,film_frame?recorded.value.member:director->sprites[i].value.member);
+    if ((ordered && ordered->flash_direct_to_stage)!=!!direct) continue;
+#else
+    if (direct) continue;
+#endif
+    for (unsigned pass = 0; pass <= trail_count; pass++) {
+#if DG_D10
+      image_stream_boundary();
+#endif
+      if (pass < trail_count && director->trails[pass].channel != i)
+        continue;
+      const dg_sprite_t *s =
+#if DG_D10
+          film_frame ? &recorded :
+#endif
+          pass < trail_count ? &director->trails[pass].sprite : &director->sprites[i];
       dg_sprite_t shifted;
       if(offset_x || offset_y) {
         shifted=*s;shifted.value.x+=offset_x;shifted.value.y+=offset_y;s=&shifted;
       }
       const dg_member_t *m = dg_member(director, s->value.member);
+#if DG_D10
+      dg_sprite_t direct_stage;
+      if (m && m->flash_direct_to_stage) {
+        direct_stage=*s; s=&direct_stage;
+        direct_stage.value.ink=8; direct_stage.value.blend=100;
+        direct_stage.value.thickness|=DG_HAS_BLEND;
+        direct_stage.value.fore_rgb=0; direct_stage.value.back_rgb=0xffffff;
+        direct_stage.value.flags|=48;
+      }
+      dg_member_t direct_asset;
+      if (film_frame && film_frame->layers[draw].asset && *film_frame->layers[draw].asset) {
+        const dg_film_layer_t *layer = &film_frame->layers[draw];
+        direct_asset = (dg_member_t){.type = 1, .asset = layer->asset,
+            .width = layer->value.width, .height = layer->value.height};
+        m = &direct_asset;
+      }
+      bool driven = m && m->type == 2 && s == &director->sprites[i] && dg_film_driven(director, i);
+#endif
       // Palettes, sounds and script casts have no visual widget in Director.
       if (m && (m->type == 4 || m->type == 6 || m->type == 11 || m->type == 14))
         continue;
-      if (m && (m->type == 1 || m->type == 2) && (!m->width || !m->height))
-        continue;
+      if (m && (m->type == 1 || m->type == 2 || m->type == 5 || m->type == 12) && (!m->width || !m->height)
+#if DG_D10
+          && !dg_member_image(director, m->id)
+#endif
+      ) continue;
       dg_member_t film;
-      if (m && m->type == 2 && m->film_count) {
+      if (m && m->type == 2 && m->film_count
+#if DG_D10
+          && !m->film_frames && !m->film_track_count && !driven
+#endif
+      ) {
         film = *m;
-        unsigned frame = dg_film_pose(m, s);
-        film.asset = m->film_assets[frame];
+        film.asset = dg_film_asset(m, s);
         film.type = 1;
         m = &film;
       }
@@ -2940,19 +3871,147 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
       l = dg_prescale_coord(l); t = dg_prescale_coord(t);
       r = dg_prescale_coord(r); b = dg_prescale_coord(b);
 #endif
-      if (r <= 0 || b <= 0 || l >= 640 || t >= 480 || r <= l || b <= t)
+      if (r <= 0 || b <= 0 || l >= fb->width || t >= fb->height || r <= l || b <= t)
         continue;
-#if DG_D5
-      if (m && m->type == 10) {
-        d5_video_draw(i, l, t, r, b);
+#if DG_D5 || DG_D10
+      if (dg_is_video(m)) {
+        if (s->value.rotation || s->value.skew || s->flip_h || s->flip_v || s->custom_quad || opacity < 100 || surface_get_format(fb)==FMT_RGBA32)
+          draw_transformed_video(fb,i,s,l,t,r,b);
+        else d5_video_draw(director, i, l, t, r, b);
         continue;
       }
 #endif
-      if (m && m->type == 1) {
+#if DG_D10
+      if(m&&m->type==2&&m->flash_clip_count) {
+        rdpq_detach_wait();
+        dg_flash_raster_host_t host={.scale=0.8f,.asset=n64_flash_asset,.text=n64_flash_text};
+        dg_flash_raster_t raster;
+        bool rendered=dg_flash_render(director,i,&host,&raster);
+        rdpq_attach(fb,NULL);
+        if(rendered&&raster.pixels) {
+          if(raster.width>UINT16_MAX/4)lv_fail(values,"Flash native raster stride exceeded");
+          else {
+            for(size_t pixel=0;pixel<(size_t)raster.width*raster.height;pixel++)
+              raster.pixels[pixel]=__builtin_bswap32(raster.pixels[pixel]);
+            surface_t plane=surface_make(raster.pixels,FMT_RGBA32,raster.width,raster.height,raster.width*4);
+            uint8_t header[32]={0};cached_image_t texture={.data=header,.format=IMAGE_RGBA32,.follow_alpha=true};
+            ink_bitmap(fb,&plane,NULL,&texture,s,l,t,r,b,s->value.ink,opacity,false,NULL);
+          }
+        }
+        free(raster.pixels);continue;
+      }
+      if (m && m->type == 2 && (m->film_frames || m->film_track_count || driven)) {
+        static unsigned nesting;
+        unsigned width, height;
+        dg_prescale_plane_dims(m->width, m->height, &width, &height);
+        if (!width || !height || width>UINT16_MAX/4 || height>UINT16_MAX ||
+            (uint64_t)width*height>16u*1024u*1024u || nesting >= 8) {
+          lv_fail(values, "film loop render dimensions or nesting exceeded"); break;
+        }
+        uint64_t film_started = get_ticks_us();
+        dg_film_frame_t driven_frame;
+        bool resolve = driven || m->film_track_count;
+        dg_film_layer_t *driven_layers = resolve ? dg_film_frame_resolve(director, i, s, m, &driven_frame) : NULL;
+        if (resolve && !driven_layers) break;
+        const dg_film_frame_t *frame = resolve ? &driven_frame : &m->film_frames[dg_film_storage_pose(m, s)];
+        n64_film_crop_t crop = n64_film_crop(director, i, m, frame, width, height);
+        if (!crop.width || !crop.height) { free(driven_layers); continue; }
+        unsigned tw=crop.width<256?crop.width:256,th=crop.height<128?crop.height:128;
+        bool single_tile = tw == crop.width && th == crop.height;
+        surface_t rendered = image_temporary_surface(FMT_RGBA32, crop.width, crop.height);
+        surface_t tile = single_tile ? rendered : image_temporary_surface(FMT_RGBA32, tw, th);
+        if (!rendered.buffer || !tile.buffer) {
+          if (rendered.buffer) surface_free(&rendered);
+          if (!single_tile && tile.buffer) surface_free(&tile);
+          free(driven_layers);
+          lv_fail(values, "film loop framebuffer allocation"); break;
+        }
+        phase_film_prepare_us += get_ticks_us() - film_started;
+        film_started = get_ticks_us();
+        rdpq_detach_wait();
+        nesting++;
+        for (unsigned top = 0; top < crop.height && !values->failed; top += th)
+          for (unsigned left = 0; left < crop.width && !values->failed; left += tw) {
+            rdpq_attach(&tile, NULL);
+            draw_scene_frame(&tile, director, -m->film_left - dg_stage_coord((int)(crop.left + left)),
+                             -m->film_top - dg_stage_coord((int)(crop.top + top)), frame, m, i);
+            rdpq_detach_wait();
+            if (!single_tile) {
+              unsigned rows = crop.height - top < th ? crop.height - top : th;
+              unsigned columns = crop.width - left < tw ? crop.width - left : tw;
+              for (unsigned y = 0; y < rows; y++)
+                memcpy((uint8_t *)rendered.buffer + (top + y) * rendered.stride + left * 4,
+                       (const uint8_t *)tile.buffer + y * tile.stride, columns * 4);
+            }
+          }
+        nesting--;
+        rdpq_attach(fb, NULL);
+        phase_film_draw_us += get_ticks_us() - film_started;
+        film_started = get_ticks_us();
+        if (!values->failed) {
+          uint8_t header[32] = {0};
+          cached_image_t texture = {.data = header, .format = IMAGE_RGBA32, .follow_alpha = true};
+          bitmap_region_t region = {width, height, crop.left, crop.top};
+          ink_bitmap_region(fb, &rendered, NULL, &texture, s, l, t, r, b,
+                            s->value.ink, opacity, false, NULL, &region);
+        }
+        phase_film_composite_us += get_ticks_us() - film_started;
+        if (!single_tile) surface_free(&tile);
+        surface_free(&rendered); free(driven_layers);
+        continue;
+      }
+      if (m && m->type == 9) {
+        unsigned ink = s->value.ink;
+        if (ink != 0 && ink != 8 && ink != 32 && ink != 36 && !dg_ink_arithmetic(ink)) {
+          lv_fail(values, "unsupported linked movie ink");
+          break;
+        }
+        unsigned width, height;
+        dg_prescale_plane_dims(m->width, m->height, &width, &height);
+        if (!width || !height || width > 640 || height > 480) {
+          lv_fail(values, "linked movie source rectangle exceeds framebuffer");
+          break;
+        }
+        dg_runtime_t *parent = director;
+        dg_runtime_t *child = dg_linked_begin(parent, i);
+        if (!child) { lv_fail(values, "linked movie runtime unavailable"); break; }
+        surface_t rendered = image_temporary_surface(FMT_RGBA16, 640, 480);
+        if (!rendered.buffer) {
+          dg_linked_end(parent);
+          lv_fail(values, "linked movie framebuffer allocation");
+          break;
+        }
+        rdpq_detach_wait();
+        rdpq_attach(&rendered, NULL);
+        draw_scene(&rendered, child, -m->linked_left, -m->linked_top);
+        rdpq_detach_wait();
+        dg_linked_end(parent);
+        rdpq_attach(fb, NULL);
+        surface_t source = surface_make(rendered.buffer, FMT_RGBA16, width, height, rendered.stride);
+        uint8_t header[32] = {0};
+        cached_image_t texture = {.data = header, .format = IMAGE_RGBA16, .follow_alpha = true};
+        ink_bitmap(fb, &source, NULL, &texture, s, l, t, r, b, s->value.ink, opacity, false, m);
+        surface_free(&rendered);
+        continue;
+      }
+#endif
+#if DG_D10
+      const dg_pixel_image_t *replacement = m ? dg_member_image(director, m->id) : NULL;
+      if (replacement) {
+        unsigned ink = s->value.ink;
+        if (ink != 0 && ink != 8 && ink != 9 && ink != 32 && ink != 36 && !dg_ink_arithmetic(ink)) {
+          lv_fail(values, "unsupported mutable image ink");
+          break;
+        }
+        mutable_bitmap(fb, replacement, s, l, t, r, b, opacity);
+        continue;
+      }
+#endif
+      if (m && (m->type == 1 || m->type == 5 || m->type == 12)) {
         unsigned ink = s->value.ink;
         if (ink != 0 && ink != 8 && ink != 36
 #if DG_MODERN
-            && ink != 32 && ink != 39
+            && ink != 32 && !dg_ink_arithmetic(ink)
 #endif
 #if DG_D10
             // Mask ink loads with the next member's mask baked into alpha.
@@ -2962,21 +4021,20 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
           lv_fail(values, "unsupported native bitmap ink");
           break;
         }
-#if DG_EXTENDED
-        // A full-stage plane appearing mid-frame would allocate while this
-        // frame pins every earlier load and can fail on fragmentation; show
-        // it one frame later, after the pre-pass placed it with compaction.
-        if (pass == director->trail_count &&
-            (unsigned)m->width * m->height >= 100000) {
-          if (!image_cached(m->asset, ink))
-            continue;
-        }
+        unsigned decode_ink = ink == 0 && dg_blended_copy_matte(opacity) ? 8 : ink;
+#if DG_MODERN
+        if (ink == 36 && m->type != 12) decode_ink = 0;
 #endif
-        cached_image_t *texture = image(m, ink);
+        cached_image_t *texture = image(m, decode_ink);
         if (!texture) {
           if (values->failed)
             break;
-          continue; // skipped this frame; the repacked next render draws it
+          continue;
+        }
+        if (ink == 0 && dg_blended_copy_matte(opacity) && dg_fdi_depth(texture->data) == 1) {
+          opacity = 100;
+          texture = image(m, 0);
+          if (!texture) continue;
         }
         unsigned tex_width = m->width, tex_height = m->height;
 #if DG_D10
@@ -2996,9 +4054,22 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
               tex_width, tex_height);
           alpha = &alpha_surface;
         }
-        if (ink == 39) {
-          dark_bitmap(fb, &surface, alpha, texture, s, l, t, r, b, opacity);
+        bool cpu_ink = dg_ink_arithmetic(ink) || ink == 36 || surface_get_format(fb)==FMT_RGBA32;
 #if DG_D10
+        cpu_ink = cpu_ink || ink == 9;
+#endif
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+        color_t fore = sprite_color(s, false), back = sprite_color(s, true);
+        cpu_ink = cpu_ink || opacity < 100 || fore.r || fore.g || fore.b ||
+                  back.r != 255 || back.g != 255 || back.b != 255;
+#endif
+        if (cpu_ink) {
+#if DG_D10
+          uint64_t bitmap_started = get_ticks_us();
+#endif
+          ink_bitmap(fb, &surface, alpha, texture, s, l, t, r, b, ink, opacity, true, NULL);
+#if DG_D10
+          phase_bitmap_us += get_ticks_us() - bitmap_started;
           goto flash_overlay;
 #else
           continue;
@@ -3124,53 +4195,16 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
         }
 #endif
       } else if (m && (m->type == 3 || m->type == 7)) {
-        const char *text = m->text;
-        unsigned color = s->value.fore;
 #if DG_MODERN
-        const dg_text_style_t *text_style = m->text_style;
-        const char *override_font = NULL;
-        int text_scroll = 0;
-        color_t text_color = text_style
-            ? RGBA32(text_style->color >> 16, (text_style->color >> 8) & 255,
-                     text_style->color & 255, 255)
-            : sprite_color(s, false);
+        if (s->value.rotation || s->value.skew || s->flip_h || s->flip_v || s->custom_quad || surface_get_format(fb)==FMT_RGBA32)
+          draw_transformed_text(fb,s,m,l,t,r,b);
+        else
 #endif
-        for (unsigned j = 0; j < director->field_count; j++)
-          if (director->field_members[j] == m->id) {
-            text = lv_cstr(values, values->roots[DG_FIELD_TEXT_ROOT + j]);
-#if DG_MODERN
-            override_font = director->field_fonts[j];
-            text_scroll = director->field_scroll[j];
-            if (director->field_text_changed[j] && m->text_insert_style) {
-              text_style = m->text_insert_style;
-              text_color = RGBA32(text_style->color >> 16,
-                  (text_style->color >> 8) & 255, text_style->color & 255, 255);
-            }
-#endif
-            if (lv_type(values->roots[DG_FIELD_COLOR_ROOT + j]) != LV_VOID) {
-              color =
-                  lv_integer(values, values->roots[DG_FIELD_COLOR_ROOT + j]);
-#if DG_MODERN
-              text_color =
-                  lv_type(values->roots[DG_FIELD_COLOR_ROOT + j]) == LV_COLOR || color > 255
-                      ? RGBA32(color >> 16, (color >> 8) & 255, color & 255, 255)
-                      : indexed_color(color);
-#endif
-            }
-          }
-#if DG_MODERN
-        text_color.a = dg_opacity(s) * 255 / 100;
-        draw_text(text_style, override_font, text, text_color, l, t, r, b, m->id, text_scroll);
-#else
-        rdpq_font_style(font, 1,
-                        &(rdpq_fontstyle_t){.color = indexed_color(color)});
-        // Doubled markup characters: field text is the game's, not markup.
-        static char plain[4096];
-        rdpq_text_print(
-            &(rdpq_textparms_t){.style_id = 1, .width = r - l, .height = b - t},
-            1, l, t + 12, text_plain(text, plain, sizeof(plain)));
-#endif
+          draw_member_text(s,m,l,t,r,b);
       } else if ((m && m->type == 8) || s->value.type < 16) {
+#if DG_D10
+        uint64_t shape_started = get_ticks_us();
+#endif
         unsigned thickness = s->value.thickness & 15;
         unsigned line = thickness ? thickness - 1 : 0;
         if (m && !m->filled && !line)
@@ -3178,42 +4212,160 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
 #if DG_MODERN
         color_t foreground = sprite_color(s, false);
         color_t background = sprite_color(s, true);
-        // Background-transparent shapes with matching colors are invisible
-        // hit areas. Willy's save/load sheet uses one above the car preview.
-        if (s->value.ink == 36 && foreground.r == background.r &&
-            foreground.g == background.g && foreground.b == background.b)
-          continue;
-        rdpq_set_mode_fill(foreground);
 #else
-        rdpq_set_mode_fill(indexed_color(s->value.fore));
+        color_t foreground = indexed_color(s->value.fore);
+        color_t background = indexed_color(s->value.back);
 #endif
         unsigned kind = m ? m->shape : 1;
+        unsigned pattern = dg_member_pattern(director,m);
         bool filled = !m || m->filled;
-        if (kind == 1 && filled)
-          rdpq_fill_rectangle(l, t, r, b);
-        else {
-          for (int y = t < 0 ? 0 : t; y < b && y < 480; y++) {
-            int spans[4];
-            unsigned count =
-                dg_shape_spans(kind, r - l, b - t, y - t, line, filled,
-                               m && m->line_direction == 6, spans);
-            for (unsigned j = 0; j < count; j++)
-              if (spans[j * 2] < spans[j * 2 + 1])
-                rdpq_fill_rectangle(l + spans[j * 2], y, l + spans[j * 2 + 1],
-                                    y + 1);
+        cached_image_t *tile = NULL;
+        unsigned tile_width = 0, tile_height = 0;
+        const char *texture=dg_shape_texture(director,m,pattern);
+        if (texture && *texture) {
+          dg_member_t brush=*m;
+          brush.asset=texture;
+          tile = image(&brush, 0);
+          if (tile) {
+            tile_width = dg_fdi_be16((const uint8_t *)tile->data + 8);
+            tile_height = dg_fdi_be16((const uint8_t *)tile->data + 10);
           }
         }
-      } else if (m) {
-#if DG_D10
-        // Policy-pinned deferred Xtra members (the Flash intro timelines)
-        // stay data-only: their sprites draw nothing, visibly traced, per
-        // each pin's recorded disposition. Other types still fail closed.
-        if (m->type == 15) {
-          debugf("DIRECTOR64 NATIVE_RENDER_DEFERRED member=%lu sprite=%u\n",
-                 (unsigned long)m->id, i);
+        if (pattern > 56 && !tile) {
+          lv_fail(values, "missing shape texture pattern asset");
           continue;
         }
+        bool transformed = false;
+        float shape_quad[8];
+        int shape_width = r - l, shape_height = b - t;
+#if DG_MODERN
+        transformed = s->value.rotation || s->value.skew || s->flip_h || s->flip_v || s->custom_quad;
+        if (transformed) {
+          dg_sprite_t flat = *s;
+          flat.value.rotation = flat.value.skew = 0;
+          flat.flip_h = flat.flip_v = flat.custom_quad = false;
+          int fl, ft, fr, fb;
+          dg_sprite_bounds(director, &flat, &fl, &ft, &fr, &fb);
+          shape_width = fr - fl; shape_height = fb - ft;
+          dg_sprite_quad(director, s, shape_quad);
+#if DG_D10
+          for (unsigned point = 0; point < 8; point++) shape_quad[point] *= 0.8f;
 #endif
+        }
+#endif
+        bool solid_copy = surface_get_format(fb)!=FMT_RGBA32 && !transformed && pattern <= 1 && opacity == 100 &&
+                          (s->value.ink == 0 || s->value.ink == 8 || s->value.ink == 9);
+        const uint32_t fore_rgb = foreground.r | (uint32_t)foreground.g << 8 | (uint32_t)foreground.b << 16;
+        const uint32_t back_rgb = background.r | (uint32_t)background.g << 8 | (uint32_t)background.b << 16;
+        bool shape_visible[2] = {
+            dg_shape_ink_visible(false, s->value.ink, opacity, fore_rgb, back_rgb),
+            dg_shape_ink_visible(true, s->value.ink, opacity, fore_rgb, back_rgb)};
+        // A display channel has exactly32 destination values. Evaluate the
+        // original ink/opacity arithmetic once for each, then compose the
+        // same rounded RGB5551 result with three lookups per covered pixel.
+        uint16_t shape_channels[2][3][32];
+        if (!solid_copy && surface_get_format(fb) != FMT_RGBA32) {
+          const unsigned fore[] = {foreground.r,foreground.g,foreground.b};
+          const unsigned back[] = {background.r,background.g,background.b};
+          for (unsigned bit=0;bit<2;bit++) for (unsigned c=0;c<3;c++)
+            for (unsigned value=0;value<32;value++) {
+              unsigned mixed=dg_shape_ink_channel(bit,(value<<3)|(value>>2),
+                  s->value.ink,opacity,fore[c],back[c]);
+              shape_channels[bit][c][value]=(uint16_t)(mixed>>3)<<(11-c*5);
+            }
+        }
+        if (solid_copy) rdpq_set_mode_fill(foreground);
+        else rdpq_detach_wait();
+        for (int y = t < 0 ? 0 : t; y < b && y < (int)fb->height; y++) {
+          int spans[4] = {0, r - l};
+          unsigned count = transformed ? 1 : dg_shape_spans(kind, r - l, b - t, y - t, line, filled,
+                                          m && m->line_direction == 6, spans);
+          uint16_t *row = (uint16_t *)((uint8_t *)fb->buffer + y * fb->stride);
+          for (unsigned span = 0; span < count; span++) {
+            int left = l + spans[span * 2], right = l + spans[span * 2 + 1];
+            if (left < 0) left = 0;
+            if (right > (int)fb->width) right = (int)fb->width;
+            if (solid_copy) {
+              if (right > left) rdpq_fill_rectangle(left, y, right, y + 1);
+              continue;
+            }
+            if (!transformed && !tile && pattern <= 1 && surface_get_format(fb) != FMT_RGBA32) {
+              // The row spans already include the filled/outline geometry.
+              // Pattern1 has the same foreground inside and on the stroke;
+              // no per-pixel containment or stage-pattern lookup is needed.
+              if (shape_visible[1]) for (int x=left;x<right;x++) {
+                uint16_t pixel=row[x];
+                row[x]=shape_channels[1][0][pixel>>11] |
+                       shape_channels[1][1][pixel>>6&31] |
+                       shape_channels[1][2][pixel>>1&31] | 1u;
+              }
+              continue;
+            }
+            for (int x = left; x < right; x++) {
+              int shape_x = x - l, shape_y = y - t;
+              if (transformed) {
+                float u, v;
+                if (!dg_quad_uv(shape_quad, x + 0.5f, y + 0.5f, &u, &v)) continue;
+#if DG_MODERN
+                if (s->flip_h) u = 1 - u;
+                if (s->flip_v) v = 1 - v;
+#endif
+                int sx = (int)(u * shape_width), sy = (int)(v * shape_height);
+                if (sx >= shape_width) sx = shape_width - 1;
+                if (sy >= shape_height) sy = shape_height - 1;
+                shape_x = sx; shape_y = sy;
+                if (!dg_shape_contains(kind, shape_width, shape_height, sx, sy, line, filled,
+                                       m && m->line_direction == 6)) continue;
+              }
+
+#if DG_D10
+              int stage_x = dg_stage_coord(x) - offset_x, stage_y = dg_stage_coord(y) - offset_y;
+#else
+              int stage_x = x - offset_x, stage_y = y - offset_y;
+#endif
+              bool stroke = filled && line && dg_shape_contains(kind, shape_width, shape_height,
+                  shape_x, shape_y, line, false, m && m->line_direction == 6);
+              bool bit = stroke || pattern == 1 || dg_shape_pattern(pattern, stage_x, stage_y);
+              bool use_tile = tile && !stroke;
+              uint32_t sample = 0;
+              if (use_tile) {
+                unsigned tx = (unsigned)((stage_x % (int)tile_width + (int)tile_width) % (int)tile_width);
+                unsigned ty = (unsigned)((stage_y % (int)tile_height + (int)tile_height) % (int)tile_height);
+                if(dg_fdi_palette_brush(tile->data)) {
+                  const uint32_t *palette=dg_stage_palette(director);
+                  if(!palette){lv_fail(values,"shape texture has no active palette");continue;}
+                  unsigned index=dg_fdic_index(tile->data,image_ci_bits(tile),image_index_offset(tile),tile_width,tile_height,tx,ty);
+                  uint32_t rgb=palette[index];
+                  sample=0xff000000u|((rgb>>16)&255)|(rgb&0xff00)|((rgb&255)<<16);
+                } else sample = image_pixel(tile, tile_width, tile_height, tx, ty);
+                if (!(sample >> 24) || (s->value.ink == 36 && (sample & 0xffffffu) == back_rgb)) continue;
+              } else if (!shape_visible[bit]) continue;
+              if (surface_get_format(fb)==FMT_RGBA32) {
+                uint32_t *wide=(uint32_t *)((uint8_t *)fb->buffer+y*fb->stride);
+                wide[x]=__builtin_bswap32(dg_rgba_shape(__builtin_bswap32(wide[x]),sample,
+                    use_tile,bit,s->value.ink,opacity,fore_rgb,back_rgb));
+                continue;
+              }
+              uint16_t pixel = row[x];
+              unsigned red = pixel >> 11 & 31, green = pixel >> 6 & 31, blue = pixel >> 1 & 31;
+              if (use_tile) {
+                red = dg_shape_tile_channel(sample & 255, (red << 3) | (red >> 2), s->value.ink, opacity, foreground.r, background.r);
+                green = dg_shape_tile_channel(sample >> 8 & 255, (green << 3) | (green >> 2), s->value.ink, opacity, foreground.g, background.g);
+                blue = dg_shape_tile_channel(sample >> 16 & 255, (blue << 3) | (blue >> 2), s->value.ink, opacity, foreground.b, background.b);
+              } else {
+                row[x] = shape_channels[bit][0][red] | shape_channels[bit][1][green] |
+                         shape_channels[bit][2][blue] | 1u;
+                continue;
+              }
+              row[x] = (uint16_t)((red >> 3) << 11 | (green >> 3) << 6 | (blue >> 3) << 1 | 1);
+            }
+          }
+        }
+        if (!solid_copy) rdpq_attach(fb, NULL);
+#if DG_D10
+        phase_shape_us += get_ticks_us()-shape_started;
+#endif
+      } else if (m) {
         debugf("DIRECTOR64 NATIVE_RENDER_UNSUPPORTED member=%lu type=%u "
                "sprite=%u\n",
                (unsigned long)m->id, m->type, i);
@@ -3224,20 +4376,111 @@ static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int off
       // Prompt overlays draw above their card in this sprite's own order,
       // so a later cover sprite still hides them.
       uint64_t flash_started = get_ticks_us();
-      draw_flash_overlays(i, s, m);
+      draw_flash_overlays(i, s, m, NULL, false);
       phase_flash_us += get_ticks_us() - flash_started;
 #endif
     }
   }
+#if DG_D10
+  if (prefix_pending && !values->failed) scene_prefix_capture(fb);
+#endif
   director=previous;
 }
+static void draw_scene(surface_t *fb, dg_runtime_t *scene, int offset_x, int offset_y) {
+  draw_scene_frame(fb, scene, offset_x, offset_y
+#if DG_D10
+                   , NULL, NULL, 0
+#endif
+  );
+}
+#if DG_D10
+static bool read_pixel_image_active(void *ctx, uint32_t member, dg_pixel_image_t *out) {
+  (void)ctx;
+  memset(out, 0, sizeof(*out));
+  const dg_member_t *m = member ? dg_member(director, member) : NULL;
+  unsigned width = m ? m->width : 800, height = m ? m->height : 600;
+  if ((member && !m) || !width || !height || width > 4096 || height > 4096) return false;
+  uint32_t *pixels = malloc((size_t)width * height * 4);
+  if (!pixels) return false;
+  *out = (dg_pixel_image_t){.width = width, .height = height, .depth = 32,
+      .pixels = pixels, .use_alpha = true};
+  unsigned sw, sh;
+  dg_prescale_dims(width, height, &sw, &sh);
+  if (m && (m->type == 1 || m->type == 5 || m->type == 12)) {
+    cached_image_t *source = image(m, 8);
+    if (source) {
+      for (unsigned y = 0; y < height; y++)
+        for (unsigned x = 0; x < width; x++)
+          pixels[(size_t)y * width + x] = image_pixel(source, sw, sh, x * sw / width, y * sh / height);
+      out->depth = dg_fdi_depth(source->data);
+      if (!out->depth) out->depth = 32;
+      return true;
+    }
+  } else if (!member || m->type == 3 || m->type == 7) {
+    surface_t surface = image_temporary_surface(FMT_RGBA16, sw, sh);
+    if (surface.buffer) {
+      rdpq_attach(&surface, NULL);
+      if (!member) {
+        draw_scene(&surface, director, 0, 0);
+      } else {
+        rdpq_set_mode_fill(RGBA32(255, 255, 255, 0));
+        rdpq_fill_rectangle(0, 0, sw, sh);
+        const char *text = m->text, *override_font = NULL;
+        const dg_text_style_t *style = m->text_style;
+        for (unsigned j = 0; j < director->field_count; j++)
+          if (director->field_members[j] == member) {
+            text = lv_cstr(values, values->roots[DG_FIELD_TEXT_ROOT + j]);
+            override_font = director->field_font_changed[j] ? director->field_fonts[j] : NULL;
+            if (director->field_text_changed[j] && m->text_insert_style) style = m->text_insert_style;
+          }
+        uint32_t rgb = style ? style->color : 0;
+        for (unsigned j = 0; j < director->field_count; j++)
+          if (director->field_members[j] == member) {
+            lv_t value = values->roots[DG_FIELD_COLOR_ROOT + j];
+            if (lv_type(value) != LV_VOID) {
+              unsigned n = (unsigned)lv_integer(values, value);
+              rgb = lv_type(value) == LV_COLOR || n > 255 ? n : dg_stage_palette(director)[n];
+            }
+          }
+        draw_text(style, override_font, text, RGBA32(rgb >> 16, rgb >> 8, rgb, 255),
+                  0, 0, sw, sh, member, 0);
+      }
+      rdpq_detach_wait();
+      for (unsigned y = 0; y < height; y++)
+        for (unsigned x = 0; x < width; x++) {
+          const uint16_t *row = (const uint16_t *)((const uint8_t *)surface.buffer + y * sh / height * surface.stride);
+          uint16_t word = row[x * sw / width];
+          unsigned red = word >> 11, green = word >> 6 & 31, blue = word >> 1 & 31;
+          pixels[(size_t)y * width + x] = (red << 3 | red >> 2) | (green << 3 | green >> 2) << 8 |
+              (blue << 3 | blue >> 2) << 16 | (word & 1 ? 0xff000000u : 0);
+        }
+      surface_free(&surface);
+      return !values->failed;
+    }
+  }
+  free(pixels);
+  memset(out, 0, sizeof(*out));
+  return false;
+}
+#endif
+#if DG_D10
+static bool read_pixel_image(void *ctx, uint32_t member, dg_pixel_image_t *out) {
+  dg_runtime_t *previous = director;
+  if (values->context) director = values->context;
+  bool ok = read_pixel_image_active(ctx, member, out);
+  director = previous;
+  return ok;
+}
+#endif
 // Everything outside the score that the composite depends on. The stage's own
 // state is `visual_revision`; these are the platform's own overlays and the
 // one decoder that repaints a sprite without touching its record.
 static unsigned render_externals(void) {
   unsigned key = 0;
-#if DG_D5
+#if DG_D5 || DG_D10
   key = key * 31 + d5_video_revision();
+#endif
+#if DG_D5
   key = key * 31 + (director->ticks < director->alert_until);
   key = key * 31 + director->native_dialog;
 #endif
@@ -3287,8 +4530,20 @@ static unsigned pointer_key(void) {
   return key;
 }
 static bool render(void) {
+#if DG_D10
+  uint64_t cursor_started = get_ticks_us();
+#endif
   dg_cursor_t cursor = dg_cursor_current(director);
+#if DG_D10
+  phase_cursor_us += get_ticks_us()-cursor_started;
+#endif
+#if DG_D10
+  uint64_t stage_started = get_ticks_us();
+#endif
   dg_update_stage(director);
+#if DG_D10
+  phase_stage_us += get_ticks_us() - stage_started;
+#endif
   unsigned externals = render_externals();
 #if DG_CAP_TEXT_INPUT
   bool overlay = text_input_active();
@@ -3322,6 +4577,9 @@ static bool render(void) {
   job->active = true;
   job->surface = fb;
   job->serial = ++render_serial;
+#if DG_D10
+  image_streaming = false;
+#endif
   frame_cached = true;
   cached_overlay = overlay;
   cached_pointers = pointers;
@@ -3343,7 +4601,15 @@ static bool render(void) {
     rdpq_set_scissor(0,0,640,480);
   } else
 #endif
+#if DG_D10
+  scene_prefix_context=director;
+  uint64_t scene_started = get_ticks_us();
+#endif
   draw_scene(fb,director,0,0);
+#if DG_D10
+  scene_prefix_context=NULL;
+  phase_scene_us += get_ticks_us()-scene_started;
+#endif
 #if DG_EXTENDED
   if (director->transition_serial != transition_consumed) {
     transition_consumed = director->transition_serial;
@@ -3507,6 +4773,7 @@ static void notice(const char *heading, const char *message) {
   }
 }
 int main(void) {
+  n64_export_memory_budget();
   if (!platform_init())
     return 1;
   pack_open();
@@ -3518,8 +4785,25 @@ int main(void) {
   // stack own the sets around the period boundary (the linker script,
   // n64.ld, holds the statics there), and the emulator's miss profile showed
   // the header ping-ponging with them when it sat at zero.
-  values = (lv_runtime_t *)((char *)memalign(8192, sizeof(*values) + 8192) + 2048);
-  director = (dg_runtime_t *)((char *)memalign(8192, sizeof(*director) + 8192) + 4096);
+  void *values_memory = memalign(8192, sizeof(*values) + 8192);
+  void *director_memory = memalign(8192, sizeof(*director) + 8192);
+  if (!values_memory || !director_memory) {
+    heap_stats_t stats;
+    sys_get_heap_stats(&stats);
+    char message[192];
+    snprintf(message, sizeof(message),
+             "Runtime allocation failed: values=%u director=%u free=%d bytes (%s).",
+             (unsigned)sizeof(*values) + 8192, (unsigned)sizeof(*director) + 8192,
+             stats.free, !values_memory ? "value heap" : "Director state");
+    debugf("DIRECTOR64 NATIVE_ERROR %s\n", message);
+    free(values_memory); free(director_memory);
+    font = rdpq_font_load_builtin(FONT_BUILTIN_DEBUG_MONO);
+    rdpq_text_register_font(1, font);
+    notice("Runtime allocation failed", message);
+    return 1;
+  }
+  values = (lv_runtime_t *)((char *)values_memory + 2048);
+  director = (dg_runtime_t *)((char *)director_memory + 4096);
   // Where the two runtime structures and the binary's static sections sit,
   // for the emulator's cache-miss profile to attribute data misses.
   extern char __data_start[], __bss_start[], __bss_end[];
@@ -3528,13 +4812,17 @@ int main(void) {
          (void *)values, (unsigned)sizeof(*values), (void *)director,
          (unsigned)sizeof(*director), (void *)__data_start, (void *)__bss_start,
          (void *)__bss_end);
-  if (!values || !director)
-    return 1;
   audio_init(22050, 4);
-#if DG_D5
-  mixer_init(D5_MIXER_CHANNELS);
+#if DG_D5 || DG_D10
+  const unsigned mixer_channels=
+#if DG_D10
+      FLASH_AUDIO_CHANNELS;
+#else
+      D5_MIXER_CHANNELS;
+#endif
+  mixer_init(mixer_channels);
   d5_video_init();
-  for (unsigned ch = DG_SOUND_CHANNELS * 2; ch < D5_MIXER_CHANNELS; ch++)
+  for (unsigned ch = DG_SOUND_CHANNELS * 2; ch < mixer_channels; ch++)
     mixer_ch_set_limits(ch, 16, 44100, 0);
 #else
   mixer_init(DG_SOUND_CHANNELS * 2);
@@ -3589,6 +4877,8 @@ int main(void) {
                           .write_file = write_file,
                           .sound = sound,
                           .sound_busy = sound_busy,
+                          .sound_pause = sound_pause,
+                          .sound_break_loop = sound_break_loop,
 #if DG_EXTENDED
                           .sound_position = sound_position,
 #endif
@@ -3596,8 +4886,12 @@ int main(void) {
                           .hit = hit,
 #if DG_D10
                           .play_file = play_file,
+                          .read_image = read_pixel_image,
+                          .flash_field_hit = flash_field_hit,
                           .find_movie = find_movie,
                           .read_data = read_rom_data,
+                          .movie_path = game_movie_path,
+                          .data_folder = game_data_folder,
 #endif
                           },
           NULL, global_names, sizeof(global_names) / sizeof(*global_names),
@@ -3671,7 +4965,7 @@ int main(void) {
           !game_print_paused() &&
 #endif
           dg_transition_ready(director)) {
-        char movie[32];
+        char movie[sizeof(director->next_movie)];
         snprintf(movie, sizeof(movie), "%s", director->next_movie);
         if (!enter(movie, director->next_movie_frame))
           break;
@@ -3819,12 +5113,12 @@ int main(void) {
         unsigned live_objects = values->object_count;
         debugf("DIRECTOR64 NATIVE_TICK movie=%s frame=%u tick=%lu free=%d "
                "cache=%u heap=%lu depth=%u objects=%u high=%lu frag=%d "
-               "paused=%lu\n",
+               "paused=%lu object_high=%u\n",
                director->movie->code->name, director->frame,
                (unsigned long)director->ticks, stats.free, cache_bytes,
                (unsigned long)values->heap_used, values->depth, live_objects,
                (unsigned long)values->heap_high_water, stats.fragmented,
-               paused_steps);
+               paused_steps, values->object_high_water);
         debugf("DIRECTOR64 NATIVE_COST ticks_us=%llu render_us=%llu "
                "audio_us=%llu renders=%u steps=%lu gc=%lu egc=%lu "
                "gc_us=%llu dropped_us=%llu wall=%llu image_us=%llu text_us=%llu "
@@ -3893,6 +5187,22 @@ int main(void) {
                (unsigned long long)bundle_us, (unsigned long long)image_region_us,
                image_region_compactions, (unsigned long long)image_region_compact_us,
                image_region_moved, image_region_windows);
+#if DG_D10
+        debugf("DIRECTOR64 NATIVE_FILM_COST prepare_us=%llu draw_us=%llu composite_us=%llu "
+               "stage_us=%llu bitmap_us=%llu preload_us=%llu cursor_us=%llu scene_us=%llu boundary_us=%llu shape_us=%llu\n",
+               (unsigned long long)phase_film_prepare_us, (unsigned long long)phase_film_draw_us,
+               (unsigned long long)phase_film_composite_us, (unsigned long long)phase_stage_us,
+               (unsigned long long)phase_bitmap_us, (unsigned long long)phase_preload_us,
+               (unsigned long long)phase_cursor_us, (unsigned long long)phase_scene_us,
+               (unsigned long long)phase_boundary_us, (unsigned long long)phase_shape_us);
+        phase_film_prepare_us=phase_film_draw_us=phase_film_composite_us=0;
+        phase_stage_us=phase_bitmap_us=phase_preload_us=0;
+        phase_cursor_us=phase_scene_us=phase_boundary_us=phase_shape_us=0;
+        debugf("DIRECTOR64 NATIVE_PREFIX hits=%u misses=%u copy_us=%llu bytes=%u\n",
+               scene_prefix_hits, scene_prefix_misses, (unsigned long long)scene_prefix_copy_us,
+               scene_prefix_plane.buffer ? 640u*480u*2u : 0u);
+        scene_prefix_hits=scene_prefix_misses=0;scene_prefix_copy_us=0;
+#endif
         cache_loads = cache_load_bytes = cache_evictions = cache_retries = 0;
         bundle_us = image_region_us = 0;
         image_region_compactions = 0;
@@ -3925,18 +5235,22 @@ int main(void) {
       if (gain != served_gain[ch] && !(fading & (1u << ch))) {
         served_gain[ch] = gain;
         fades->gain[ch] = gain;
-        mixer_ch_set_vol(ch * 2, gain, gain);
+        float audible = fades->paused[ch] ? 0.0f : gain;
+        mixer_ch_set_vol(ch * 2, audible, audible);
       }
     }
     uint32_t started = TICKS_READ();
-#if DG_D5
-    // Presentation times advance in d5_media_tick, so between ticks this can
+#if DG_D5 || DG_D10
+    // Presentation times advance in the runtime media tick, so between ticks this can
     // only rewalk every channel to decide nothing. The audio pump below still
     // runs every pass.
     static float served_volume = -1.0f;
     if (steps || volume != served_volume) {
       served_volume = volume;
       d5_video_update(director, volume);
+#if DG_D10
+      flash_audio_update(director,1.0f); // collector already applies soundLevel
+#endif
     }
 #endif
     service_audio(now);
@@ -4016,7 +5330,7 @@ failed:
   for (unsigned i = 0; i < DG_SOUND_CHANNELS; i++)
     sound(NULL, i, NULL);
   rspq_wait();
-#if DG_D5
+#if DG_D5 || DG_D10
   d5_video_close();
 #endif
   mixer_close();

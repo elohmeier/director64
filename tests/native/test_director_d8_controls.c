@@ -66,7 +66,7 @@ static void keyboard_events(void) {
   assert(key(lv_num(123)) && key(lv_num(124)));
 }
 static void method_cache_reload(void) {
-  static const dg_cast_t casts[]={{"Internal",1,1}};
+  static const dg_cast_t casts[]={{.name="Internal",.file=1,.cast=1}};
   static const lv_handler_t first_handlers[]={{.name="first",.member=1,.cast="Internal"}};
   static const lv_handler_t second_handlers[]={{.name="second",.member=1,.cast="Internal"}};
   static const lv_movie_t first_code={"FIRST.DXR",1,first_handlers,NULL,NULL,NULL,NULL,0}, second_code={"SECOND.DXR",1,second_handlers,NULL,NULL,NULL,NULL,0};

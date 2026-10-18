@@ -6,6 +6,8 @@
 // offset, size]]} and the frames. The Android player decodes it with
 // MediaCodec (platforms/android/jni/video.c).
 import {spawn} from "node:child_process";
+import {Readable} from "node:stream";
+import {pipeline} from "node:stream/promises";
 
 // VP9 profile 0 at constrained quality: CRF 30 up to 600 kbit/s, which on
 // Löwenzahn's noisiest MPEG-1 clip scores above the VP8 at 900 kbit/s it
@@ -25,42 +27,41 @@ function keyframe(data) {
 // u64 timestamp) and the frame.
 function ivfFrames(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (bytes.length < 32 || String.fromCharCode(...bytes.subarray(0, 4)) !== "DKIF")
-    throw new Error("ffmpeg wrote no IVF stream");
+  if (bytes.length < 32 || String.fromCharCode(...bytes.subarray(0, 4)) !== "DKIF" ||
+      view.getUint16(4, true) !== 0 || view.getUint16(6, true) < 32)
+    throw new Error("ffmpeg wrote no valid IVF stream");
+  const width = view.getUint16(12, true), height = view.getUint16(14, true);
+  const rate = view.getUint32(16, true), scale = view.getUint32(20, true);
+  if (!width || !height || !rate || !scale) throw new Error("invalid IVF dimensions or rate");
   const frames = [];
-  for (let at = view.getUint16(6, true); at + 12 <= bytes.length;) {
-    const size = view.getUint32(at, true);
-    frames.push(bytes.subarray(at + 12, at + 12 + size));
+  let last = -1;
+  for (let at = view.getUint16(6, true); at < bytes.length;) {
+    if (at + 12 > bytes.length) throw new Error("truncated IVF frame header");
+    const size = view.getUint32(at, true), pts = Number(view.getBigUint64(at + 4, true));
+    if (!size || size > bytes.length - at - 12 || !Number.isSafeInteger(pts) || pts <= last)
+      throw new Error("invalid IVF frame length or timestamp");
+    frames.push([Math.round(pts * scale * 1e6 / rate), bytes.subarray(at + 12, at + 12 + size)]);
+    last = pts;
     at += 12 + size;
   }
-  return frames;
+  if (!frames.length || !keyframe(frames[0][1])) throw new Error("IVF has no initial keyframe");
+  return {width, height, rate, scale, frames};
 }
 
 export async function encodeVideo(frames) {
-  const ffmpeg = spawn(process.env.FFMPEG ?? "ffmpeg", [
-    "-hide_banner", "-loglevel", "error",
-    "-f", "rawvideo", "-pix_fmt", "rgb0", "-s", `${frames.width}x${frames.height}`, "-r", "15",
-    "-i", "pipe:0",
-    // One output frame per input frame, a keyframe at least every two
-    // seconds at 15 fps, as the browser encoder's.
-    ...VP9, "-g", "30", "-fps_mode", "passthrough",
-    "-f", "ivf", "pipe:1",
-  ], {stdio: ["pipe", "pipe", "inherit"]});
-  const output = [];
-  ffmpeg.stdout.on("data", (chunk) => output.push(chunk));
-  const exited = new Promise((resolve, reject) => {
-    ffmpeg.on("error", reject);
-    ffmpeg.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited with ${code}`))));
-  });
   const times = [];
-  for (let frame; (frame = frames.next());) {
-    times.push(frame.microseconds);
-    if (!ffmpeg.stdin.write(frame.rgbx))
-      await new Promise((resolve) => ffmpeg.stdin.once("drain", resolve));
+  function* pixels() {
+    for (let frame; (frame = frames.next());) {
+      // Frame decoders may reuse their output plane on the next call.
+      times.push(frame.microseconds);
+      yield new Uint8Array(frame.rgbx);
+    }
   }
-  ffmpeg.stdin.end();
-  await exited;
-  const encoded = ivfFrames(new Uint8Array(Buffer.concat(output)));
+  const encoded = ivfFrames(await run([
+    "-f", "rawvideo", "-pix_fmt", "rgb0", "-s", `${frames.width}x${frames.height}`,
+    "-r", String(frames.rate ?? 15), "-i", "pipe:0",
+    ...VP9, "-g", "30", "-fps_mode", "passthrough", "-f", "ivf", "pipe:1",
+  ], pixels())).frames.map(([, data]) => data);
   if (encoded.length !== times.length)
     throw new Error(`ffmpeg wrote ${encoded.length} frames for ${times.length}`);
   let offset = 0;
@@ -83,7 +84,7 @@ export async function encodeVideo(frames) {
 }
 
 // MPEG-1 movies (DirectMedia's, Löwenzahn 6 onwards) go to FFmpeg whole:
-// their sound as a 16-bit WAV, their picture as VP8 at the source frame
+// their sound as a 16-bit WAV, their picture as VP9 at the source frame
 // rate, in the container above with the IVF timestamps as frame times.
 // A sound of OPUS_SECONDS or more (the movies' soundtracks, long speech) goes
 // to Ogg Opus, which the TV player decodes in the background (decode.c
@@ -98,35 +99,53 @@ export async function encodeAudio(converter, wav) {
   return run(["-f", "wav", "-i", "pipe:0", "-c:a", "libopus", "-b:a", channels > 1 ? "96k" : "64k",
     "-vbr", "on", "-application", "audio", "-f", "ogg", "pipe:1"], wav);
 }
-function run(args, input) {
-  const ffmpeg = spawn(process.env.FFMPEG ?? "ffmpeg", ["-hide_banner", "-loglevel", "error", ...args],
-    {stdio: ["pipe", "pipe", "inherit"]});
+async function run(args, input) {
+  // Decoder recovery is not a qualified repair of a damaged retail source.
+  // Make it fail like the browser decoder instead of silently exporting it.
+  const ffmpeg = spawn(process.env.FFMPEG ?? "ffmpeg", ["-hide_banner", "-loglevel", "error",
+    "-xerror", "-err_detect", "explode", ...args],
+    {stdio: ["pipe", "pipe", "pipe"]});
   const output = [];
+  let errors = "";
+  ffmpeg.stderr.on("data", (chunk) => { errors = (errors + chunk).slice(-16384); });
   ffmpeg.stdout.on("data", (chunk) => output.push(chunk));
   const exited = new Promise((resolve, reject) => {
     ffmpeg.on("error", reject);
-    ffmpeg.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited with ${code}`))));
+    ffmpeg.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg exited with ${code}: ${errors.trim()}`));
+    });
   });
-  // A movie without the stream asked for closes stdin early.
-  ffmpeg.stdin.on("error", () => {});
-  ffmpeg.stdin.end(input);
+  let feedError, processError;
+  const chunks = input instanceof Uint8Array ? [input] : input;
+  const feeding = pipeline(Readable.from(chunks), ffmpeg.stdin).catch((error) => {
+    feedError = error;
+    // A source iterator error must release the subprocess as well. EPIPE
+    // belongs to the subprocess's own diagnostic, which is reported below.
+    if (!['EPIPE', 'ERR_STREAM_PREMATURE_CLOSE'].includes(error.code)) ffmpeg.kill();
+  });
+  await Promise.all([feeding, exited.catch((error) => { processError = error; })]);
+  if (feedError && !['EPIPE', 'ERR_STREAM_PREMATURE_CLOSE'].includes(feedError.code)) throw feedError;
+  if (processError) throw processError;
+  if (feedError) throw feedError;
   // A copy of its own: a pooled Buffer must not cross to another thread.
-  return exited.then(() => {
-    const joined = Buffer.concat(output);
-    const out = new Uint8Array(joined.length);
-    out.set(joined);
-    return out;
-  });
+  return new Uint8Array(Buffer.concat(output));
 }
 
 // The MPEG's sound, or null without one. A piped WAV leaves its sizes open.
-export async function mpegAudio(bytes) {
+export async function mpegAudio(bytes, info = {}) {
   let wav;
   try {
-    wav = await run(["-i", "pipe:0", "-vn", "-map", "0:a:0", "-c:a", "pcm_s16le", "-f", "wav", "pipe:1"], bytes);
-  } catch {
-    // A silent movie: FFmpeg has no stream to write.
-    return null;
+    const lead = info.audio_lead_seconds ?? 0;
+    const filter = lead > 0 ? ["-af", `atrim=start=${lead},asetpts=PTS-STARTPTS`]
+      : lead < 0 ? ["-af", `adelay=delays=${-lead * 1000}:all=1`] : [];
+    wav = await run(["-i", "pipe:0", "-vn", "-map", "0:a:0", ...filter,
+      "-c:a", "pcm_s16le", "-f", "wav", "pipe:1"], bytes);
+  } catch (error) {
+    // Only a missing audio stream is a silent movie. Decoder, process and
+    // filesystem failures must reach the importer instead of dropping sound.
+    if (/Stream map ['"][^'"]*['"] matches no streams/.test(error.message)) return null;
+    throw error;
   }
   if (wav.length <= 44) return null;
   const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
@@ -150,20 +169,17 @@ export async function mpegAudio(bytes) {
   return out;
 }
 
-export async function encodeMpeg(bytes) {
-  const ivf = await run(["-i", "pipe:0", "-an", ...VP9, "-g", "50", "-f", "ivf", "pipe:1"], bytes);
-  const view = new DataView(ivf.buffer, ivf.byteOffset, ivf.byteLength);
-  if (ivf.length < 32 || String.fromCharCode(...ivf.subarray(0, 4)) !== "DKIF")
-    throw new Error("ffmpeg wrote no IVF stream");
-  const width = view.getUint16(12, true), height = view.getUint16(14, true);
-  const rate = view.getUint32(16, true), scale = view.getUint32(20, true);
-  const frames = [];
-  for (let at = view.getUint16(6, true); at + 12 <= ivf.length;) {
-    const size = view.getUint32(at, true);
-    const pts = Number(view.getBigUint64(at + 4, true));
-    frames.push([Math.round(pts * scale * 1e6 / rate), ivf.subarray(at + 12, at + 12 + size)]);
-    at += 12 + size;
-  }
+export async function encodeMpeg(bytes, info = {}) {
+  // Director times the decoded pictures at the sequence's constant rate.
+  // Piped program streams can omit later PTS; retime from display order,
+  // exactly as the browser decoder does, rather than duplicating pictures.
+  const ivf = await run(["-i", "pipe:0", "-an", "-vf", "setpts=N/(FRAME_RATE*TB)",
+    ...VP9, "-g", "50", "-fps_mode", "passthrough", "-f", "ivf", "pipe:1"], bytes);
+  const {width, height, rate, scale, frames} = ivfFrames(ivf);
+  if ((info.width && width !== info.width) || (info.height && height !== info.height) ||
+      (info.decoded_frames && frames.length !== info.decoded_frames) ||
+      (info.rate && Math.abs(rate / scale - info.rate / info.scale) > 0.0001))
+    throw new Error(`MPEG conversion changed geometry, rate or frame count: ${width}x${height}, ${frames.length} frames at ${rate}/${scale}`);
   let offset = 0;
   const header = {codec: CODEC, width, height,
     frames: frames.map(([time, data]) => {

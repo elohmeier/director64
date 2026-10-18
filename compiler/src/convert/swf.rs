@@ -7,29 +7,56 @@
 
 use std::collections::HashMap;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::js;
+
+#[path = "swf_audio.rs"]
+pub mod audio;
+#[path = "swf_filter.rs"]
+pub mod filters;
+#[path = "swf_helpers.rs"]
+mod helpers;
+#[path = "swf_morph.rs"]
+mod morph;
+#[path = "swf_runtime.rs"]
+mod runtime;
 
 type R<T> = Result<T, String>;
 
 fn u16le(b: &[u8], at: usize) -> R<usize> {
-    b.get(at..at + 2).map(|s| u16::from_le_bytes([s[0], s[1]]) as usize).ok_or_else(|| "truncated SWF record".into())
+    b.get(at..at + 2)
+        .map(|s| u16::from_le_bytes([s[0], s[1]]) as usize)
+        .ok_or_else(|| "truncated SWF record".into())
 }
 fn i16le(b: &[u8], at: usize) -> R<i64> {
-    b.get(at..at + 2).map(|s| i16::from_le_bytes([s[0], s[1]]) as i64).ok_or_else(|| "truncated SWF record".into())
+    b.get(at..at + 2)
+        .map(|s| i16::from_le_bytes([s[0], s[1]]) as i64)
+        .ok_or_else(|| "truncated SWF record".into())
 }
 fn u32le(b: &[u8], at: usize) -> R<usize> {
-    b.get(at..at + 4).map(|s| u32::from_le_bytes(s.try_into().unwrap()) as usize).ok_or_else(|| "truncated SWF record".into())
+    b.get(at..at + 4)
+        .map(|s| u32::from_le_bytes(s.try_into().unwrap()) as usize)
+        .ok_or_else(|| "truncated SWF record".into())
 }
 fn byte(b: &[u8], at: usize) -> R<u8> {
-    b.get(at).copied().ok_or_else(|| "truncated SWF record".into())
+    b.get(at)
+        .copied()
+        .ok_or_else(|| "truncated SWF record".into())
 }
 fn jmax(a: f64, b: f64) -> f64 {
-    if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) }
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
 }
 fn jmin(a: f64, b: f64) -> f64 {
-    if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) }
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.min(b)
+    }
 }
 /// `parseInt(value, 10)`: leading whitespace, a sign, then digits.
 fn parse_int(value: &str) -> f64 {
@@ -39,11 +66,20 @@ fn parse_int(value: &str) -> f64 {
         Some(b'+') => (1.0, &t[1..]),
         _ => (1.0, t),
     };
-    let end = digits.find(|c: char| !c.is_ascii_digit()).unwrap_or(digits.len());
-    if end == 0 { f64::NAN } else { sign * digits[..end].parse::<f64>().unwrap() }
+    let end = digits
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(digits.len());
+    if end == 0 {
+        f64::NAN
+    } else {
+        sign * digits[..end].parse::<f64>().unwrap()
+    }
 }
 fn index_of(b: &[u8], value: u8, from: usize) -> Option<usize> {
-    b.get(from..)?.iter().position(|&x| x == value).map(|i| i + from)
+    b.get(from..)?
+        .iter()
+        .position(|&x| x == value)
+        .map(|i| i + from)
 }
 
 struct Bits<'a> {
@@ -53,7 +89,10 @@ struct Bits<'a> {
 
 impl<'a> Bits<'a> {
     fn new(bytes: &'a [u8], offset: usize) -> Self {
-        Self { bytes, bit: offset * 8 }
+        Self {
+            bytes,
+            bit: offset * 8,
+        }
     }
     fn unsigned(&mut self, count: usize) -> R<f64> {
         if count > 32 || self.bit + count > self.bytes.len() * 8 {
@@ -68,7 +107,11 @@ impl<'a> Bits<'a> {
     }
     fn signed(&mut self, count: usize) -> R<f64> {
         let value = self.unsigned(count)?;
-        Ok(if count > 0 && value >= 2f64.powi(count as i32 - 1) { value - 2f64.powi(count as i32) } else { value })
+        Ok(if count > 0 && value >= 2f64.powi(count as i32 - 1) {
+            value - 2f64.powi(count as i32)
+        } else {
+            value
+        })
     }
     fn fixed16(&mut self, count: usize) -> R<f64> {
         Ok(self.signed(count)? / 65536.0)
@@ -79,7 +122,12 @@ impl<'a> Bits<'a> {
     }
     fn rect(&mut self) -> R<[f64; 4]> {
         let count = self.unsigned(5)? as usize;
-        let r = [self.signed(count)?, self.signed(count)?, self.signed(count)?, self.signed(count)?];
+        let r = [
+            self.signed(count)?,
+            self.signed(count)?,
+            self.signed(count)?,
+            self.signed(count)?,
+        ];
         self.align();
         Ok(r)
     }
@@ -194,7 +242,13 @@ fn color(b: &[u8], p: usize, alpha: bool) -> R<[f64; 4]> {
     ])
 }
 
-fn gradient_style(b: &[u8], state: &mut Styles, version: u32, radial: bool, focal: bool) -> R<Fill> {
+fn gradient_style(
+    b: &[u8],
+    state: &mut Styles,
+    version: u32,
+    radial: bool,
+    focal: bool,
+) -> R<Fill> {
     let mut bits = Bits::new(b, state.p);
     let matrix = bits.matrix()?;
     let mut p = bits.align();
@@ -216,7 +270,11 @@ fn gradient_style(b: &[u8], state: &mut Styles, version: u32, radial: bool, foca
         p += 2;
     }
     state.p = p;
-    Ok(Fill::Gradient(Gradient { matrix, stops, radial }))
+    Ok(Fill::Gradient(Gradient {
+        matrix,
+        stops,
+        radial,
+    }))
 }
 
 fn style_tables(b: &[u8], state: &mut Styles, version: u32) -> R<(usize, usize)> {
@@ -253,7 +311,11 @@ fn style_tables(b: &[u8], state: &mut Styles, version: u32) -> R<(usize, usize)>
                 None if id == 0xFFFF => None,
                 None => return Err("SWF bitmap fill references absent bitmap".into()),
             };
-            state.fills.push(Fill::Bitmap(BitmapFill { bitmap, matrix, clipped: kind & 1 != 0 }));
+            state.fills.push(Fill::Bitmap(BitmapFill {
+                bitmap,
+                matrix,
+                clipped: kind & 1 != 0,
+            }));
         } else {
             return Err(format!("unsupported SWF fill style {kind:#x}"));
         }
@@ -274,7 +336,10 @@ fn style_tables(b: &[u8], state: &mut Styles, version: u32) -> R<(usize, usize)>
             }
         }
         let alpha = version >= 3 || version == 4;
-        state.lines.push(Line { width, color: color(b, p, alpha)? });
+        state.lines.push(Line {
+            width,
+            color: color(b, p, alpha)?,
+        });
         p += if alpha { 4 } else { 3 };
     }
     state.p = p;
@@ -294,7 +359,16 @@ struct Collector {
 
 impl Collector {
     fn new() -> Self {
-        Self { x: 0.0, y: 0.0, fill0: 0, fill1: 0, line: 0, fill_base: 0, line_base: 0, edges: Vec::new() }
+        Self {
+            x: 0.0,
+            y: 0.0,
+            fill0: 0,
+            fill1: 0,
+            line: 0,
+            fill_base: 0,
+            line_base: 0,
+            edges: Vec::new(),
+        }
     }
     fn push(&mut self, nx: f64, ny: f64) -> R<()> {
         let annotate = |style: usize, base: usize| if style != 0 { base + style } else { 0 };
@@ -321,7 +395,10 @@ impl Collector {
         for i in 1..=CURVE_SEGMENTS {
             let t = i as f64 / CURVE_SEGMENTS as f64;
             let u = 1.0 - t;
-            self.push(u * u * sx + 2.0 * u * t * qx + t * t * ex, u * u * sy + 2.0 * u * t * qy + t * t * ey)?;
+            self.push(
+                u * u * sx + 2.0 * u * t * qx + t * t * ex,
+                u * u * sy + 2.0 * u * t * qy + t * t * ey,
+            )?;
         }
         Ok(())
     }
@@ -405,11 +482,27 @@ fn shape_records(
     Ok(())
 }
 
-fn parse_shape(b: &[u8], version: u32, bitmaps: &HashMap<usize, std::rc::Rc<Bitmap>>) -> R<(usize, Shape)> {
+fn parse_shape(
+    b: &[u8],
+    version: u32,
+    bitmaps: &HashMap<usize, std::rc::Rc<Bitmap>>,
+) -> R<(usize, Shape)> {
     if b.len() < 4 {
         return Err("truncated SWF shape".into());
     }
     let id = u16le(b, 0)?;
+    // Empty authoring shapes can use a zero-padded 18-byte RECT slot,
+    // followed by empty fill/line tables and an empty edge stream.
+    if version < 4 && b.len() == 24 && b[2] == 8 && b[3..].iter().all(|&v| v == 0) {
+        return Ok((
+            id,
+            Shape {
+                fills: Vec::new(),
+                lines: Vec::new(),
+                edges: Vec::new(),
+            },
+        ));
+    }
     let mut bits = Bits::new(b, 2);
     bits.rect()?;
     if version == 4 {
@@ -418,7 +511,12 @@ fn parse_shape(b: &[u8], version: u32, bitmaps: &HashMap<usize, std::rc::Rc<Bitm
             return Err("SWF shape4 winding/reserved flags need explicit conversion".into());
         }
     }
-    let mut state = Styles { p: bits.align(), fills: Vec::new(), lines: Vec::new(), bitmaps };
+    let mut state = Styles {
+        p: bits.align(),
+        fills: Vec::new(),
+        lines: Vec::new(),
+        bitmaps,
+    };
     let mut collector = Collector::new();
     let (fb, lb) = style_tables(b, &mut state, version)?;
     collector.fill_base = fb;
@@ -434,19 +532,27 @@ fn parse_shape(b: &[u8], version: u32, bitmaps: &HashMap<usize, std::rc::Rc<Bitm
             collector.line_base = lb;
             Ok(state.p)
         };
-        let mut on_style: Option<&mut dyn FnMut(usize, &mut Collector) -> R<usize>> = Some(&mut callback);
+        let mut on_style: Option<&mut dyn FnMut(usize, &mut Collector) -> R<usize>> =
+            Some(&mut callback);
         shape_records(&mut bits, &mut collector, &mut on_style)?;
     }
     let state = state_cell.into_inner();
-    if bits.align() != b.len() || collector.edges.is_empty() {
-        return Err("unconsumed or empty SWF shape".into());
+    if bits.align() != b.len() {
+        return Err("unconsumed SWF shape data".into());
     }
     for e in &collector.edges {
         if e.f0 > state.fills.len() || e.f1 > state.fills.len() || e.ln > state.lines.len() {
             return Err("SWF edge references absent style".into());
         }
     }
-    Ok((id, Shape { fills: state.fills, lines: state.lines, edges: collector.edges }))
+    Ok((
+        id,
+        Shape {
+            fills: state.fills,
+            lines: state.lines,
+            edges: collector.edges,
+        },
+    ))
 }
 
 fn parse_glyph(b: &[u8], start: usize, end: usize) -> R<Shape> {
@@ -456,7 +562,11 @@ fn parse_glyph(b: &[u8], start: usize, end: usize) -> R<Shape> {
     if bits.align() > end {
         return Err("SWF glyph exceeds its extent".into());
     }
-    Ok(Shape { fills: vec![Fill::Color([0.0, 0.0, 0.0, 255.0])], lines: Vec::new(), edges: collector.edges })
+    Ok(Shape {
+        fills: vec![Fill::Color([0.0, 0.0, 0.0, 255.0])],
+        lines: Vec::new(),
+        edges: collector.edges,
+    })
 }
 
 struct Font {
@@ -478,28 +588,55 @@ fn parse_font(b: &[u8], tag: usize) -> R<(usize, Font)> {
             offsets.push(2 + u16le(b, 2 + i * 2)?);
         }
         offsets.push(b.len());
-        let glyphs = (0..count).map(|i| parse_glyph(b, offsets[i], offsets[i + 1])).collect::<R<_>>()?;
-        return Ok((id, Font { name: String::new(), glyphs, codes: None, advances: None, ascent: None, em: 1024.0 }));
+        let glyphs = (0..count)
+            .map(|i| parse_glyph(b, offsets[i], offsets[i + 1]))
+            .collect::<R<_>>()?;
+        return Ok((
+            id,
+            Font {
+                name: String::new(),
+                glyphs,
+                codes: None,
+                advances: None,
+                ascent: None,
+                em: 1024.0,
+            },
+        ));
     }
     let flags = byte(b, 2)?;
     let wide_offsets = flags & 8 != 0;
     let wide_codes = tag == 75 || flags & 4 != 0;
     let has_layout = flags & 0x80 != 0;
     let name_length = byte(b, 4)? as usize;
-    let name = js::latin1(b.get(5..5 + name_length).ok_or("truncated SWF font")?).trim_end_matches('\0').to_string();
+    let name = js::latin1(b.get(5..5 + name_length).ok_or("truncated SWF font")?)
+        .trim_end_matches('\0')
+        .to_string();
     let mut p = 5 + name_length;
     let count = u16le(b, p)?;
     p += 2;
     let table = p;
     let mut offsets = Vec::new();
     for i in 0..=count {
-        offsets.push(table + if wide_offsets { u32le(b, table + i * 4)? } else { u16le(b, table + i * 2)? });
+        offsets.push(
+            table
+                + if wide_offsets {
+                    u32le(b, table + i * 4)?
+                } else {
+                    u16le(b, table + i * 2)?
+                },
+        );
     }
-    let glyphs = (0..count).map(|i| parse_glyph(b, offsets[i], offsets[i + 1])).collect::<R<_>>()?;
+    let glyphs = (0..count)
+        .map(|i| parse_glyph(b, offsets[i], offsets[i + 1]))
+        .collect::<R<_>>()?;
     p = offsets[count];
     let mut codes = Vec::new();
     for _ in 0..count {
-        codes.push(if wide_codes { u16le(b, p)? } else { byte(b, p)? as usize });
+        codes.push(if wide_codes {
+            u16le(b, p)?
+        } else {
+            byte(b, p)? as usize
+        });
         p += if wide_codes { 2 } else { 1 };
     }
     let (mut ascent, mut advances) = (None, None);
@@ -513,7 +650,17 @@ fn parse_font(b: &[u8], tag: usize) -> R<(usize, Font)> {
         }
         advances = Some(list);
     }
-    Ok((id, Font { name, glyphs, codes: Some(codes), advances, ascent, em: if tag == 75 { 20480.0 } else { 1024.0 } }))
+    Ok((
+        id,
+        Font {
+            name,
+            glyphs,
+            codes: Some(codes),
+            advances,
+            ascent,
+            em: if tag == 75 { 20480.0 } else { 1024.0 },
+        },
+    ))
 }
 
 struct TextRecord {
@@ -537,7 +684,8 @@ fn parse_define_text(b: &[u8], version: u32) -> R<(usize, Text)> {
     let advance_bits = byte(b, p + 1)? as usize;
     p += 2;
     let mut records = Vec::new();
-    let (mut font, mut color_value, mut x, mut y, mut height) = (None, [0.0, 0.0, 0.0, 255.0], 0.0, 0.0, 240.0);
+    let (mut font, mut color_value, mut x, mut y, mut height) =
+        (None, [0.0, 0.0, 0.0, 255.0], 0.0, 0.0, 240.0);
     while b.get(p).is_some_and(|&v| v != 0) {
         let flags = byte(b, p)?;
         p += 1;
@@ -577,13 +725,19 @@ fn parse_define_text(b: &[u8], version: u32) -> R<(usize, Text)> {
         }
         x = pen;
         p = entry.align();
-        records.push(TextRecord { font, color: color_value, height, glyphs });
+        records.push(TextRecord {
+            font,
+            color: color_value,
+            height,
+            glyphs,
+        });
     }
     Ok((id, Text { matrix, records }))
 }
 
 #[derive(Clone)]
 struct Field {
+    embed_fonts: bool,
     bounds: [f64; 4],
     word_wrap: bool,
     multiline: bool,
@@ -616,6 +770,7 @@ fn parse_edit_text(b: &[u8], utf8: bool) -> R<(usize, Field)> {
     let flags = u16le(b, p)?;
     p += 2;
     let mut field = Field {
+        embed_fonts: flags & 0x100 != 0,
         bounds,
         word_wrap: flags & 0x40 != 0,
         multiline: flags & 0x20 != 0,
@@ -686,18 +841,27 @@ fn parse_field_html(html: &str) -> R<(String, HashMap<String, String>)> {
             }
             let tag: String = chars[start..j].iter().collect::<String>().to_lowercase();
             // `\b` after the tag name, then [^>]* and '>'.
-            let boundary = j >= chars.len() || !(chars[j].is_ascii_alphanumeric() || chars[j] == '_');
+            let boundary =
+                j >= chars.len() || !(chars[j].is_ascii_alphanumeric() || chars[j] == '_');
             if matches!(tag.as_str(), "p" | "font" | "br") && boundary {
                 if let Some(close) = chars[j..].iter().position(|&c| c == '>') {
                     let attrs: String = chars[j..j + close].iter().collect();
                     let mut rest = attrs.as_str();
                     while let Some(eq) = rest.find("=\"") {
-                        let key_start = rest[..eq].rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).map(|k| k + 1).unwrap_or(0);
+                        let key_start = rest[..eq]
+                            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                            .map(|k| k + 1)
+                            .unwrap_or(0);
                         let key = &rest[key_start..eq];
                         let value_start = eq + 2;
-                        let Some(value_end) = rest[value_start..].find('"') else { break };
+                        let Some(value_end) = rest[value_start..].find('"') else {
+                            break;
+                        };
                         if !key.is_empty() {
-                            attributes.insert(key.to_lowercase(), rest[value_start..value_start + value_end].to_string());
+                            attributes.insert(
+                                key.to_lowercase(),
+                                rest[value_start..value_start + value_end].to_string(),
+                            );
                         }
                         rest = &rest[value_start + value_end + 1..];
                     }
@@ -718,36 +882,247 @@ fn parse_field_html(html: &str) -> R<(String, HashMap<String, String>)> {
     Ok((out, attributes))
 }
 
-fn parse_actions(payload: &[u8]) -> R<(Vec<String>, bool)> {
+#[derive(Clone, Debug, PartialEq)]
+enum HelperValue {
+    Text(String),
+    Variable(String),
+    Member(String, String),
+    Add(Box<HelperValue>, Box<HelperValue>),
+}
+
+// Translate only a completely understood straight-line function. This is a
+// semantic recognizer, not a name/hash exception: unrecognized operations
+// remain in conversion evidence and therefore fail the capability check.
+fn numeric_helper(
+    name: &str,
+    parameters: &[String],
+    body: &[u8],
+    pool: &[String],
+) -> Option<Value> {
+    let mut p = 0;
+    let mut stack = Vec::<HelperValue>::new();
+    let mut result = None;
+    while p < body.len() {
+        let code = body[p];
+        p += 1;
+        if code == 0 {
+            if p != body.len() {
+                return None;
+            }
+            break;
+        }
+        let end = if code >= 128 {
+            let n = u16le(body, p).ok()?;
+            p += 2;
+            p.checked_add(n)?
+        } else {
+            p
+        };
+        if end > body.len() {
+            return None;
+        }
+        match code {
+            0x96 => {
+                while p < end {
+                    let kind = body[p];
+                    p += 1;
+                    let text = match kind {
+                        0 => {
+                            let end_text = index_of(body, 0, p)?;
+                            if end_text >= end {
+                                return None;
+                            }
+                            let text = js::latin1(&body[p..end_text]);
+                            p = end_text + 1;
+                            text
+                        }
+                        8 => {
+                            let index = *body.get(p)? as usize;
+                            p += 1;
+                            pool.get(index)?.clone()
+                        }
+                        9 => {
+                            let index = u16le(body, p).ok()?;
+                            p += 2;
+                            pool.get(index)?.clone()
+                        }
+                        _ => return None,
+                    };
+                    if p > end {
+                        return None;
+                    }
+                    stack.push(HelperValue::Text(text));
+                }
+            }
+            0x1c => {
+                let HelperValue::Text(name) = stack.pop()? else {
+                    return None;
+                };
+                stack.push(HelperValue::Variable(name));
+            }
+            0x4e => {
+                let HelperValue::Text(property) = stack.pop()? else {
+                    return None;
+                };
+                let HelperValue::Variable(target) = stack.pop()? else {
+                    return None;
+                };
+                stack.push(HelperValue::Member(target, property));
+            }
+            0x47 => {
+                let right = stack.pop()?;
+                let left = stack.pop()?;
+                stack.push(HelperValue::Add(Box::new(left), Box::new(right)));
+            }
+            0x4f => {
+                if result.is_some() {
+                    return None;
+                }
+                let value = stack.pop()?;
+                let HelperValue::Text(property) = stack.pop()? else {
+                    return None;
+                };
+                let HelperValue::Variable(target) = stack.pop()? else {
+                    return None;
+                };
+                let (operation, parameter) = match value {
+                    HelperValue::Add(left, right) => {
+                        if *left != HelperValue::Member(target.clone(), property.clone()) {
+                            return None;
+                        }
+                        let HelperValue::Variable(parameter) = *right else {
+                            return None;
+                        };
+                        (1, parameter)
+                    }
+                    HelperValue::Variable(parameter) => (2, parameter),
+                    _ => return None,
+                };
+                let argument = parameters.iter().position(|p| p == &parameter)?;
+                if argument > 255
+                    || !matches!(
+                        property.as_str(),
+                        "_x" | "_y" | "_width" | "_height" | "_alpha" | "_rotation"
+                    )
+                {
+                    return None;
+                }
+                result = Some(
+                    json!({"name": name, "target": target, "property": property, "operation": operation, "argument": argument}),
+                );
+            }
+            _ => return None,
+        }
+        p = end;
+    }
+    if stack.is_empty() { result } else { None }
+}
+
+fn parse_actions(payload: &[u8]) -> R<(Vec<String>, bool, Vec<Value>, bool)> {
+    if let Some((helpers, stop)) = helpers::lower(payload) {
+        return Ok((vec!["ConvertedFunction".into()], stop, helpers, false));
+    }
     let mut ops = Vec::new();
-    let (mut p, mut stop, mut top_level) = (0usize, false, true);
+    let mut helpers = Vec::new();
+    let mut pool = Vec::new();
+    let (mut p, mut stop, mut top_level, mut fullscreen) = (0usize, false, true, false);
     while p < payload.len() {
         let code = payload[p];
         p += 1;
         if code == 0 {
             break;
         }
-        let mut length = 0;
-        if code >= 0x80 {
-            length = u16le(payload, p)?;
+        let length = if code >= 0x80 {
+            let n = u16le(payload, p)?;
             p += 2;
-        }
+            n
+        } else {
+            0
+        };
+        let end = p
+            .checked_add(length)
+            .filter(|&end| end <= payload.len())
+            .ok_or("truncated SWF action")?;
         if code == 0x07 && top_level {
             stop = true;
         }
+        if code == 0x88 {
+            let count = u16le(payload, p)?;
+            let mut q = p + 2;
+            pool.clear();
+            for _ in 0..count {
+                let z = index_of(payload, 0, q)
+                    .filter(|&z| z < end)
+                    .ok_or("truncated SWF constant pool")?;
+                pool.push(js::latin1(&payload[q..z]));
+                q = z + 1;
+            }
+            if q != end {
+                return Err("trailing SWF constant pool bytes".into());
+            }
+        }
         if code == 0x9b || code == 0x8e {
-            let body = u16le(payload, p + length - 2)?;
-            p += length + body;
-            ops.push(if code == 0x8e { "DefineFunction2" } else { "DefineFunction" }.to_string());
+            if length < 2 {
+                return Err("truncated SWF function header".into());
+            }
+            let size = u16le(payload, end - 2)?;
+            let body_end = end
+                .checked_add(size)
+                .filter(|&end| end <= payload.len())
+                .ok_or("truncated SWF function body")?;
+            let mut converted = false;
+            if code == 0x9b && top_level {
+                let z = index_of(payload, 0, p)
+                    .filter(|&z| z + 3 <= end)
+                    .ok_or("truncated SWF function name")?;
+                let name = js::latin1(&payload[p..z]);
+                let count = u16le(payload, z + 1)?;
+                let mut q = z + 3;
+                let mut parameters = Vec::new();
+                for _ in 0..count {
+                    let z = index_of(payload, 0, q)
+                        .filter(|&z| z < end - 2)
+                        .ok_or("truncated SWF function parameter")?;
+                    parameters.push(js::latin1(&payload[q..z]));
+                    q = z + 1;
+                }
+                if q != end - 2 {
+                    return Err("trailing SWF function header bytes".into());
+                }
+                if !name.is_empty() {
+                    if let Some(helper) =
+                        numeric_helper(&name, &parameters, &payload[end..body_end], &pool)
+                    {
+                        helpers.push(helper);
+                        converted = true;
+                    }
+                }
+            }
+            p = body_end;
+            ops.push(
+                if converted {
+                    "ConvertedFunction"
+                } else if code == 0x8e {
+                    "DefineFunction2"
+                } else {
+                    "DefineFunction"
+                }
+                .to_string(),
+            );
             continue;
+        }
+        if code == 0x83 && top_level && &payload[p..end] == b"FSCommand:fullscreen\0true\0" {
+            fullscreen = true;
+            ops.push("HostFullscreen".into());
+        } else {
+            ops.push(format!("0x{code:x}"));
         }
         if code == 0x9d || code == 0x99 {
             top_level = false;
         }
-        ops.push(format!("0x{code:x}"));
-        p += length;
+        p = end;
     }
-    Ok((ops, stop))
+    Ok((ops, stop, helpers, fullscreen))
 }
 
 struct Tag<'a> {
@@ -776,7 +1151,10 @@ fn tag_stream(b: &[u8], start: usize) -> R<(Vec<Tag<'_>>, usize)> {
         if length > b.len() - p {
             return Err("SWF tag exceeds envelope".into());
         }
-        tags.push(Tag { tag, payload: &b[p..p + length] });
+        tags.push(Tag {
+            tag,
+            payload: &b[p..p + length],
+        });
         p += length;
     }
     Ok((tags, p))
@@ -822,39 +1200,24 @@ fn read_color_transform(bits: &mut Bits) -> R<Cxform> {
 #[derive(Default)]
 pub struct Effects {
     pub filters: u32,
+    pub applied_filters: u32,
     pub blend_modes: u32,
     pub clip_actions: u32,
-}
-
-fn skip_filters(b: &[u8], mut p: usize, effects: &mut Effects) -> R<usize> {
-    let count = byte(b, p)?;
-    p += 1;
-    for _ in 0..count {
-        let kind = byte(b, p)?;
-        p += 1;
-        effects.filters += 1;
-        p += match kind {
-            0 => 23,
-            1 => 9,
-            2 => 15,
-            3 => 27,
-            4 | 7 => 1 + byte(b, p)? as usize * 5 + 19,
-            5 => 15 + 4 * byte(b, p)? as usize * byte(b, p + 1)? as usize,
-            6 => 80,
-            _ => return Err("unknown SWF filter".into()),
-        };
-    }
-    Ok(p)
 }
 
 #[derive(Clone)]
 struct Placement {
     id: usize,
+    ratio: u16,
+    filters: Vec<filters::GradientBevel>,
     matrix: Matrix,
     cxform: Option<Cxform>,
     clip: Option<usize>,
     name: Option<String>,
     placed: Option<usize>,
+    generation: u32,
+    clip_actions: Vec<u8>,
+    blend_mode: u8,
 }
 
 fn read_placement(tag: usize, payload: &[u8], depths: &mut Depths, effects: &mut Effects) -> R<()> {
@@ -863,7 +1226,22 @@ fn read_placement(tag: usize, payload: &[u8], depths: &mut Depths, effects: &mut
             return Err("truncated SWF placement".into());
         }
         let matrix = Bits::new(payload, 4).matrix()?;
-        depths.insert(u16le(payload, 2)?, Placement { id: u16le(payload, 0)?, matrix, cxform: None, clip: None, name: None, placed: None });
+        depths.insert(
+            u16le(payload, 2)?,
+            Placement {
+                id: u16le(payload, 0)?,
+                ratio: 0,
+                filters: Vec::new(),
+                matrix,
+                cxform: None,
+                clip: None,
+                name: None,
+                placed: None,
+                generation: 0,
+                clip_actions: Vec::new(),
+                blend_mode: 0,
+            },
+        );
         return Ok(());
     }
     let extended = tag == 70;
@@ -875,7 +1253,11 @@ fn read_placement(tag: usize, payload: &[u8], depths: &mut Depths, effects: &mut
     let mut q = if extended { 4 } else { 3 };
     let depth = u16le(payload, if extended { 2 } else { 1 })?;
     let previous = depths.get(depth).cloned();
-    let id = if flags & 2 != 0 { Some(u16le(payload, q)?) } else { previous.as_ref().map(|p| p.id) };
+    let id = if flags & 2 != 0 {
+        Some(u16le(payload, q)?)
+    } else {
+        previous.as_ref().map(|p| p.id)
+    };
     q += if flags & 2 != 0 { 2 } else { 0 };
     let mut matrix = previous.as_ref().map(|p| p.matrix);
     let (mut cxform, mut clip, mut name) = (None, None, None);
@@ -889,9 +1271,13 @@ fn read_placement(tag: usize, payload: &[u8], depths: &mut Depths, effects: &mut
         cxform = Some(read_color_transform(&mut m)?);
         q = m.align();
     }
-    if flags & 16 != 0 {
+    let ratio = if flags & 16 != 0 {
+        let value = u16le(payload, q)? as u16;
         q += 2;
-    }
+        value
+    } else {
+        previous.as_ref().map_or(0, |p| p.ratio)
+    };
     if flags & 32 != 0 {
         let end = index_of(payload, 0, q).ok_or("SWF placement extras need explicit conversion")?;
         name = Some(js::latin1(&payload[q..end]));
@@ -901,42 +1287,88 @@ fn read_placement(tag: usize, payload: &[u8], depths: &mut Depths, effects: &mut
         clip = Some(u16le(payload, q)?);
         q += 2;
     }
-    if flags2 & 1 != 0 {
-        q = skip_filters(payload, q, effects)?;
-    }
-    if flags2 & 2 != 0 {
+    let filters = if flags2 & 1 != 0 {
+        let filters = filters::read_list(payload, &mut q)?;
+        effects.applied_filters += filters.len() as u32;
+        filters
+    } else {
+        previous
+            .as_ref()
+            .map_or_else(Vec::new, |p| p.filters.clone())
+    };
+    let blend_mode = if flags2 & 2 != 0 {
         effects.blend_modes += 1;
+        let mode = byte(payload, q)?;
         q += 1;
-    }
-    if flags & 128 != 0 {
+        mode
+    } else {
+        previous.as_ref().map_or(0, |p| p.blend_mode)
+    };
+    let clip_actions = if flags & 128 != 0 {
         effects.clip_actions += 1;
+        let bytes = payload[q..].to_vec();
         q = payload.len();
-    }
+        bytes
+    } else {
+        previous
+            .as_ref()
+            .map_or_else(Vec::new, |p| p.clip_actions.clone())
+    };
     if q != payload.len() {
         return Err("SWF placement extras need explicit conversion".into());
     }
-    let valid = id.is_some_and(|i| i != 0) && matrix.is_some()
-        && !((flags & 1 == 0) && previous.is_some()) && !((flags & 1 != 0) && previous.is_none());
+    let valid = id.is_some_and(|i| i != 0)
+        && matrix.is_some()
+        && !((flags & 1 == 0) && previous.is_some())
+        && !((flags & 1 != 0) && previous.is_none());
     if !valid {
         return Err("invalid SWF placement sequence".into());
     }
     let id = id.unwrap();
     let restarted = flags & 2 != 0 && previous.as_ref().is_none_or(|p| p.id != id);
-    depths.insert(depth, Placement {
-        id,
-        matrix: matrix.unwrap(),
-        cxform: if flags & 8 != 0 { cxform } else { previous.as_ref().and_then(|p| p.cxform.clone()) },
-        clip: if flags & 64 != 0 { clip } else { previous.as_ref().and_then(|p| p.clip) },
-        name: if flags & 32 != 0 { name } else { previous.as_ref().and_then(|p| p.name.clone()) },
-        placed: if restarted { None } else { previous.as_ref().and_then(|p| p.placed) },
-    });
+    depths.insert(
+        depth,
+        Placement {
+            id,
+            ratio,
+            filters,
+            matrix: matrix.unwrap(),
+            cxform: if flags & 8 != 0 {
+                cxform
+            } else {
+                previous.as_ref().and_then(|p| p.cxform.clone())
+            },
+            clip: if flags & 64 != 0 {
+                clip
+            } else {
+                previous.as_ref().and_then(|p| p.clip)
+            },
+            name: if flags & 32 != 0 {
+                name
+            } else {
+                previous.as_ref().and_then(|p| p.name.clone())
+            },
+            placed: if restarted {
+                None
+            } else {
+                previous.as_ref().and_then(|p| p.placed)
+            },
+            generation: if restarted {
+                0
+            } else {
+                previous.as_ref().map_or(0, |p| p.generation)
+            },
+            clip_actions,
+            blend_mode,
+        },
+    );
     Ok(())
 }
 
 /// A depth table with JS Map semantics: re-setting a depth keeps its
 /// position, deleting and re-adding moves it to the end.
 #[derive(Clone, Default)]
-struct Depths(Vec<(usize, Placement)>);
+struct Depths(Vec<(usize, Placement)>, u32);
 
 impl Depths {
     fn get(&self, depth: usize) -> Option<&Placement> {
@@ -945,7 +1377,11 @@ impl Depths {
     fn get_mut(&mut self, depth: usize) -> Option<&mut Placement> {
         self.0.iter_mut().find(|e| e.0 == depth).map(|e| &mut e.1)
     }
-    fn insert(&mut self, depth: usize, value: Placement) {
+    fn insert(&mut self, depth: usize, mut value: Placement) {
+        if value.generation == 0 {
+            self.1 += 1;
+            value.generation = self.1;
+        }
         match self.get_mut(depth) {
             Some(slot) => *slot = value,
             None => self.0.push((depth, value)),
@@ -967,33 +1403,143 @@ struct Sprite {
     frames: Vec<Depths>,
     hold: Option<usize>,
     evidence: Vec<(usize, Vec<String>)>,
+    random_start: u8,
 }
 
 #[derive(Default)]
 struct Dictionary {
     shapes: HashMap<usize, Shape>,
+    morphs: HashMap<usize, morph::Morph>,
     sprites: HashMap<usize, Sprite>,
     fonts: HashMap<usize, Font>,
     texts: HashMap<usize, Text>,
     fields: HashMap<usize, Field>,
     bitmaps: HashMap<usize, std::rc::Rc<Bitmap>>,
+    videos: HashMap<usize, Video>,
+}
+
+struct Video {
+    width: usize,
+    height: usize,
+    count: usize,
+    decoder: super::vp6::Decoder,
+    frames: Vec<std::rc::Rc<Bitmap>>,
+}
+impl Video {
+    fn new(b: &[u8]) -> R<(usize, Self)> {
+        if b.len() != 10 {
+            return Err("invalid SWF video definition length".into());
+        }
+        let id = u16le(b, 0)?;
+        let count = u16le(b, 2)?;
+        let width = u16le(b, 4)?;
+        let height = u16le(b, 6)?;
+        if b[8] & 0xf0 != 0 || b[8] >> 1 > 5 || count == 0 || count > 4096 {
+            return Err("invalid SWF video descriptor".into());
+        }
+        if b[9] != 4 {
+            return Err(format!("unsupported SWF video codec {}", b[9]));
+        }
+        if width
+            .checked_mul(height)
+            .and_then(|n| n.checked_mul(count * 4))
+            .is_none_or(|n| n > 256 * 1024 * 1024)
+        {
+            return Err("SWF video frames exceed import budget".into());
+        }
+        Ok((
+            id,
+            Self {
+                width,
+                height,
+                count,
+                decoder: super::vp6::Decoder::new(width, height)?,
+                frames: Vec::new(),
+            },
+        ))
+    }
+    fn packet(&mut self, b: &[u8]) -> R<()> {
+        let index = u16le(b, 2)?;
+        if index != self.frames.len() || index >= self.count {
+            return Err("SWF video packets are missing, repeated or unordered".into());
+        }
+        let frame = self
+            .decoder
+            .decode(b.get(4..).ok_or("truncated SWF video packet")?)?;
+        self.frames.push(std::rc::Rc::new(Bitmap {
+            width: self.width,
+            height: self.height,
+            rgba: frame.rgba(),
+        }));
+        Ok(())
+    }
+    fn shape(&self, frame: usize) -> R<Shape> {
+        let bitmap = self
+            .frames
+            .get(frame)
+            .ok_or("SWF video placement references absent frame")?
+            .clone();
+        let w = self.width as f64 * 20.0;
+        let h = self.height as f64 * 20.0;
+        let points = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h), (0.0, 0.0)];
+        let edges = points
+            .windows(2)
+            .map(|p| Edge {
+                x0: p[0].0,
+                y0: p[0].1,
+                x1: p[1].0,
+                y1: p[1].1,
+                f0: 0,
+                f1: 1,
+                ln: 0,
+            })
+            .collect();
+        Ok(Shape {
+            fills: vec![Fill::Bitmap(BitmapFill {
+                bitmap: Some(bitmap),
+                matrix: Matrix {
+                    a: 20.0,
+                    b: 0.0,
+                    c: 0.0,
+                    d: 20.0,
+                    tx: 0.0,
+                    ty: 0.0,
+                },
+                clipped: true,
+            })],
+            lines: Vec::new(),
+            edges,
+        })
+    }
 }
 
 impl Dictionary {
     fn has(&self, id: usize) -> bool {
-        self.bitmaps.contains_key(&id) || self.shapes.contains_key(&id) || self.sprites.contains_key(&id) || self.fonts.contains_key(&id)
-            || self.texts.contains_key(&id) || self.fields.contains_key(&id)
+        self.videos.contains_key(&id)
+            || self.bitmaps.contains_key(&id)
+            || self.shapes.contains_key(&id)
+            || self.morphs.contains_key(&id)
+            || self.sprites.contains_key(&id)
+            || self.fonts.contains_key(&id)
+            || self.texts.contains_key(&id)
+            || self.fields.contains_key(&id)
     }
 }
 
-fn parse_sprite(payload: &[u8], dictionary: &Dictionary, effects: &mut Effects) -> R<(usize, Sprite)> {
+fn parse_sprite(
+    payload: &[u8],
+    dictionary: &Dictionary,
+    effects: &mut Effects,
+) -> R<(usize, Sprite)> {
     let id = u16le(payload, 0)?;
     let declared = u16le(payload, 2)?;
     let (tags, _) = tag_stream(payload, 4)?;
     let mut depths = Depths::default();
     let mut frames = Vec::new();
     let mut hold = None;
+    let mut playing = None;
     let mut evidence = Vec::new();
+    let mut random_start = 0;
     for Tag { tag, payload: body } in tags {
         if tag == 4 || tag == 26 || tag == 70 {
             read_placement(tag, body, &mut depths, effects)?;
@@ -1003,16 +1549,43 @@ fn parse_sprite(payload: &[u8], dictionary: &Dictionary, effects: &mut Effects) 
                 return Err("SWF removal references empty depth".into());
             }
         } else if tag == 1 {
+            for (_, entry) in &mut depths.0 {
+                if entry.placed.is_none() {
+                    entry.placed = Some(frames.len());
+                }
+            }
+            if playing == Some(false) && hold.is_none() {
+                hold = Some(frames.len());
+            }
+            playing = None;
             frames.push(depths.clone());
             if frames.len() > 4096 {
                 return Err("SWF sprite frame bound".into());
             }
         } else if tag == 12 {
-            let (ops, stop) = parse_actions(body)?;
-            if stop && hold.is_none() {
-                hold = Some(frames.len());
+            if let Some(variants) = helpers::random_initial_phase(body) {
+                if !frames.is_empty() || random_start != 0 || variants as usize != declared {
+                    return Err("SWF random initial phase requires one first-frame initializer over the full child timeline".into());
+                }
+                random_start = variants;
+                continue;
             }
-            if ops.iter().any(|op| op != "0x88" && op != "0x7") {
+            let (ops, _, _, _) = parse_actions(body)?;
+            // Ordered, unconditional timeline controls. A later action on
+            // the same frame can resume it; actions on unreachable frames
+            // cannot advance a stopped playhead.
+            if ops
+                .iter()
+                .all(|op| matches!(op.as_str(), "0x88" | "0x6" | "0x7"))
+            {
+                for op in &ops {
+                    match op.as_str() {
+                        "0x6" => playing = Some(true),
+                        "0x7" => playing = Some(false),
+                        _ => {}
+                    }
+                }
+            } else {
                 evidence.push((frames.len() + 1, ops));
             }
         } else if SKIPPED.contains(&tag) {
@@ -1026,14 +1599,38 @@ fn parse_sprite(payload: &[u8], dictionary: &Dictionary, effects: &mut Effects) 
     if frames.len() != declared || frames.is_empty() {
         return Err("SWF sprite frame count disagrees".into());
     }
-    Ok((id, Sprite { frames, hold, evidence }))
+    if random_start != 0
+        && (hold.is_some()
+            || !evidence.is_empty()
+            || frames.iter().any(|frame| {
+                frame
+                    .0
+                    .iter()
+                    .any(|(_, p)| dictionary.sprites.contains_key(&p.id))
+            }))
+    {
+        return Err("SWF random initial phase with additional child timelines or actions requires explicit conversion".into());
+    }
+    Ok((
+        id,
+        Sprite {
+            frames,
+            hold,
+            evidence,
+            random_start,
+        },
+    ))
 }
 
 fn parse_bitmap(tag: usize, payload: &[u8], tables: Option<&[u8]>) -> R<Bitmap> {
     if tag == 20 || tag == 36 {
         let format = byte(payload, 2)?;
         let (width, height) = (u16le(payload, 3)?, u16le(payload, 5)?);
-        let (colors, start) = if format == 3 { (byte(payload, 7)? as usize + 1, 8) } else { (0, 7) };
+        let (colors, start) = if format == 3 {
+            (byte(payload, 7)? as usize + 1, 8)
+        } else {
+            (0, 7)
+        };
         let alpha = tag == 36;
         let entry = if alpha { 4 } else { 3 };
         let (pixel, stride) = match format {
@@ -1042,8 +1639,11 @@ fn parse_bitmap(tag: usize, payload: &[u8], tables: Option<&[u8]>) -> R<Bitmap> 
             5 => (4, width * 4),
             _ => return Err(format!("unsupported SWF lossless format {format}")),
         };
-        let data = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&payload[start..], colors * entry + stride * height)
-            .map_err(|_| "corrupt SWF lossless bitmap")?;
+        let data = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
+            &payload[start..],
+            colors * entry + stride * height,
+        )
+        .map_err(|_| "corrupt SWF lossless bitmap")?;
         if data.len() < colors * entry + stride * height {
             return Err("truncated SWF lossless bitmap".into());
         }
@@ -1078,11 +1678,20 @@ fn parse_bitmap(tag: usize, payload: &[u8], tables: Option<&[u8]>) -> R<Bitmap> 
                         let five = |s: u16| (((v >> s) & 31) * 255 / 31) as u8;
                         [five(10), five(5), five(0), 255]
                     }
-                    _ => straight(pixels[at + 1], pixels[at + 2], pixels[at + 3], if alpha { pixels[at] } else { 255 }),
+                    _ => straight(
+                        pixels[at + 1],
+                        pixels[at + 2],
+                        pixels[at + 3],
+                        if alpha { pixels[at] } else { 255 },
+                    ),
                 });
             }
         }
-        return Ok(Bitmap { width, height, rgba });
+        return Ok(Bitmap {
+            width,
+            height,
+            rgba,
+        });
     }
     let (jpeg, alpha) = if tag == 35 {
         let offset = u32le(payload, 2)?;
@@ -1096,7 +1705,8 @@ fn parse_bitmap(tag: usize, payload: &[u8], tables: Option<&[u8]>) -> R<Bitmap> 
         (6, None) => return Err("SWF DefineBits without JPEGTables".into()),
         _ => vec![jpeg],
     };
-    let (width, height, rgb) = super::bitmap::decode_jpeg(&parts).map_err(|e| format!("SWF JPEG: {e}"))?;
+    let (width, height, rgb) =
+        super::bitmap::decode_jpeg(&parts).map_err(|e| format!("SWF JPEG: {e}"))?;
     let plane = match alpha {
         Some(z) if !z.is_empty() => {
             let plane = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(z, width * height)
@@ -1113,13 +1723,19 @@ fn parse_bitmap(tag: usize, payload: &[u8], tables: Option<&[u8]>) -> R<Bitmap> 
         .enumerate()
         .map(|(i, c)| [c[0], c[1], c[2], plane.as_ref().map_or(255, |a| a[i])])
         .collect();
-    Ok(Bitmap { width, height, rgba })
+    Ok(Bitmap {
+        width,
+        height,
+        rgba,
+    })
 }
 
 /// Nearest-neighbour sample of a bitmap fill; clipped fills repeat their
 /// edge pixels, the others tile.
 fn bitmap_color(f: &BitmapFill, sx: f64, sy: f64) -> R<[f64; 4]> {
-    let Some(bitmap) = f.bitmap.as_ref().filter(|b| b.width > 0 && b.height > 0) else { return Ok([0.0; 4]) };
+    let Some(bitmap) = f.bitmap.as_ref().filter(|b| b.width > 0 && b.height > 0) else {
+        return Ok([0.0; 4]);
+    };
     let m = &f.matrix;
     let det = m.a * m.d - m.b * m.c;
     if det == 0.0 {
@@ -1147,7 +1763,11 @@ fn gradient_color(g: &Gradient, sx: f64, sy: f64) -> R<[f64; 4]> {
     let (px, py) = (sx - m.tx, sy - m.ty);
     let gx = (m.d * px - m.c * py) / det;
     let gy = (m.a * py - m.b * px) / det;
-    let mut t = if g.radial { (gx * gx + gy * gy).sqrt() / 16384.0 } else { (gx + 16384.0) / 32768.0 };
+    let mut t = if g.radial {
+        (gx * gx + gy * gy).sqrt() / 16384.0
+    } else {
+        (gx + 16384.0) / 32768.0
+    };
     t = t.max(0.0).min(1.0) * 255.0;
     let stops = &g.stops;
     if t <= stops[0].0 {
@@ -1155,7 +1775,11 @@ fn gradient_color(g: &Gradient, sx: f64, sy: f64) -> R<[f64; 4]> {
     }
     for i in 1..stops.len() {
         if t <= stops[i].0 {
-            let span = if stops[i].0 - stops[i - 1].0 != 0.0 { stops[i].0 - stops[i - 1].0 } else { 1.0 };
+            let span = if stops[i].0 - stops[i - 1].0 != 0.0 {
+                stops[i].0 - stops[i - 1].0
+            } else {
+                1.0
+            };
             let mix = (t - stops[i - 1].0) / span;
             let a = stops[i - 1].1;
             let b = stops[i].1;
@@ -1173,7 +1797,9 @@ fn blend(rgba: &mut [u8], i: usize, color: [f64; 4]) {
     let dst_alpha = rgba[i + 3] as f64;
     let out = alpha + dst_alpha * (255.0 - alpha) / 255.0;
     for c in 0..3 {
-        rgba[i + c] = js::round((color[c] * alpha + rgba[i + c] as f64 * dst_alpha * (255.0 - alpha) / 255.0) / out) as u8;
+        rgba[i + c] = js::round(
+            (color[c] * alpha + rgba[i + c] as f64 * dst_alpha * (255.0 - alpha) / 255.0) / out,
+        ) as u8;
     }
     rgba[i + 3] = js::round(out) as u8;
 }
@@ -1181,7 +1807,12 @@ fn blend(rgba: &mut [u8], i: usize, color: [f64; 4]) {
 fn transform_color(cxform: &Option<Cxform>, color: [f64; 4]) -> [f64; 4] {
     match cxform {
         None => color,
-        Some(x) => [0, 1, 2, 3].map(|c| jmin(255.0, jmax(0.0, js::round(color[c] * x.mult[c] / 256.0 + x.add[c])))),
+        Some(x) => [0, 1, 2, 3].map(|c| {
+            jmin(
+                255.0,
+                jmax(0.0, js::round(color[c] * x.mult[c] / 256.0 + x.add[c])),
+            )
+        }),
     }
 }
 
@@ -1196,6 +1827,7 @@ fn compose(outer: &Option<Cxform>, inner: &Option<Cxform>) -> Option<Cxform> {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Canvas {
     width: usize,
     height: usize,
@@ -1204,13 +1836,28 @@ struct Canvas {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paint_shape(rgba: &mut [u8], canvas: &Canvas, shape: &Shape, m: &Matrix, cxform: &Option<Cxform>, stencils: Option<&[Vec<u8>]>) -> R<()> {
+fn paint_shape(
+    rgba: &mut [u8],
+    canvas: &Canvas,
+    shape: &Shape,
+    m: &Matrix,
+    cxform: &Option<Cxform>,
+    stencils: Option<&[Vec<u8>]>,
+) -> R<()> {
     let det = m.a * m.d - m.b * m.c;
     if det == 0.0 {
         return Err("degenerate SWF placement matrix".into());
     }
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-    let margin = shape.lines.iter().fold(20.0f64, |most, l| most.max(l.width));
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+    let margin = shape
+        .lines
+        .iter()
+        .fold(20.0f64, |most, l| most.max(l.width));
     for e in &shape.edges {
         for (ex, ey) in [(e.x0, e.y0), (e.x1, e.y1)] {
             let tx = m.a * ex + m.c * ey + m.tx;
@@ -1223,9 +1870,13 @@ fn paint_shape(rgba: &mut [u8], canvas: &Canvas, shape: &Shape, m: &Matrix, cxfo
     }
     let (w, h) = (canvas.width as f64, canvas.height as f64);
     let x0 = ((min_x - margin - canvas.origin_x) / 20.0).floor().max(0.0);
-    let x1 = ((max_x + margin - canvas.origin_x) / 20.0).ceil().min(w - 1.0);
+    let x1 = ((max_x + margin - canvas.origin_x) / 20.0)
+        .ceil()
+        .min(w - 1.0);
     let y0 = ((min_y - margin - canvas.origin_y) / 20.0).floor().max(0.0);
-    let y1 = ((max_y + margin - canvas.origin_y) / 20.0).ceil().min(h - 1.0);
+    let y1 = ((max_y + margin - canvas.origin_y) / 20.0)
+        .ceil()
+        .min(h - 1.0);
     // Axis-aligned placements keep sy constant along a row: each row's edge
     // crossings are tabulated once, with the per-pixel test's arithmetic.
     let aligned = m.b == 0.0 && m.c == 0.0;
@@ -1263,7 +1914,9 @@ fn paint_shape(rgba: &mut [u8], canvas: &Canvas, shape: &Shape, m: &Matrix, cxfo
                     let (dx, dy) = (e.x1 - e.x0, e.y1 - e.y0);
                     let length_sq = dx * dx + dy * dy;
                     let t = if length_sq != 0.0 {
-                        (((sx - e.x0) * dx + (sy - e.y0) * dy) / length_sq).max(0.0).min(1.0)
+                        (((sx - e.x0) * dx + (sy - e.y0) * dy) / length_sq)
+                            .max(0.0)
+                            .min(1.0)
                     } else {
                         0.0
                     };
@@ -1294,8 +1947,17 @@ fn paint_shape(rgba: &mut [u8], canvas: &Canvas, shape: &Shape, m: &Matrix, cxfo
 
 fn crossing(e: &Edge, s: usize, sy: f64) -> Option<(f64, i64)> {
     let down = e.f1 == s;
-    let (ax, ay, bx, by) = if down { (e.x0, e.y0, e.x1, e.y1) } else { (e.x1, e.y1, e.x0, e.y0) };
-    ((ay > sy) != (by > sy)).then(|| (ax + (sy - ay) * (bx - ax) / (by - ay), if by > ay { 1 } else { -1 }))
+    let (ax, ay, bx, by) = if down {
+        (e.x0, e.y0, e.x1, e.y1)
+    } else {
+        (e.x1, e.y1, e.x0, e.y0)
+    };
+    ((ay > sy) != (by > sy)).then(|| {
+        (
+            ax + (sy - ay) * (bx - ax) / (by - ay),
+            if by > ay { 1 } else { -1 },
+        )
+    })
 }
 
 fn edge_winding(shape: &Shape, s: usize, sx: f64, sy: f64) -> i64 {
@@ -1357,7 +2019,10 @@ impl RowTable {
                 (hits.into_iter().map(|h| h.0).collect(), suffix)
             })
             .collect();
-        RowTable { fills, lines: lines.into_iter().skip(1).collect() }
+        RowTable {
+            fills,
+            lines: lines.into_iter().skip(1).collect(),
+        }
     }
 
     fn winding(&self, s: usize, sx: f64) -> i64 {
@@ -1384,7 +2049,8 @@ fn layout_field(field: &Field, font: &Font, text: &str) -> R<Vec<(Option<usize>,
     let width_of = |value: &str| -> R<f64> {
         let mut total = 0.0;
         for ch in value.chars() {
-            let index = glyph_for(font, ch as usize).ok_or_else(|| format!("SWF field glyph {} unavailable", ch as u32))?;
+            let index = glyph_for(font, ch as usize)
+                .ok_or_else(|| format!("SWF field glyph {} unavailable", ch as u32))?;
             total += advance(index) * scale;
         }
         Ok(total)
@@ -1410,8 +2076,14 @@ fn layout_field(field: &Field, font: &Font, text: &str) -> R<Vec<(Option<usize>,
         };
         let mut current = String::new();
         for word in words {
-            let candidate = format!("{current}{}", word.trim_end_matches(super::source::js_space));
-            if !current.is_empty() && field.word_wrap && width_of(&candidate)? > inner_right - inner_left {
+            let candidate = format!(
+                "{current}{}",
+                word.trim_end_matches(super::source::js_space)
+            );
+            if !current.is_empty()
+                && field.word_wrap
+                && width_of(&candidate)? > inner_right - inner_left
+            {
                 lines.push(std::mem::replace(&mut current, word));
             } else {
                 current.push_str(&word);
@@ -1449,22 +2121,106 @@ pub struct Timeline {
     pub height: usize,
     pub rate: f64,
     pub frames: Vec<Vec<u8>>,
+    pub variant_count: u8,
+    pub audio: Option<audio::Audio>,
     pub labels: Vec<Value>,
     pub stop_frames: Vec<Value>,
     pub effects: Effects,
     pub ignored_actions: Vec<Value>,
     pub fields: Vec<Value>,
     pub named_children: Vec<Value>,
+    pub helpers: Vec<Value>,
+    pub host_fullscreen: bool,
+    pub layers: Vec<Value>,
     counts: (usize, usize, usize),
 }
 
 struct Renderer<'a> {
+    geometric_mask: bool,
     dictionary: &'a Dictionary,
     canvas: Canvas,
+    variant: usize,
 }
 
 impl Renderer<'_> {
-    fn render_list(&self, rgba: &mut [u8], list: &mut [(usize, Placement)], frame: usize, cxform: &Option<Cxform>, stencils: &[Vec<u8>], nested: bool) -> R<()> {
+    fn render_mask_entry(
+        &self,
+        rgba: &mut [u8],
+        entry: &mut Placement,
+        frame: usize,
+        nested: bool,
+    ) -> R<()> {
+        let renderer = Renderer {
+            dictionary: self.dictionary,
+            canvas: self.canvas,
+            variant: self.variant,
+            geometric_mask: true,
+        };
+        renderer.render_entry(rgba, entry, frame, &None, &[], nested)
+    }
+    fn paint(
+        &self,
+        rgba: &mut [u8],
+        shape: &Shape,
+        matrix: &Matrix,
+        color: &Option<Cxform>,
+        stencils: Option<&[Vec<u8>]>,
+    ) -> R<()> {
+        if self.geometric_mask {
+            let shape = Shape {
+                fills: vec![Fill::Color([255.0; 4]); shape.fills.len()],
+                lines: Vec::new(),
+                edges: shape
+                    .edges
+                    .iter()
+                    .map(|edge| Edge { ln: 0, ..*edge })
+                    .collect(),
+            };
+            paint_shape(rgba, &self.canvas, &shape, matrix, &None, stencils)
+        } else {
+            paint_shape(rgba, &self.canvas, shape, matrix, color, stencils)
+        }
+    }
+    fn filtered_live_text(
+        &self,
+        entry: &Placement,
+        nested: bool,
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        if self.dictionary.fields.get(&entry.id).is_some_and(|field| {
+            !field.variable.is_empty()
+                || (entry.name.as_ref().is_some_and(|name| !name.is_empty()) && !nested)
+        }) {
+            return true;
+        }
+        if visiting.contains(&entry.id) {
+            return false;
+        }
+        visiting.push(entry.id);
+        let result = self
+            .dictionary
+            .sprites
+            .get(&entry.id)
+            .is_some_and(|sprite| {
+                sprite.frames.iter().any(|frame| {
+                    frame
+                        .sorted()
+                        .iter()
+                        .any(|(_, child)| self.filtered_live_text(child, true, visiting))
+                })
+            });
+        visiting.pop();
+        result
+    }
+    fn render_list(
+        &self,
+        rgba: &mut [u8],
+        list: &mut [(usize, Placement)],
+        frame: usize,
+        cxform: &Option<Cxform>,
+        stencils: &[Vec<u8>],
+        nested: bool,
+    ) -> R<()> {
         let mut clips: Vec<(usize, Vec<u8>)> = Vec::new();
         for (depth, entry) in list.iter_mut() {
             clips.retain(|(until, _)| *until >= *depth);
@@ -1472,7 +2228,7 @@ impl Renderer<'_> {
                 let mut scratch = vec![0u8; self.canvas.width * self.canvas.height * 4];
                 let mut copy = entry.clone();
                 copy.clip = None;
-                self.render_entry(&mut scratch, &mut copy, frame, &None, &[], nested)?;
+                self.render_mask_entry(&mut scratch, &mut copy, frame, nested)?;
                 let stencil: Vec<u8> = scratch.chunks(4).map(|p| u8::from(p[3] > 0)).collect();
                 clips.push((until, stencil));
                 continue;
@@ -1484,32 +2240,160 @@ impl Renderer<'_> {
         Ok(())
     }
 
-    fn render_entry(&self, rgba: &mut [u8], entry: &mut Placement, frame: usize, cxform: &Option<Cxform>, stencils: &[Vec<u8>], nested: bool) -> R<()> {
+    fn render_entry(
+        &self,
+        rgba: &mut [u8],
+        entry: &mut Placement,
+        frame: usize,
+        cxform: &Option<Cxform>,
+        stencils: &[Vec<u8>],
+        nested: bool,
+    ) -> R<()> {
         let d = self.dictionary;
-        let combined = compose(cxform, &entry.cxform);
-        let stencils = if stencils.is_empty() { None } else { Some(stencils) };
+        if !self.geometric_mask && entry.filters.iter().any(|filter| !filter.identity()) {
+            if self.filtered_live_text(entry, nested, &mut Vec::new()) {
+                return Err("SWF filtered live text needs runtime filtering".into());
+            }
+            let (pad_x, pad_y) = entry
+                .filters
+                .iter()
+                .map(filters::GradientBevel::padding)
+                .fold((0usize, 0usize), |(x, y), (dx, dy)| (x + dx, y + dy));
+            let width = self.canvas.width + pad_x * 2;
+            let height = self.canvas.height + pad_y * 2;
+            if width
+                .checked_mul(height)
+                .is_none_or(|n| n > 16 * 1024 * 1024)
+            {
+                return Err("SWF filter scratch surface exceeds bound".into());
+            }
+            let renderer = Renderer {
+                geometric_mask: self.geometric_mask,
+                dictionary: d,
+                canvas: Canvas {
+                    width,
+                    height,
+                    origin_x: self.canvas.origin_x - pad_x as f64 * 20.0,
+                    origin_y: self.canvas.origin_y - pad_y as f64 * 20.0,
+                },
+                variant: self.variant,
+            };
+            let mut isolated = vec![0; width * height * 4];
+            let mut plain = entry.clone();
+            plain.filters.clear();
+            renderer.render_entry(&mut isolated, &mut plain, frame, cxform, &[], nested)?;
+            entry.placed = plain.placed;
+            for filter in &entry.filters {
+                filters::apply(filter, width, height, &mut isolated)?;
+            }
+            for y in 0..self.canvas.height {
+                for x in 0..self.canvas.width {
+                    let index = y * self.canvas.width + x;
+                    if stencils.iter().any(|stencil| stencil[index] == 0) {
+                        continue;
+                    }
+                    let at = ((y + pad_y) * width + x + pad_x) * 4;
+                    let pixel = &isolated[at..at + 4];
+                    blend(
+                        rgba,
+                        index * 4,
+                        [
+                            pixel[0] as f64,
+                            pixel[1] as f64,
+                            pixel[2] as f64,
+                            pixel[3] as f64,
+                        ],
+                    );
+                }
+            }
+            return Ok(());
+        }
+        let combined = if self.geometric_mask {
+            None
+        } else {
+            compose(cxform, &entry.cxform)
+        };
+        let stencils = if stencils.is_empty() {
+            None
+        } else {
+            Some(stencils)
+        };
         if let Some(shape) = d.shapes.get(&entry.id) {
-            return paint_shape(rgba, &self.canvas, shape, &entry.matrix, &combined, stencils);
+            return self.paint(rgba, shape, &entry.matrix, &combined, stencils);
+        }
+        if let Some(video) = d.videos.get(&entry.id) {
+            return self.paint(
+                rgba,
+                &video.shape(entry.ratio as usize)?,
+                &entry.matrix,
+                &combined,
+                stencils,
+            );
+        }
+        if let Some(morph) = d.morphs.get(&entry.id) {
+            return self.paint(
+                rgba,
+                &morph.at(entry.ratio)?,
+                &entry.matrix,
+                &combined,
+                stencils,
+            );
         }
         if let Some(text) = d.texts.get(&entry.id) {
             for record in &text.records {
-                let font = record.font.and_then(|f| d.fonts.get(&f)).ok_or("SWF text references absent font")?;
+                let font = record
+                    .font
+                    .and_then(|f| d.fonts.get(&f))
+                    .ok_or("SWF text references absent font")?;
                 let scale = record.height / font.em;
                 for &(index, x, y) in &record.glyphs {
-                    let glyph = font.glyphs.get(index).ok_or("SWF text references absent glyph")?;
-                    let m = multiply(&entry.matrix, &multiply(&text.matrix, &Matrix { a: scale, b: 0.0, c: 0.0, d: scale, tx: x, ty: y }));
-                    let shape = Shape { fills: vec![Fill::Color(record.color)], lines: Vec::new(), edges: glyph.edges.clone() };
-                    paint_shape(rgba, &self.canvas, &shape, &m, &combined, stencils)?;
+                    let glyph = font
+                        .glyphs
+                        .get(index)
+                        .ok_or("SWF text references absent glyph")?;
+                    let m = multiply(
+                        &entry.matrix,
+                        &multiply(
+                            &text.matrix,
+                            &Matrix {
+                                a: scale,
+                                b: 0.0,
+                                c: 0.0,
+                                d: scale,
+                                tx: x,
+                                ty: y,
+                            },
+                        ),
+                    );
+                    let shape = Shape {
+                        fills: vec![Fill::Color(record.color)],
+                        lines: Vec::new(),
+                        edges: glyph.edges.clone(),
+                    };
+                    self.paint(rgba, &shape, &m, &combined, stencils)?;
                 }
             }
             return Ok(());
         }
         if let Some(field) = d.fields.get(&entry.id) {
-            if !field.variable.is_empty() || (entry.name.as_ref().is_some_and(|n| !n.is_empty()) && !nested) || field.text.is_empty() {
+            if self.geometric_mask && !field.embed_fonts {
                 return Ok(());
             }
-            let (text, attributes) = if field.html { parse_field_html(&field.text)? } else { (field.text.clone(), HashMap::new()) };
-            let font = field.font.and_then(|f| d.fonts.get(&f)).ok_or("SWF field references absent font")?;
+            if !field.variable.is_empty()
+                || (entry.name.as_ref().is_some_and(|n| !n.is_empty()) && !nested)
+                || field.text.is_empty()
+            {
+                return Ok(());
+            }
+            let (text, attributes) = if field.html {
+                parse_field_html(&field.text)?
+            } else {
+                (field.text.clone(), HashMap::new())
+            };
+            let font = field
+                .font
+                .and_then(|f| d.fonts.get(&f))
+                .ok_or("SWF field references absent font")?;
             let align = match attributes.get("align").map(String::as_str) {
                 Some("left") => 0.0,
                 Some("right") => 1.0,
@@ -1551,10 +2435,26 @@ impl Renderer<'_> {
             laid.font_height = size;
             for (index, x, y) in layout_field(&laid, font, &text)? {
                 let scale = size / font.em;
-                let glyph = index.and_then(|i| font.glyphs.get(i)).ok_or("SWF field glyph unavailable")?;
-                let m = multiply(&entry.matrix, &Matrix { a: scale, b: 0.0, c: 0.0, d: scale, tx: x, ty: y });
-                let shape = Shape { fills: vec![Fill::Color(color)], lines: Vec::new(), edges: glyph.edges.clone() };
-                paint_shape(rgba, &self.canvas, &shape, &m, &combined, stencils)?;
+                let glyph = index
+                    .and_then(|i| font.glyphs.get(i))
+                    .ok_or("SWF field glyph unavailable")?;
+                let m = multiply(
+                    &entry.matrix,
+                    &Matrix {
+                        a: scale,
+                        b: 0.0,
+                        c: 0.0,
+                        d: scale,
+                        tx: x,
+                        ty: y,
+                    },
+                );
+                let shape = Shape {
+                    fills: vec![Fill::Color(color)],
+                    lines: Vec::new(),
+                    edges: glyph.edges.clone(),
+                };
+                self.paint(rgba, &shape, &m, &combined, stencils)?;
             }
             return Ok(());
         }
@@ -1562,10 +2462,23 @@ impl Renderer<'_> {
             if entry.placed.is_none() {
                 entry.placed = Some(frame);
             }
-            let local = frame - entry.placed.unwrap();
-            let local = match sprite.hold {
-                Some(hold) if local >= hold => hold.max(1) - 1,
-                _ => local % sprite.frames.len(),
+            if sprite.random_start != 0 && nested {
+                return Err(
+                    "nested SWF random initial phase requires an independent instance clock".into(),
+                );
+            }
+            let elapsed = frame - entry.placed.unwrap()
+                + if sprite.random_start != 0 {
+                    self.variant
+                } else {
+                    0
+                };
+            let (local, cycle) = match sprite.hold {
+                Some(hold) if elapsed >= hold => (hold, 0),
+                _ => (
+                    elapsed % sprite.frames.len(),
+                    elapsed / sprite.frames.len() * sprite.frames.len(),
+                ),
             };
             let mut list: Vec<(usize, Placement)> = sprite.frames[local]
                 .sorted()
@@ -1573,17 +2486,41 @@ impl Renderer<'_> {
                 .map(|(depth, inner)| {
                     let mut child = inner.clone();
                     child.matrix = multiply(&entry.matrix, &inner.matrix);
-                    child.placed = Some(0);
+                    child.placed = Some(cycle + inner.placed.unwrap_or(0));
                     (depth, child)
                 })
                 .collect();
-            return self.render_list(rgba, &mut list, 0, &combined, stencils.unwrap_or(&[]), true);
+            // Stopping this playhead does not stop the timelines of its
+            // children. Their clocks retain their own placement origins.
+            return self.render_list(
+                rgba,
+                &mut list,
+                elapsed,
+                &combined,
+                stencils.unwrap_or(&[]),
+                true,
+            );
         }
         Err("SWF placement references absent character".into())
     }
 }
 
-fn timeline(b: &[u8]) -> R<Timeline> {
+type FrameSink<'a> = dyn FnMut(usize, usize, &[u8]) -> R<()> + 'a;
+
+/// One root depth's cropped pixels. Translation is independent of the crop,
+/// so moving an object exposes what was behind its original placement.
+pub struct RasterLayer {
+    pub width: usize,
+    pub height: usize,
+    pub rgba: Vec<u8>,
+}
+type LayerSink<'a> = dyn FnMut(&RasterLayer) -> R<String> + 'a;
+
+fn timeline(
+    b: &[u8],
+    mut sink: Option<&mut FrameSink<'_>>,
+    mut layer_sink: Option<&mut LayerSink<'_>>,
+) -> R<Timeline> {
     if b.len() < 8 || &b[..3] != b"FWS" || u32le(b, 4)? != b.len() {
         return Err("unsupported static SWF envelope".into());
     }
@@ -1596,28 +2533,60 @@ fn timeline(b: &[u8]) -> R<Timeline> {
     }
     let rate = u16le(b, p)? as f64 / 256.0;
     let declared_frames = u16le(b, p + 2)?;
+    if declared_frames == 0 || declared_frames > 4096 {
+        return Err("SWF frame count exceeds conversion bounds".into());
+    }
     let width = (bounds[1] - bounds[0]) / 20.0;
     let height = (bounds[3] - bounds[2]) / 20.0;
-    if width.fract() != 0.0 || height.fract() != 0.0 || width < 1.0 || height < 1.0 || width > 2048.0 || height > 2048.0 {
+    let empty_stage = width == 0.0 && height == 0.0;
+    if width.fract() != 0.0
+        || height.fract() != 0.0
+        || (!empty_stage && (width < 1.0 || height < 1.0))
+        || width > 2048.0
+        || height > 2048.0
+    {
         return Err("unsupported SWF stage bounds".into());
     }
     let (tags, end) = tag_stream(b, p + 4)?;
-    if end != b.len() || !tags.last().is_some_and(|t| t.tag == 0 && t.payload.is_empty()) {
+    if end != b.len()
+        || !tags
+            .last()
+            .is_some_and(|t| t.tag == 0 && t.payload.is_empty())
+    {
         return Err("unterminated SWF timeline".into());
     }
-    let (width, height) = (width as usize, height as usize);
+    // The raster representation of an authored empty vector is a single
+    // transparent pixel. Validate its display list below before accepting it.
+    let (width, height) = ((width as usize).max(1), (height as usize).max(1));
+    // Keep every depth if any root placement is named, including placements
+    // before its first appearance and unnamed foreground/background objects.
+    let separate_layers = layer_sink.is_some()
+        && tags
+            .iter()
+            .any(|t| matches!(t.tag, 26 | 70) && t.payload.first().is_some_and(|f| f & 32 != 0));
     let mut dictionary = Dictionary::default();
     let mut depths = Depths::default();
     let mut frames = Vec::new();
+    let mut frame_count = 0;
+    let mut variant_count = 1u8;
+    let mut random_identity = None;
     let mut labels = Vec::new();
     let mut stop_frames = Vec::new();
     let mut evidence: Vec<Value> = Vec::new();
     let mut field_placements: Vec<(usize, usize, Matrix, Option<String>, usize)> = Vec::new();
     let mut named: Vec<Value> = Vec::new();
+    let mut helpers = Vec::new();
+    let mut host_fullscreen = false;
+    let mut layers = Vec::new();
     let mut effects = Effects::default();
     let mut jpeg_tables: Option<&[u8]> = None;
+    let mut audio_stream = None;
     let define = |dictionary: &Dictionary, id: usize| -> R<()> {
-        if dictionary.has(id) { Err("duplicate SWF character".into()) } else { Ok(()) }
+        if dictionary.has(id) {
+            Err("duplicate SWF character".into())
+        } else {
+            Ok(())
+        }
     };
     for Tag { tag, payload } in &tags {
         let (tag, payload) = (*tag, *payload);
@@ -1625,6 +2594,10 @@ fn timeline(b: &[u8]) -> R<Timeline> {
             let (id, shape) = parse_shape(payload, version, &dictionary.bitmaps)?;
             define(&dictionary, id)?;
             dictionary.shapes.insert(id, shape);
+        } else if tag == 46 {
+            let (id, morph) = morph::parse(payload, &dictionary.bitmaps)?;
+            define(&dictionary, id)?;
+            dictionary.morphs.insert(id, morph);
         } else if tag == 8 {
             jpeg_tables = Some(payload);
         } else if matches!(tag, 6 | 21 | 35 | 20 | 36) {
@@ -1642,13 +2615,21 @@ fn timeline(b: &[u8]) -> R<Timeline> {
             dictionary.fonts.insert(id, font);
         } else if tag == 13 {
             let font_id = u16le(payload, 0)?;
-            let font = dictionary.fonts.get_mut(&font_id).filter(|f| f.codes.is_none()).ok_or("SWF font info without its font")?;
+            let font = dictionary
+                .fonts
+                .get_mut(&font_id)
+                .filter(|f| f.codes.is_none())
+                .ok_or("SWF font info without its font")?;
             let name_length = byte(payload, 2)? as usize;
             let wide = byte(payload, 3 + name_length)? & 1 != 0;
             let mut codes = Vec::new();
             let mut q = 4 + name_length;
             while q < payload.len() {
-                codes.push(if wide { u16le(payload, q)? } else { payload[q] as usize });
+                codes.push(if wide {
+                    u16le(payload, q)?
+                } else {
+                    payload[q] as usize
+                });
                 q += if wide { 2 } else { 1 };
             }
             font.codes = Some(codes);
@@ -1660,6 +2641,26 @@ fn timeline(b: &[u8]) -> R<Timeline> {
             let (id, field) = parse_edit_text(payload, utf8)?;
             define(&dictionary, id)?;
             dictionary.fields.insert(id, field);
+        } else if tag == 60 {
+            let (id, video) = Video::new(payload)?;
+            define(&dictionary, id)?;
+            dictionary.videos.insert(id, video);
+        } else if tag == 61 {
+            dictionary
+                .videos
+                .get_mut(&u16le(payload, 0)?)
+                .ok_or("SWF video packet without definition")?
+                .packet(payload)?;
+        } else if tag == 18 || tag == 45 {
+            if audio_stream.is_some() {
+                return Err("multiple SWF sound stream headers require explicit conversion".into());
+            }
+            audio_stream = Some(audio::Stream::new(payload)?);
+        } else if tag == 19 {
+            audio_stream
+                .as_mut()
+                .ok_or("SWF sound block without header")?
+                .block(frame_count, payload)?;
         } else if tag == 4 || tag == 26 || tag == 70 {
             read_placement(tag, payload, &mut depths, &mut effects)?;
         } else if tag == 5 || tag == 28 {
@@ -1668,69 +2669,253 @@ fn timeline(b: &[u8]) -> R<Timeline> {
                 return Err("SWF removal references empty depth".into());
             }
         } else if tag == 12 || tag == 59 {
-            let (ops, stop) = parse_actions(payload)?;
+            let (ops, stop, functions, fullscreen) = parse_actions(payload)?;
+            helpers.extend(functions);
+            host_fullscreen |= fullscreen;
             if stop {
-                stop_frames.push(json!(frames.len() + 1));
+                stop_frames.push(json!(frame_count + 1));
             }
-            if ops.iter().any(|op| op != "0x88" && op != "0x7") {
-                evidence.push(json!({"frame": frames.len() + 1, "ops": ops}));
+            if ops.iter().any(|op| {
+                !matches!(
+                    op.as_str(),
+                    "0x88" | "0x7" | "ConvertedFunction" | "HostFullscreen"
+                )
+            }) {
+                evidence.push(json!({"frame": frame_count + 1, "ops": ops}));
             }
         } else if tag == 43 {
-            labels.push(json!({"frame": frames.len() + 1, "name": js::latin1(payload).trim_end_matches('\0')}));
+            labels.push(json!({"frame": frame_count + 1, "name": js::latin1(payload).trim_end_matches('\0')}));
         } else if tag == 1 {
             if !payload.is_empty() {
                 return Err("unsupported SWF frame payload".into());
             }
-            if frames.len() >= 128 {
-                return Err("SWF frame count exceeds conversion bounds".into());
+            if frame_count >= declared_frames {
+                return Err("SWF timeline frame count disagrees: more frames than declared".into());
             }
-            let mut rgba = vec![0u8; width * height * 4];
-            let renderer = Renderer { dictionary: &dictionary, canvas: Canvas { width, height, origin_x: bounds[0], origin_y: bounds[2] } };
-            let mut list = depths.sorted();
-            renderer.render_list(&mut rgba, &mut list, frames.len(), &None, &[], false)?;
-            // Sprite first-placement frames persist on the live depth table.
-            for (depth, placement) in list {
-                if let Some(live) = depths.get_mut(depth) {
-                    live.placed = placement.placed;
+            let random: Vec<_> = dictionary
+                .sprites
+                .iter()
+                .filter(|(_, s)| s.random_start != 0)
+                .collect();
+            if !random.is_empty() {
+                if random.len() != 1 || !dictionary.fields.is_empty() {
+                    return Err("SWF random initial phase requires one stable root child without live fields".into());
                 }
+                let (&id, sprite) = random[0];
+                let placements: Vec<_> = depths.0.iter().filter(|(_, p)| p.id == id).collect();
+                if placements.len() != 1 || placements[0].1.placed.unwrap_or(frame_count) != 0 {
+                    return Err("SWF random initial phase child is removed, replaced or starts after the root".into());
+                }
+                let identity = (id, placements[0].0);
+                if frame_count == 0 {
+                    random_identity = Some(identity);
+                    variant_count = sprite.random_start;
+                }
+                if random_identity != Some(identity) {
+                    return Err(
+                        "SWF random initial phase child identity changes across root frames".into(),
+                    );
+                }
+            } else if random_identity.is_some() {
+                return Err("SWF random initial phase child is absent".into());
             }
-            for (depth, entry) in &depths.0 {
-                let depth = *depth;
-                if !dictionary.fields.contains_key(&entry.id) {
-                    if let Some(name) = entry.name.as_ref().filter(|n| !n.is_empty()) {
-                        if !named.iter().any(|c| c["name"] == name.as_str()) {
-                            named.push(json!({"name": name, "depth": depth,
-                                "kind": if dictionary.sprites.contains_key(&entry.id) { "sprite" } else { "shape" }}));
+            if sink.is_none()
+                && (frame_count + 1) * variant_count as usize * width * height * 4
+                    > 256 * 1024 * 1024
+            {
+                return Err(
+                    "SWF collected frames exceed memory bound; use streamed conversion".into(),
+                );
+            }
+            for variant in 0..variant_count as usize {
+                let mut rgba = vec![0u8; width * height * 4];
+                let renderer = Renderer {
+                    geometric_mask: false,
+                    dictionary: &dictionary,
+                    canvas: Canvas {
+                        width,
+                        height,
+                        origin_x: bounds[0],
+                        origin_y: bounds[2],
+                    },
+                    variant,
+                };
+                let mut list = depths.sorted();
+                renderer.render_list(&mut rgba, &mut list, frame_count, &None, &[], false)?;
+                if empty_stage
+                    && (rgba.chunks_exact(4).any(|p| p[3] != 0) || !dictionary.fields.is_empty())
+                {
+                    return Err("zero-area SWF stage contains visual or live text content".into());
+                }
+                if separate_layers {
+                    let mut frame_layers = Vec::new();
+                    let mut clips: Vec<(usize, Placement)> = Vec::new();
+                    for (depth, entry) in &list {
+                        clips.retain(|(until, _)| *until >= *depth);
+                        if let Some(until) = entry.clip {
+                            clips.push((until, entry.clone()));
+                            continue;
+                        }
+                        if *depth == 0 || *depth >= 1000 {
+                            return Err("Flash layer depth exceeds runtime profile".into());
+                        }
+                        let name = entry.name.as_deref().unwrap_or("");
+                        let origin_x = ((entry.matrix.tx - bounds[0]) / 20.0 * 65536.0).round();
+                        let origin_y = ((entry.matrix.ty - bounds[2]) / 20.0 * 65536.0).round();
+                        if [origin_x, origin_y]
+                            .iter()
+                            .any(|&v| !v.is_finite() || v < i32::MIN as f64 || v > i32::MAX as f64)
+                        {
+                            return Err("Flash object origin exceeds fixed-point geometry".into());
+                        }
+                        let dynamic = dictionary
+                            .fields
+                            .get(&entry.id)
+                            .filter(|f| !f.variable.is_empty() || !name.is_empty());
+                        if let Some(field) = dynamic {
+                            if !clips.is_empty() {
+                                return Err(format!(
+                                    "clipped live Flash text requires explicit conversion: field {name:?}, {} clips",
+                                    clips.len()
+                                ));
+                            }
+                            let x =
+                                ((entry.matrix.tx + field.bounds[0] - bounds[0]) / 20.0).floor();
+                            let y =
+                                ((entry.matrix.ty + field.bounds[2] - bounds[2]) / 20.0).floor();
+                            let w = ((field.bounds[1] - field.bounds[0]) / 20.0).ceil().max(1.0);
+                            let h = ((field.bounds[3] - field.bounds[2]) / 20.0).ceil().max(1.0);
+                            let field_name = if name.is_empty() {
+                                format!("@field_{depth}")
+                            } else {
+                                name.to_string()
+                            };
+                            frame_layers.push(json!({"channel": depth, "name": field_name, "x": x as i64, "y": y as i64,
+                            "width": w as usize, "height": h as usize, "originX": origin_x as i32, "originY": origin_y as i32,
+                            "affine": true, "matrix": [js::num(entry.matrix.a), js::num(entry.matrix.b),
+                                js::num(entry.matrix.c), js::num(entry.matrix.d),
+                                js::num((entry.matrix.tx - bounds[0]) / 20.0), js::num((entry.matrix.ty - bounds[2]) / 20.0)]}));
+                        } else {
+                            let mut pixels = vec![0u8; width * height * 4];
+                            let mut isolated: Vec<(usize, Placement)> = clips
+                                .iter()
+                                .enumerate()
+                                .map(|(i, (_, p))| (i, p.clone()))
+                                .collect();
+                            isolated.push((*depth, entry.clone()));
+                            renderer.render_list(
+                                &mut pixels,
+                                &mut isolated,
+                                frame_count,
+                                &None,
+                                &[],
+                                false,
+                            )?;
+                            let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+                            for (i, p) in pixels.chunks_exact(4).enumerate() {
+                                if p[3] != 0 {
+                                    left = left.min(i % width);
+                                    top = top.min(i / width);
+                                    right = right.max(i % width + 1);
+                                    bottom = bottom.max(i / width + 1);
+                                }
+                            }
+                            if right == 0 {
+                                if name.is_empty() {
+                                    continue;
+                                }
+                                left = 0;
+                                top = 0;
+                                right = 1;
+                                bottom = 1;
+                            }
+                            let mut cropped =
+                                Vec::with_capacity((right - left) * (bottom - top) * 4);
+                            for y in top..bottom {
+                                cropped.extend_from_slice(
+                                    &pixels[(y * width + left) * 4..(y * width + right) * 4],
+                                );
+                            }
+                            let plane = RasterLayer {
+                                width: right - left,
+                                height: bottom - top,
+                                rgba: cropped,
+                            };
+                            let asset = layer_sink.as_deref_mut().unwrap()(&plane)?;
+                            frame_layers.push(
+                                json!({"channel": depth, "name": name, "asset": asset,
+                            "x": left, "y": top, "width": plane.width, "height": plane.height,
+                            "originX": origin_x as i32, "originY": origin_y as i32}),
+                            );
                         }
                     }
-                    continue;
+                    layers.push(json!(frame_layers));
                 }
-                if !field_placements.iter().any(|f| f.0 == depth && f.1 == entry.id) {
-                    field_placements.push((depth, entry.id, entry.matrix, entry.name.clone(), frames.len() + 1));
+                // Sprite first-placement frames persist on the live depth table.
+                for (depth, placement) in list {
+                    if let Some(live) = depths.get_mut(depth) {
+                        live.placed = placement.placed;
+                    }
                 }
-            }
-            frames.push(rgba);
+                for (depth, entry) in &depths.0 {
+                    let depth = *depth;
+                    if !dictionary.fields.contains_key(&entry.id) {
+                        if let Some(name) = entry.name.as_ref().filter(|n| !n.is_empty()) {
+                            if !named.iter().any(|c| c["name"] == name.as_str()) {
+                                named.push(json!({"name": name, "depth": depth,
+                                "kind": if dictionary.sprites.contains_key(&entry.id) { "sprite" } else { "shape" }}));
+                            }
+                        }
+                        continue;
+                    }
+                    if !field_placements
+                        .iter()
+                        .any(|f| f.0 == depth && f.1 == entry.id)
+                    {
+                        field_placements.push((
+                            depth,
+                            entry.id,
+                            entry.matrix,
+                            entry.name.clone(),
+                            frame_count + 1,
+                        ));
+                    }
+                }
+                if let Some(write) = sink.as_deref_mut() {
+                    write(width, height, &rgba)?;
+                } else {
+                    frames.push(rgba);
+                }
+            } // Frame-major root poses and phase variants, including live layers.
+            frame_count += 1;
         } else if SKIPPED.contains(&tag) {
         } else if tag != 0 {
             return Err(format!("unsupported static SWF tag {tag}"));
         }
     }
-    if frames.is_empty() || frames.len() != declared_frames {
+    if frame_count == 0 || frame_count != declared_frames {
         return Err("SWF timeline frame count disagrees".into());
     }
     let color_json = |c: [f64; 4]| Value::Array(c.iter().map(|&v| js::num(v)).collect());
     let fields = field_placements
         .iter()
-        .map(|(_, id, matrix, name, frame)| {
+        .map(|(depth, id, matrix, name, frame)| {
             let field = &dictionary.fields[id];
             let font = field.font.and_then(|f| dictionary.fonts.get(&f));
             json!({
-                "frame": frame, "name": name, "variable": field.variable, "text": field.text, "html": field.html,
+                "frame": frame, "name": if separate_layers && name.as_ref().is_none_or(String::is_empty) && !field.variable.is_empty()
+                    { Some(format!("@field_{depth}")) } else { name.clone() },
+                "variable": field.variable, "text": field.text, "html": field.html,
                 "fontName": font.map(|f| json!(f.name)).unwrap_or(Value::Null),
                 "fontHeight": js::num(field.font_height / 20.0), "color": color_json(field.color),
-                "align": js::num(field.align), "wordWrap": field.word_wrap, "multiline": field.multiline,
+                "align": js::num(field.align), "wordWrap": field.word_wrap, "multiline": field.multiline, "embedFonts": field.embed_fonts,
                 "leading": js::num(field.leading / 20.0), "leftMargin": js::num(field.left_margin / 20.0),
                 "rightMargin": js::num(field.right_margin / 20.0), "indent": js::num(field.indent / 20.0),
+                "matrix": [js::num(matrix.a), js::num(matrix.b), js::num(matrix.c), js::num(matrix.d),
+                    js::num((matrix.tx - bounds[0]) / 20.0), js::num((matrix.ty - bounds[2]) / 20.0)],
+                "localBounds": {"left": js::num(field.bounds[0] / 20.0), "top": js::num(field.bounds[2] / 20.0),
+                    "width": js::num((field.bounds[1] - field.bounds[0]) / 20.0),
+                    "height": js::num((field.bounds[3] - field.bounds[2]) / 20.0)},
                 "bounds": {
                     "left": js::num((matrix.tx + field.bounds[0] - bounds[0]) / 20.0),
                     "top": js::num((matrix.ty + field.bounds[2] - bounds[2]) / 20.0),
@@ -1752,18 +2937,38 @@ fn timeline(b: &[u8]) -> R<Timeline> {
             evidence.push(json!({"sprite": id, "frame": frame, "ops": ops}));
         }
     }
-    let counts = (dictionary.sprites.len(), dictionary.fonts.len(), dictionary.fields.len());
+    let counts = (
+        dictionary.sprites.len(),
+        dictionary.fonts.len(),
+        dictionary.fields.len(),
+    );
+    if dictionary
+        .videos
+        .values()
+        .any(|v| v.frames.len() != v.count)
+    {
+        return Err("SWF video frame count disagrees".into());
+    }
+    let audio = match audio_stream {
+        Some(stream) => stream.finish(frame_count)?,
+        None => None,
+    };
     Ok(Timeline {
         width,
         height,
         rate,
         frames,
+        variant_count,
+        audio,
         labels,
         stop_frames,
         effects,
         ignored_actions: evidence,
         fields,
         named_children: named,
+        helpers,
+        host_fullscreen,
+        layers,
         counts,
     })
 }
@@ -1778,15 +2983,26 @@ pub struct VectorShape {
 
 pub fn vector_shape_pixels(envelope: &[u8]) -> R<VectorShape> {
     let be32 = |at: usize| u32::from_be_bytes(envelope[at..at + 4].try_into().unwrap()) as usize;
-    if envelope.len() < 20 || be32(0) != envelope.len() || be32(4) != 1 || be32(8) != envelope.len() - 12 {
+    if envelope.len() < 20
+        || be32(0) != envelope.len()
+        || be32(4) != 1
+        || be32(8) != envelope.len() - 12
+    {
         return Err("unsupported vectorShape XMED envelope".into());
     }
-    let scene = timeline(&envelope[12..])?;
+    let scene = timeline(&envelope[12..], None, None)?;
     if scene.frames.len() != 1 {
         return Err("vectorShape must have one SWF frame".into());
     }
-    if scene.counts != (0, 0, 0) || !scene.ignored_actions.is_empty() || !scene.stop_frames.is_empty()
-        || scene.effects.filters != 0 || scene.effects.blend_modes != 0 || scene.effects.clip_actions != 0
+    if scene.counts != (0, 0, 0)
+        || scene.audio.is_some()
+        || !scene.helpers.is_empty()
+        || scene.host_fullscreen
+        || !scene.ignored_actions.is_empty()
+        || !scene.stop_frames.is_empty()
+        || scene.effects.filters != 0
+        || scene.effects.blend_modes != 0
+        || scene.effects.clip_actions != 0
     {
         return Err("vectorShape timeline needs explicit conversion".into());
     }
@@ -1800,41 +3016,131 @@ pub fn vector_shape_pixels(envelope: &[u8]) -> R<VectorShape> {
         if rgba[i * 4 + 3] < 128 {
             continue;
         }
-        let word = ((rgba[i * 4] >> 3) as u16) << 11 | ((rgba[i * 4 + 1] >> 3) as u16) << 6 | ((rgba[i * 4 + 2] >> 3) as u16) << 1 | 1;
+        let word = ((rgba[i * 4] >> 3) as u16) << 11
+            | ((rgba[i * 4 + 1] >> 3) as u16) << 6
+            | ((rgba[i * 4 + 2] >> 3) as u16) << 1
+            | 1;
         pixels[i * 2..i * 2 + 2].copy_from_slice(&word.to_be_bytes());
     }
-    Ok(VectorShape { width, height, reg_x: (width / 2) as i64, reg_y: (height / 2) as i64, pixels })
+    Ok(VectorShape {
+        width,
+        height,
+        reg_x: (width / 2) as i64,
+        reg_y: (height / 2) as i64,
+        pixels,
+    })
 }
 
 pub struct FlashFrames {
+    pub version: u8,
     pub width: usize,
     pub height: usize,
     pub reg_x: i64,
     pub reg_y: i64,
     pub rate: f64,
     pub frames: Vec<Vec<u8>>,
+    pub variant_count: u8,
+    pub audio: Option<audio::Audio>,
     pub labels: Vec<Value>,
     pub stop_frames: Vec<Value>,
     pub ignored_actions: Vec<Value>,
     pub fields: Vec<Value>,
     pub named_children: Vec<Value>,
+    pub helpers: Vec<Value>,
+    pub host_fullscreen: bool,
+    pub layers: Vec<Value>,
     pub effects: Effects,
+    pub runtime: Option<Value>,
+    pub sounds: Vec<(usize, crate::convert::d5media::Sound)>,
+}
+
+#[path = "swf_font_uses.rs"]
+mod font_uses;
+/// Proven finite AVM1 font uses; dynamic unknowns remain strict runtime lookups.
+pub fn action_font_uses(value: &Value) -> R<Vec<Value>> {
+    font_uses::actions(value)
+}
+
+#[path = "swf_fonts.rs"]
+mod fonts;
+/// Original, untessellated quadratic outlines for exact system-font matching.
+pub fn font_outlines(swf: &[u8]) -> R<Vec<Value>> {
+    fonts::outlines(swf)
 }
 
 pub fn flash_frames(swf: &[u8]) -> R<FlashFrames> {
-    let scene = timeline(swf)?;
+    flash_frames_into(swf, None)
+}
+
+/// Render and consume each frame before allocating the next. Returned frames
+/// are empty when a sink is supplied; timeline metadata remains complete.
+pub fn flash_frames_into(swf: &[u8], sink: Option<&mut FrameSink<'_>>) -> R<FlashFrames> {
+    flash_frames_with_layers(swf, sink, None)
+}
+
+pub fn flash_frames_with_layers(
+    swf: &[u8],
+    sink: Option<&mut FrameSink<'_>>,
+    layers: Option<&mut LayerSink<'_>>,
+) -> R<FlashFrames> {
+    if runtime::required(swf)? {
+        let layers = layers.ok_or("interactive SWF requires a retained-layer asset sink")?;
+        let result = runtime::convert(swf, layers)?;
+        let pixels = vec![0; result.width * result.height * 4];
+        let mut frames = Vec::new();
+        if let Some(sink) = sink {
+            for _ in 0..result.frames {
+                sink(result.width, result.height, &pixels)?;
+            }
+        } else {
+            frames.resize(result.frames, pixels);
+        }
+        return Ok(FlashFrames {
+            version: swf[3],
+            width: result.width,
+            height: result.height,
+            reg_x: (result.width / 2) as i64,
+            reg_y: (result.height / 2) as i64,
+            rate: result.rate,
+            frames,
+            variant_count: 1,
+            audio: result.audio,
+            labels: Vec::new(),
+            stop_frames: Vec::new(),
+            ignored_actions: Vec::new(),
+            fields: result.fields,
+            named_children: Vec::new(),
+            helpers: Vec::new(),
+            host_fullscreen: false,
+            layers: result.layers,
+            effects: Effects::default(),
+            sounds: result.sounds,
+            runtime: Some(
+                json!({"clips":result.clips,"buttons":result.buttons,"exports":result.exports,"initializers":result.initializers}),
+            ),
+        });
+    }
+    let scene = timeline(swf, sink, layers)?;
     Ok(FlashFrames {
+        version: swf[3],
         width: scene.width,
         height: scene.height,
         reg_x: (scene.width / 2) as i64,
         reg_y: (scene.height / 2) as i64,
         rate: scene.rate,
         frames: scene.frames,
+        variant_count: scene.variant_count,
+        audio: scene.audio,
         labels: scene.labels,
         stop_frames: scene.stop_frames,
         ignored_actions: scene.ignored_actions,
         fields: scene.fields,
         named_children: scene.named_children,
+        helpers: scene.helpers,
+        host_fullscreen: scene.host_fullscreen,
+        layers: scene.layers,
         effects: scene.effects,
+        runtime: None,
+        sounds: Vec::new(),
     })
 }

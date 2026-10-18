@@ -18,9 +18,17 @@ converted from the user's own disc image on the user's machine.
 | [zlib](https://zlib.net/) 1.3.1, linked into the ProjectorRays build | Decompression inside the parser | zlib (below); Copyright (C) 1995-2024 Jean-loup Gailly and Mark Adler |
 | Director64 score decoder (`compiler/src/convert/score.rs`, from `tools/projectorrays/`) | Score recovery in `import/convert.wasm` | MPL-2.0; source in this repository |
 | Director64 Cinepak decoder (`compiler/src/convert/cinepak.rs`), derived from [FFmpeg](https://ffmpeg.org/)'s `libavcodec/cinepak.c`, Copyright (C) 2003 The FFmpeg project | Video conversion in `import/convert.wasm` | LGPL-2.1-or-later — [licenses/LGPL-2.1.txt](licenses/LGPL-2.1.txt); source in this repository |
+| [Symphonia](https://github.com/pdeljanov/Symphonia/tree/v0.5.5) 0.5.5 (core, metadata and MP3 bundle) | MP3 cast decoding in `import/convert.wasm` | MPL-2.0 — [licenses/MPL-2.0.txt](licenses/MPL-2.0.txt); corresponding source at the versioned upstream link |
+| [Ruffle NihAV VP6 subset](https://github.com/ruffle-rs/nihav-vp6/tree/12d0bdf10a85641dc2de3d6900c747894431ed77), nihav_core, nihav_codec_support, nihav_duck | Embedded SWF VP6 decoding in native and Wasm conversion | MIT — [licenses/nihav-vp6.txt](licenses/nihav-vp6.txt); Copyright (c) 2021 Kostya Shishkov |
 | Rust crates: serde_json, serde_core, indexmap, hashbrown, equivalent, itoa, sha2, digest, block-buffer, crypto-common, typenum, cfg-if, miniz_oxide, adler2, jpeg-decoder | `import/convert.wasm` | Used under Apache-2.0 (each also offers MIT) — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
 | Rust crates: generic-array (Copyright (c) 2015 Bartłomiej Kamiński), zmij (Copyright (c) David Tolnay) | `import/convert.wasm` | MIT (below) |
 | Rust crate: memchr | `import/convert.wasm` | Used under the Unlicense |
+| Rust crates: arrayvec, bitflags, bytemuck, core_detect, lazy_static, log, multiversion_no_op, rustversion, scopeguard, simdutf8 | MP3 conversion dependencies in `import/convert.wasm` | Used under Apache-2.0 (each also offers MIT) — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
+| Rust crate: encoding_rs | MP3 metadata in `import/convert.wasm` | Apache-2.0 and BSD-3-Clause — [licenses/encoding_rs.txt](licenses/encoding_rs.txt), [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
+| Rust crate: cab 0.6.0 | Read original system-font installer cabinets as data | MIT — [licenses/cab.txt](licenses/cab.txt); Copyright (c) 2017 Matthew D. Steele |
+| Rust crates: flate2, crc32fast, lzxd, time, time-core, deranged, num-conv, powerfmt | Cabinet decoding dependencies | Used under Apache-2.0 (each also offers MIT) — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
+| Rust crate: byteorder | Cabinet decoding dependency | Used under the Unlicense |
+| Rust crate: simd-adler32 | Cabinet decoding dependency | MIT — [licenses/simd-adler32.txt](licenses/simd-adler32.txt) |
 | [libdragon](https://github.com/DragonMinded/libdragon) mkfont and mksprite | Font and sprite packing (`import/mkfont.wasm`, `import/mksprite.wasm`) | Unlicense |
 | [FreeType](https://freetype.org/), linked into mkfont | Font rasterizing | FreeType License — [licenses/FTL.txt](licenses/FTL.txt). Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved. |
 | [plutosvg / plutovg](https://github.com/sammycage/plutosvg), linked into mkfont | SVG glyphs | MIT (below); Copyright (c) 2020-2025 Samuel Ugochukwu |
@@ -31,7 +39,9 @@ converted from the user's own disc image on the user's machine.
 | [Shrinkler](https://github.com/askeksa/Shrinkler) compressor, linked into mkfont and mksprite | Asset compression | Shrinkler license — [licenses/Shrinkler.txt](licenses/Shrinkler.txt); Copyright 1999-2022 Aske Simon Christensen |
 | [libwebp](https://chromium.googlesource.com/webm/libwebp) 1.5.0 (`third_party/libwebp`), unmodified | Lossless WebP images: the encoder in the importer (`import/webp.wasm`), the decoder in the runtime (`director64.wasm`, and the Android TV player) | BSD-3-Clause — [licenses/libwebp.txt](licenses/libwebp.txt), with Google's patent grant (`third_party/libwebp/PATENTS`); Copyright (c) 2010, Google Inc. |
 | [Emscripten](https://emscripten.org/) runtime support code | All C/C++ WebAssembly modules | MIT (below); Copyright (c) 2010-2014 Emscripten authors |
+| [PL_MPEG](https://github.com/phoboslab/pl_mpeg) at `c871f2be022ece7ef4f64230b4fb8e1fb9eb6023` (`third_party/pl_mpeg`) | MPEG-1 video and MP2 audio decoding in the browser importer (`import/mpeg.wasm`) | MIT (below); Dominic Szablewski |
 | Droid Sans, from libdragon's font gallery example | Substitute for unembedded Director system fonts | Apache-2.0 — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt); Copyright © 2007 Google |
+| Microsoft Arial 2.82, from the original Core Fonts `arial32.exe` installer | Exact-family font for live Flash fields during local conversion | Proprietary Core Fonts EULA, included in the unchanged installer. The build downloads the original redistributable; no font is committed here. Redistribution is restricted to its original installer form and filename; see [Microsoft's Core Fonts FAQ](https://corefonts.sourceforge.net/faq8.htm). Extracted fonts and generated game assets stay local. |
 | [monogram](https://datagoblin.itch.io/monogram) by datagoblin | Console debug font | CC0 |
 
 The LGPL-2.1 components are distributed with complete corresponding source:
@@ -126,3 +136,10 @@ freely, subject to the following restrictions:
    misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 ```
+
+## Unicode case data
+
+`runtime/director/avm1_case.h` contains generated Unicode 3.2 case mappings,
+used by the ActionScript string library. The generator records SHA-256 hashes
+of UnicodeData-3.2.0.txt from Unicode.org.
+Copyright Unicode, Inc.; distributed under the [Unicode License V3](licenses/unicode.txt).

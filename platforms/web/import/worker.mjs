@@ -7,6 +7,7 @@ import {identify, importGame, ImportError} from "./pipeline.mjs";
 import {loadConverter} from "./convert.mjs";
 import {encodeAudio} from "./opus.mjs";
 import {encodeVideo} from "./vp8.mjs";
+import {mpegTools} from "./mpeg.mjs";
 import {Pool} from "./pool.mjs";
 import {DirectorFile} from "projectorrays/web";
 
@@ -43,16 +44,17 @@ self.onmessage = async ({data}) => {
   try {
     const {file, profiles, tools: urls, meta} = data;
     post({type: "progress", stage: "tools", index: 0, stages: 1, fraction: 0});
-    const [converterWasm, parserWasm, names, bytecodeHeader, mkfontWasm, mkspriteWasm, substituteFont] =
+    const [converterWasm, parserWasm, names, bytecodeHeader, mkfontWasm, mkspriteWasm, substituteFont, mpegWasm] =
       await Promise.all([
         fetchBytes(urls.converter), fetchBytes(urls.parserWasm), fetchText(urls.names),
         fetchBytes(urls.bytecodeHeader), fetchBytes(urls.mkfontWasm), fetchBytes(urls.mkspriteWasm),
-        fetchBytes(urls.substituteFont),
+        fetchBytes(urls.substituteFont), fetchBytes(urls.mpegWasm),
       ]);
     // libdragon's font tools, as classic scripts defining their factories.
-    importScripts(urls.mkfont, urls.mksprite);
+    importScripts(urls.mkfont, urls.mksprite, urls.mpeg);
     const converterModule = await WebAssembly.compile(converterWasm);
     const converter = await loadConverter(converterModule);
+    const mpeg = await mpegTools(self.createMpeg, mpegWasm, converter, encodeVideo);
     // A classic worker runs the parser glue with importScripts, which the
     // loader chooses only for its script-tag mode.
     await DirectorFile.loadModule({glueUrl: urls.parserGlue, wasmBinary: parserWasm, useScriptTag: true});
@@ -65,10 +67,16 @@ self.onmessage = async ({data}) => {
     const {profile, digest} = identify(source, profiles, converter,
       (fraction) => progress({stage: "verify", index: 0, stages: 10, fraction}));
     post({type: "identified", slug: profile.slug, digest});
+    const systemFonts = Object.fromEntries(await Promise.all(
+      [...new Set((profile.policy.system_font_resources ?? []).map((r) => r.sha256))].map(async (hash) => {
+        const url = urls[`systemFont${hash}`];
+        if (!url) throw new ImportError(`Missing pinned system-font installer: ${hash}`);
+        return [hash, await fetchBytes(url)];
+      })));
     pool = startPool(urls.pool, converterModule, {glueUrl: urls.parserGlue, wasmBinary: parserWasm});
     const result = await importGame({
       source, profile, verified: true, onProgress: progress,
-      tools: {converter, DirectorFile, parserWasm, names, bytecodeHeader, substituteFont, encodeVideo, pool,
+      tools: {converter, DirectorFile, parserWasm, names, bytecodeHeader, substituteFont, systemFonts, encodeVideo, pool, ...mpeg,
         encodeAudio: (wav) => encodeAudio(converter, wav),
         fonts: {createMkfont: self.createMkfont, createMksprite: self.createMksprite, mkfontWasm, mkspriteWasm},
         meta: JSON.stringify({...meta, game: profile.slug, source_sha256: profile.source.sha256,

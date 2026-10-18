@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 mkdir -p build/tests
+python3 tools/reference/generate_avm1_fixtures.py build/tests/avm1_original.h
 includes=(-Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage -Iplatforms/n64 -Igames/findus-workshop/runtime)
 compile() {
     local name=$1
@@ -10,7 +11,36 @@ compile() {
     "${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic "${includes[@]}" "$@" -lm -o "build/tests/$name"
     "build/tests/$name"
 }
+for budget in hosted n64 override; do
+    options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1)
+    if [ "$budget" != hosted ]; then options+=(-DDIRECTOR64_N64=1); fi
+    if [ "$budget" = override ]; then
+        options+=(-DEXPECT_OVERRIDE=1 -DLV_HEAP_BYTES=1572864 -DLV_OBJECTS=10000)
+    fi
+    compile "runtime_budget_$budget" "${options[@]}" tests/native/test_runtime_budget.c
+done
 compile lingo tests/native/test_lingo.c runtime/lingo/lingo_runtime.c
+compile audio_release tests/native/test_audio_release.c
+compile android_decode -Itests/native/android_stubs tests/native/test_android_decode.c
+for profile in d5 d10 d85; do
+    options=(-DDIRECTOR64_PACKAGE -DDIRECTOR64_NATIVE_STAGE=1)
+    if [ "$profile" = d5 ]; then
+        options+=(-DDIRECTOR64_DIRECTOR_VERSION=5)
+    else
+        options+=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
+    fi
+    if [ "$profile" = d85 ]; then options+=(-DDIRECTOR64_D85=1); fi
+    compile "web_lifecycle_$profile" "${options[@]}" -Iruntime/package -Iplatforms/web \
+        tests/native/test_web_lifecycle.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c runtime/package/package.c
+done
+compile n64_movie_names tests/native/test_n64_movie_names.c
+for profile in d10 d85; do
+    options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$profile" = d85 ]; then options+=(-DDIRECTOR64_D85=1); fi
+    compile "n64_film_crop_$profile" "${options[@]}" tests/native/test_n64_film_crop.c \
+        runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
 compile lingo_d8 -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_lingo_d8.c runtime/lingo/lingo_runtime.c
 compile lingo_collect tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
 compile lingo_collect_extended_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
@@ -20,11 +50,25 @@ for test in director director_timing director_state; do
 done
 compile pointer tests/native/test_pointer.c runtime/interaction/{pointer,input}.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile director_d8 -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_director_d8.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+for profile in 5 6 8 10 85; do
+    options=()
+    if [ "$profile" = 6 ] || [ "$profile" = 10 ] || [ "$profile" = 85 ]; then
+        options+=(-DDIRECTOR64_EXTENDED_D6=1)
+    fi
+    if [ "$profile" = 85 ]; then
+        options+=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_D85=1)
+    else
+        options+=(-DDIRECTOR64_DIRECTOR_VERSION="$profile")
+    fi
+    compile "sound_fades_d$profile" "${options[@]}" tests/native/test_sound_fades.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+    compile "probe_audio_d$profile" "${options[@]}" tests/native/test_probe_audio.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
 compile director_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile director_d6_events -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile director_d6_frame_events -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_frame_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile willy_input -DDIRECTOR64_EXTENDED_D6=1 -Igames/willy-werkel-cars/runtime games/willy-werkel-cars/tests/test_input.c games/willy-werkel-cars/runtime/willy_input.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile director_d5 -DDIRECTOR64_DIRECTOR_VERSION=5 tests/native/test_director_d5.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile video_audio_only_d5 -DDIRECTOR64_DIRECTOR_VERSION=5 -Iplatforms/web tests/native/test_video_audio_only.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 for version in 5 6 8; do
     compile "cursor_d$version" -DDIRECTOR64_DIRECTOR_VERSION="$version" tests/native/test_cursor.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 done
@@ -38,6 +82,11 @@ compile shape tests/native/test_shape.c runtime/director/shape.c
 compile audio tests/native/test_audio_bounds.c
 compile bitmap_tiles tests/native/test_bitmap_tiles.c
 compile image_alpha tests/native/test_image_alpha.c
+compile mpeg_decoder -Wno-unused-parameter tests/native/test_mpeg_decoder.c
+compile ink_projector -DDIRECTOR64_DIRECTOR_VERSION=10 tests/native/test_ink_projector.c
+compile rich_text_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile rich_text_d7 -DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile rich_text_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile native_image_hit -Iplatforms/native tests/native/test_native_image_hit.c platforms/native/image.c runtime/lingo/lingo_runtime.c
 
 "${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic -Iruntime -Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage -Igames/findus-mucklas/runtime games/findus-mucklas/tests/test_save.c games/findus-mucklas/runtime/{archive,game}.c -o build/tests/mucklas_save
@@ -56,9 +105,80 @@ build/tests/deutsch_archive
 
 compile director_d7_frame_events -DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_frame_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 
+compile quicktime_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_quicktime.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile quicktime_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_quicktime.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile flash_variants_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_flash_variants.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile flash_variants_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_flash_variants.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile flash_playback_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_flash_playback.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile flash_playback_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_flash_playback.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile film_sounds_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_film_sounds.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile film_sounds_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_film_sounds.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile linked_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_linked_movies.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile linked_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_linked_movies.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile keyboard_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_keyboard.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile keyboard_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_keyboard.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile imaging_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_imaging.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile imaging_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_imaging.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile director_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d10.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile director_playback_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_playback.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile director_playback_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_director_playback.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile web_audio_d10 -Iplatforms/web -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_web_audio.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile web_audio_d85 -Iplatforms/web -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_web_audio.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile flash_audio_hosts -Iplatforms/web -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_flash_audio_hosts.c
 # The D7/D10 lenient absent-cursor path conflicts with test_cursor's strict
 # D5/D6/D8 contract; test_director_d10.c covers the versioned behavior instead.
 compile director_d10_frame_events -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_frame_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile web_compositor -Iplatforms/web tests/native/test_web_compositor.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+compile shape_palette_d6_plain -Iplatforms/web tests/native/test_shape_palette.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+for profile in 5 6 7 8 10 85; do
+    palette_options=(-DDIRECTOR64_DIRECTOR_VERSION="$profile")
+    if [ "$profile" = 6 ] || [ "$profile" = 7 ] || [ "$profile" = 10 ]; then palette_options+=(-DDIRECTOR64_EXTENDED_D6=1); fi
+    if [ "$profile" = 85 ]; then palette_options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1); fi
+    compile "shape_palette_d$profile" "${palette_options[@]}" -DDIRECTOR64_NATIVE_STAGE=1 -Iplatforms/web tests/native/test_shape_palette.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+done
+compile web_raster_casts -Iplatforms/web tests/native/test_web_raster_casts.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+compile web_raster_casts_extended_d6 -DDIRECTOR64_EXTENDED_D6=1 -Iplatforms/web tests/native/test_web_raster_casts.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+compile web_raster_casts_d85 -DDIRECTOR64_NATIVE_STAGE=1 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 -Iplatforms/web tests/native/test_web_raster_casts.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+for profile in d5 d6_extended d7 d8 d10 d85; do
+    options=(-DDIRECTOR64_NATIVE_STAGE=1)
+    case "$profile" in
+        d5) options+=(-DDIRECTOR64_DIRECTOR_VERSION=5) ;;
+        d6_extended) options+=(-DDIRECTOR64_EXTENDED_D6=1) ;;
+        d7) options+=(-DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1) ;;
+        d8) options+=(-DDIRECTOR64_DIRECTOR_VERSION=8) ;;
+        d10) options+=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1) ;;
+        d85) options+=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1) ;;
+    esac
+    compile "web_compositor_fixes_$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_web_compositor_fixes.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+done
+for profile in d10 d85; do
+    options=(-DDIRECTOR64_NATIVE_STAGE=1 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$profile" = d85 ]; then options+=(-DDIRECTOR64_D85=1); fi
+    for test in avm1 avm1_original avm1_native flash_instances flash_masks film_children film_playback flash_bridge cursor_xtra; do
+        compile "${test}_$profile" "${options[@]}" -Ibuild/tests "tests/native/test_$test.c" \
+            runtime/director/director.c runtime/lingo/lingo_runtime.c
+    done
+    compile "web_video_hosts_$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_web_video_hosts.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+    compile "web_linked_$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_web_linked.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+    compile "web_film_frames_$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_web_film_frames.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+    compile "web_flash_text_hit_$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_web_flash_text_hit.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+    compile "web_cursor_color_$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_web_cursor_color.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+    compile "flash_stops_$profile" "${options[@]}" tests/native/test_flash_stops.c \
+        runtime/director/director.c runtime/lingo/lingo_runtime.c
+    compile "flash_geometry_$profile" "${options[@]}" tests/native/test_flash_geometry.c \
+        runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
 compile package -Iruntime/package tests/native/test_package.c runtime/package/package.c
+
+compile web_flash_text_hit_prescaled -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 -Iplatforms/web tests/native/test_web_flash_text_hit.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c

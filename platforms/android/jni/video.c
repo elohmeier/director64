@@ -43,6 +43,8 @@ typedef struct {
 static const pack_t *pack;
 static entry_t entries[PLAYERS];
 static unsigned revision;
+static char failure[256];
+const char *video_error(void) { return failure; }
 
 // The importer's container: a u32 header length, a JSON header {codec,
 // width, height, frames: [[microseconds, key, offset, size]]}, the chunks.
@@ -186,9 +188,16 @@ static void pump(player_t *p) {
     size_t cap = 0;
     uint8_t *buffer = AMediaCodec_getInputBuffer(p->codec, (size_t)in, &cap);
     const video_chunk_t *c = &p->frames[++p->fed];
-    size_t size = c->size <= cap ? c->size : cap;
-    memcpy(buffer, p->data + c->offset, size);
-    AMediaCodec_queueInputBuffer(p->codec, (size_t)in, 0, size, (uint64_t)c->microseconds, 0);
+    if (!buffer || c->size > cap) {
+      snprintf(failure, sizeof(failure), "Video frame exceeds decoder input capacity");
+      return;
+    }
+    memcpy(buffer, p->data + c->offset, c->size);
+    if (AMediaCodec_queueInputBuffer(p->codec, (size_t)in, 0, c->size,
+                                    (uint64_t)c->microseconds, 0) != AMEDIA_OK) {
+      snprintf(failure, sizeof(failure), "Video decoder rejected an encoded frame");
+      return;
+    }
   }
   for (;;) {
     AMediaCodecBufferInfo info;
@@ -263,7 +272,7 @@ static void close_entry(entry_t *e) {
   revision++;
 }
 
-void video_init(const pack_t *videos) { pack = videos; }
+void video_init(const pack_t *videos) { pack = videos; failure[0] = 0; }
 
 void video_update(unsigned sprite, const char *asset, const char *sound, double time600,
                   double rate, unsigned serial, float gain) {
@@ -277,8 +286,10 @@ void video_update(unsigned sprite, const char *asset, const char *sound, double 
     for (unsigned i = 0; i < PLAYERS && !e; i++)
       if (!entries[i].open)
         e = &entries[i];
-    if (!e)
+    if (!e) {
+      snprintf(failure, sizeof(failure), "Concurrent video player capacity exceeded (%u)", PLAYERS);
       return;
+    }
     memset(e, 0, sizeof(*e));
     e->open = true;
     e->sprite = sprite;
@@ -287,10 +298,13 @@ void video_update(unsigned sprite, const char *asset, const char *sound, double 
     const pack_entry_t *entry = *asset ? pack_find(pack, asset) : NULL;
     if (entry) {
       e->player = create(pack_data(pack, entry), entry->length);
-      if (!e->player)
+      if (!e->player) {
         LOG("video %s could not be played", asset);
+        snprintf(failure, sizeof(failure), "Video %s could not be decoded", asset);
+      }
     } else if (*asset) {
       LOG("missing video %s", asset);
+      snprintf(failure, sizeof(failure), "Missing video asset %s", asset);
     }
   }
   if (e->player)

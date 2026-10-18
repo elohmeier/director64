@@ -1,0 +1,56 @@
+-- Synthetic shape inputs only; no game assets or recovered scripts.
+global out, pm, qm, q, patternId, column, row, pixel, ink, blend, foreground, background, destination
+out=new(xtra("fileio"))
+out.createFile("C:\shape-arithmetic.txt")
+out.openFile("C:\shape-arithmetic.txt",2)
+qm=new(#bitmap)
+q=image(32,32,32)
+pm=new(#shape)
+pm.shapeType=#rect
+pm.filled=1
+pm.lineSize=0
+pm.rect=rect(0,0,32,32)
+puppetSprite(148,1)
+puppetSprite(149,1)
+sprite(148).member=qm
+sprite(149).member=pm
+sprite(148).visible=1
+sprite(149).visible=1
+sprite(148).rect=rect(0,0,32,32)
+sprite(149).rect=rect(0,0,32,32)
+sprite(148).ink=0
+sprite(149).blend=100
+sprite(149).ink=0
+sprite(149).color=rgb(0,0,0)
+sprite(149).bgColor=rgb(255,255,255)
+repeat with patternId=57 to 64
+ pm.pattern=patternId
+ updateStage
+ repeat with row=0 to 7
+  repeat with column=0 to 7
+   pixel=(the stage).image.getPixel(point(column,row))
+   out.writeString(string([patternId,column,row,pixel])&RETURN)
+  end repeat
+ end repeat
+end repeat
+pm.pattern=1
+repeat with destination in [rgb(10,80,200),rgb(255,0,0),rgb(0,255,0)]
+ q.fill(rect(0,0,32,32),destination)
+ qm.image=q
+ repeat with foreground in [rgb(20,40,60),rgb(255,0,0)]
+  sprite(149).color=foreground
+  repeat with background in [rgb(220,180,140),rgb(255,255,255)]
+   sprite(149).bgColor=background
+   repeat with ink in [0,1,2,3,4,5,6,7,8,9,32,33,34,35,36,37,38,39,40,41]
+    sprite(149).ink=ink
+    repeat with blend in [50,100]
+     sprite(149).blend=blend
+     updateStage
+     pixel=(the stage).image.getPixel(point(4,4))
+     out.writeString(string([ink,blend,foreground,background,destination,pixel])&RETURN)
+    end repeat
+   end repeat
+  end repeat
+ end repeat
+end repeat
+out.closeFile()

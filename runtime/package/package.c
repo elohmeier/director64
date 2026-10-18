@@ -1,5 +1,6 @@
 #include "package.h"
 #include "lingo_bytecode.h"
+#include "film_track.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -381,6 +382,61 @@ static const dg_behavior_t *intern_behaviors(loader_t *l, uint32_t *owners, unsi
   return b;
 }
 #endif
+#if DG_D10
+static bool read_flash_actions(loader_t *,const dg_flash_action_t **,uint16_t *,unsigned);
+static bool read_film_spec(loader_t *l, dg_spec_t *s, unsigned movies) {
+  reader_t *r=l->reader;
+  s->member = u32(r); s->script = u32(r);
+  s->x = (int16_t)u16(r); s->y = (int16_t)u16(r);
+  s->width = (int16_t)u16(r); s->height = (int16_t)u16(r);
+  s->ink = u8(r); s->blend = u8(r); s->type = u8(r); s->flags = u8(r);
+  s->fore = u8(r); s->back = u8(r); s->thickness = u8(r);
+  s->stretch = u8(r); s->trails = u8(r);
+  s->loc_z = (int16_t)u16(r); s->tempo = u16(r); s->delay = u16(r);
+  s->fore_rgb = u32(r); s->back_rgb = u32(r);
+  s->rotation = (int32_t)u32(r); s->skew = (int32_t)u32(r);
+#if DG_EXTENDED
+  if (u8(r)) return fail(r, "runtime film behavior dispatch is unsupported");
+#endif
+  if (s->script || DG_ID_FILE(s->member)>movies || s->ink>63 || s->blend>100)
+    return fail(r,"invalid runtime film key state");
+  return !r->failed;
+}
+static bool read_film_layer(loader_t *l, dg_film_layer_t *layer, unsigned movies) {
+  reader_t *r = l->reader;
+  layer->channel = u16(r);
+  layer->film_frame = u16(r);
+  if (!layer->channel || layer->channel >= DG_SPRITES)
+    return fail(r, "runtime film channel outside profile");
+  dg_spec_t *s = &layer->value;
+  if (!read_film_spec(l,s,movies)) return false;
+  layer->asset = string(l); layer->name = string(l); layer->mask_asset = string(l);
+  if (layer->asset && !*layer->asset) layer->asset = NULL;
+  if (layer->name && !*layer->name) layer->name = NULL;
+  if (layer->mask_asset && !*layer->mask_asset) layer->mask_asset = NULL;
+  if (layer->mask_asset && !layer->asset) return fail(r, "Flash mask has no raster character");
+  layer->origin_x = (int32_t)u32(r); layer->origin_y = (int32_t)u32(r);
+  uint8_t affine = u8(r);
+  if (affine > 1) return fail(r, "invalid Flash affine layer flag");
+  layer->affine = affine != 0;
+  for (unsigned i = 0; i < 6; i++) layer->matrix[i] = (int32_t)u32(r);
+  layer->clip_id=u16(r);layer->button_id=u16(r);layer->field_id=u16(r);layer->clip_depth=u16(r);
+  layer->placement_generation=u32(r);uint8_t color=u8(r);layer->has_cxform=color!=0;
+  if (color>1 || (layer->clip_depth && (layer->clip_depth<=layer->channel || layer->clip_depth>=1000)))
+    return fail(r,"invalid Flash layer color/mask flags");
+  if (color) for (unsigned i=0;i<8;i++) layer->cxform[i]=(int16_t)u16(r);
+  if (!read_flash_actions(l,&layer->actions,&layer->action_count,0)) return false;
+  if ((!!layer->clip_id+!!layer->button_id+!!layer->field_id+!!layer->asset)>1)
+    return fail(r,"multiple Flash layer identities");
+  if (layer->affine && s->member) return fail(r, "affine Flash layer must reference a Flash character");
+  if (s->script || DG_ID_FILE(s->member) > movies || s->ink > 63 || s->blend > 100)
+    return fail(r, "invalid runtime film layer");
+  if (!s->member && !layer->clip_id && !layer->button_id && !layer->field_id && ((!layer->asset || !*layer->asset) && (!layer->name || !*layer->name)))
+    return fail(r, "direct Flash layer has no raster or field");
+  return !r->failed;
+}
+#include "flash.inc"
+#endif
 static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
   reader_t *r = l->reader;
   movie->id = u16(r);
@@ -400,6 +456,18 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
     cast[i].name = string(l);
     cast[i].file = u16(r);
     cast[i].cast = u16(r);
+#if DG_MODERN
+    unsigned patterns=u8(r);
+    if (patterns>1) return fail(r,"invalid shape pattern catalog marker");
+    if (patterns) {
+      const char **assets=allocate(l,8,sizeof(*assets));
+      cast[i].shape_patterns=assets;
+      for (unsigned p=0;assets && p<8;p++) {
+        assets[p]=string(l);
+        if (assets[p] && !*assets[p]) assets[p]=NULL;
+      }
+    }
+#endif
     if (!cast[i].file || cast[i].file > movies)
       return fail(r, "cast file %u outside the package", cast[i].file);
   }
@@ -437,8 +505,14 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
     m->film_count = u16(r);
     m->film_loop = u8(r);
     m->line_direction = u8(r);
+    unsigned variants = 1;
+#if DG_D10
+    variants = m->flash_variant_count = u8(r);
+    if (!variants || (variants > 1 && (m->type != 2 || !m->film_count)))
+      return fail(r, "invalid Flash variant storage");
+#endif
     if (m->film_count)
-      m->film_assets = string_list(l, m->film_count);
+      m->film_assets = string_list(l, m->film_count * variants);
 #if DG_EXTENDED
     m->editable = u8(r) != 0;
     uint32_t text_bytes = u32(r);
@@ -484,6 +558,15 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
     m->source_xtra = u8(r);
     m->video_audio = string(l);
     m->video_flags = u32(r);
+    unsigned sounds = count(r, 4, UINT16_MAX, "film sound");
+    if (sounds) {
+      if (sounds != 2u * m->film_count)
+        return fail(r, "film sounds do not pair the film frames");
+      uint32_t *pairs = allocate(l, sounds, sizeof(*pairs));
+      for (unsigned s = 0; pairs && s < sounds; s++)
+        pairs[s] = u32(r);
+      m->film_sounds = pairs;
+    }
     m->flash_label_count = u8(r);
     m->flash_field_count = u8(r);
     if (m->flash_label_count) {
@@ -497,7 +580,7 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
       m->flash_labels = labels;
     }
     if (m->flash_field_count) {
-      if (!need(r, (size_t)m->flash_field_count * 32))
+      if (!need(r, (size_t)m->flash_field_count * 50))
         return false;
       dg_flash_field_t *fields = allocate(l, m->flash_field_count, sizeof(*fields));
       for (unsigned f = 0; fields && f < m->flash_field_count; f++) {
@@ -517,6 +600,11 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
         x->multiline = u8(r);
         x->leading = (int8_t)u8(r);
         x->style = style_ref(r, styles, style_count);
+        for (unsigned i = 0; i < 4; i++) x->local_bounds[i] = (int32_t)u32(r);
+        unsigned embedded=u8(r);
+        if (embedded>1) return fail(r,"invalid Flash embedded font flag");
+        x->embed_fonts=embedded!=0;
+        x->id=u16(r);
       }
       m->flash_fields = fields;
     }
@@ -548,7 +636,122 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
     if ((runs || links) && extra_count < sizeof(extras) / sizeof(extras[0]))
       extras[extra_count++] = (dg_text_extra_t){m->id, (uint16_t)runs, (uint16_t)links, run, link};
 #endif
+    m->linked_movie = u16(r);
+    m->linked_flags = u32(r);
+    m->linked_left = (int16_t)u16(r);
+    m->linked_top = (int16_t)u16(r);
+    if (m->linked_movie > movies || (m->type == 9 && !m->linked_movie))
+      return fail(r, "linked movie reference outside the package");
+    unsigned film_frames = u16(r);
+    m->film_left = (int16_t)u16(r);
+    m->film_top = (int16_t)u16(r);
+    if (film_frames && (m->type != 2 || film_frames != m->film_count * variants))
+      return fail(r, "runtime film frames do not match the member");
+    if (!need(r, (size_t)film_frames * 2)) return false;
+    dg_film_frame_t *ff = film_frames ? allocate(l, film_frames, sizeof(*ff)) : NULL;
+    m->film_frames = ff;
+    for (unsigned f = 0; ff && f < film_frames; f++) {
+      ff[f].count = u16(r);
+      if (ff[f].count >= DG_SPRITES) return fail(r, "too many runtime film layers");
+      if (!need(r, (size_t)ff[f].count * (92u + (DG_EXTENDED ? 1u : 0u)))) return false;
+      dg_film_layer_t *layers = ff[f].count ? allocate(l, ff[f].count, sizeof(*layers)) : NULL;
+      ff[f].layers = layers;
+      for (unsigned k = 0; layers && k < ff[f].count; k++) {
+        if (!read_film_layer(l, &layers[k], movies)) return false;
+        if (k && layers[k - 1].channel >= layers[k].channel)
+          return fail(r, "runtime film layers are not in channel order");
+      }
+    }
+    m->film_flags=u32(r);
+    m->film_track_count=u16(r);
+    if (m->film_track_count && (m->type!=2 || !m->film_count || film_frames || variants>1))
+      return fail(r,"native film tracks do not match the member");
+    if (m->film_track_count>=DG_SPRITES || !need(r,(size_t)m->film_track_count*8))
+      return fail(r,"invalid native film track count");
+    dg_film_track_t *tracks=m->film_track_count?allocate(l,m->film_track_count,sizeof(*tracks)):NULL;
+    m->film_tracks=tracks;
+    for (unsigned t=0;tracks && t<m->film_track_count;t++) {
+      tracks[t].channel=u16(r);tracks[t].count=u16(r);
+      if (!tracks[t].channel || tracks[t].channel>=DG_SPRITES || !tracks[t].count ||
+          tracks[t].count>m->film_count || (t && tracks[t-1].channel>=tracks[t].channel))
+        return fail(r,"invalid native film track order/count");
+      tracks[t].size=u32(r);
+      if (!need(r,tracks[t].size)) return false;
+      tracks[t].data=r->data+r->at;r->at+=tracks[t].size;
+      uint32_t offset=0;uint16_t frame=0,last=0;dg_spec_t state={0};
+      for (unsigned k=0;k<tracks[t].count;k++) {
+        if (!dg_film_track_read(&tracks[t],&offset,&frame,&state) || frame>=m->film_count ||
+            (k && frame<=last)) return fail(r,"invalid native film delta/frame order");
+        if (DG_ID_FILE(state.member)>movies || state.ink>63 || state.blend>100 ||
+            state.stretch>1 || state.trails>1 || state.fore_rgb>0xffffff || state.back_rgb>0xffffff)
+          return fail(r,"invalid native film delta state");
+        last=frame;
+      }
+      if (offset!=tracks[t].size) return fail(r,"trailing native film delta bytes");
+    }
+    m->flash_stop_count = u16(r);
+    if (!need(r, (size_t)m->flash_stop_count * 2)) return false;
+    uint16_t *stops = m->flash_stop_count ? allocate(l, m->flash_stop_count, sizeof(*stops)) : NULL;
+    m->flash_stops = stops;
+    for (unsigned f = 0; stops && f < m->flash_stop_count; f++) {
+      stops[f] = u16(r);
+      if (!stops[f] || stops[f] > (m->film_count ? m->film_count : 1))
+        return fail(r, "Flash stop frame outside timeline");
+    }
+    m->flash_helper_count = u16(r);
+    if (!need(r, (size_t)m->flash_helper_count * 15)) return false;
+    dg_flash_helper_t *helpers = m->flash_helper_count ? allocate(l, m->flash_helper_count, sizeof(*helpers)) : NULL;
+    m->flash_helpers = helpers;
+    for (unsigned h = 0; helpers && h < m->flash_helper_count; h++) {
+      helpers[h].name = string(l); helpers[h].target = string(l); helpers[h].property = string(l);
+      helpers[h].operation = u8(r); helpers[h].argument = u8(r);
+      uint8_t method = u8(r);
+      helpers[h].method = method != 0;
+      if (!*helpers[h].name || !*helpers[h].target || !*helpers[h].property ||
+          helpers[h].operation < 1 || helpers[h].operation > 4 || method > 1)
+        return fail(r, "invalid translated Flash helper");
+    }
+    m->flash_rate=u32(r);
+    unsigned positions=u16(r);
+    if (positions && (positions!=m->film_count || m->source_xtra!=1 || !m->video_audio || !*m->video_audio || !m->rate))
+      return fail(r,"invalid Flash stream audio metadata");
+    if (!need(r,(size_t)positions*4)) return false;
+    uint32_t *offsets=positions ? allocate(l,positions,sizeof(*offsets)) : NULL;
+    m->flash_audio_positions=offsets;
+    for (unsigned n=0; offsets && n<positions; n++) {
+      offsets[n]=u32(r);
+      if (offsets[n]!=UINT32_MAX && offsets[n]>m->samples) return fail(r,"Flash audio position outside samples");
+    }
+    m->flash_playback_mode=u8(r);
+    m->flash_fixed_rate=u32(r);
+    if (m->flash_playback_mode>2) return fail(r,"invalid Flash playback mode");
+    m->flash_direct_to_stage=u8(r);
+    if (m->flash_direct_to_stage>1) return fail(r,"invalid Flash direct-to-stage flag");
+    m->flash_version=u8(r);
+    if (!read_flash_runtime(l,m,movies)) return false;
+    m->flash_font_count=u16(r);
+    if (!need(r,(size_t)m->flash_font_count*2)) return false;
+    const dg_text_style_t **fonts=m->flash_font_count ? allocate(l,m->flash_font_count,sizeof(*fonts)) : NULL;
+    m->flash_fonts=fonts;
+    for(unsigned n=0;fonts && n<m->flash_font_count;n++) {
+      fonts[n]=style_ref(r,styles,style_count);
+      if(!fonts[n]||!fonts[n]->font_name||!fonts[n]->size||!fonts[n]->font_id||fonts[n]->font_id==255)
+        return fail(r,"invalid Flash font catalog style");
+    }
 #endif
+    unsigned palette_count=u16(r);
+    m->palette_count=(uint16_t)palette_count;
+    if (palette_count>256 || (palette_count && m->type!=4))
+      return fail(r,"invalid palette member data");
+    if (palette_count) {
+      if(!need(r,palette_count*4)) return false;
+      uint32_t *colors=allocate(l,palette_count,sizeof(*colors));
+      m->palette=colors;
+      for(unsigned p=0;colors && p<palette_count;p++) {
+        colors[p]=u32(r);
+        if(colors[p]>0xffffff) return fail(r,"invalid palette color");
+      }
+    }
   }
   movie->member_count = (uint16_t)members;
   movie->members = member;

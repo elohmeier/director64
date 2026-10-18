@@ -6,6 +6,7 @@
 //   node export.mjs TOOLS_DIR SOURCE PROFILE_JSON PACKAGE_META MANIFEST_JSON OUT_DIR
 import {readFileSync, writeFileSync, openSync, readSync, fstatSync, mkdirSync, rmSync} from "node:fs";
 import {createRequire} from "node:module";
+import {createHash} from "node:crypto";
 import {join} from "node:path";
 import {pathToFileURL} from "node:url";
 import {availableParallelism} from "node:os";
@@ -44,15 +45,26 @@ const readAt = (offset, length) => {
   return bytes;
 };
 const started = performance.now();
+const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+const toolManifest = JSON.parse(readFileSync(join(tools, "manifest.json"), "utf8"));
+const systemFonts = Object.fromEntries(
+  [...new Set((profile.policy.system_font_resources ?? []).map((r) => r.sha256))].map((hash) => {
+    const name = toolManifest.files[`systemFont${hash}`];
+    if (!name) throw new Error(`Missing original system font installer ${hash}`);
+    return [hash, readFileSync(join(tools, name))];
+  }),
+);
 let shown = "";
 const result = await importGame({
   source: {size, readAt},
-  profile: JSON.parse(readFileSync(profilePath, "utf8")),
+  profile,
   onProgress: ({stage}) => {
     if (stage !== shown) process.stderr.write(`  ${(shown = stage)}\n`);
   },
   tools: {
-    converter, DirectorFile, pool, encodeAudio, encodeImage, encodeVideo, encodeMpeg, mpegAudio,
+    converter, DirectorFile, pool, encodeAudio, encodeImage, encodeVideo, systemFonts,
+    encodeMpeg: (bytes) => encodeMpeg(bytes, converter.mpegInfo(bytes)),
+    mpegAudio: (bytes) => mpegAudio(bytes, converter.mpegInfo(bytes)),
     parserWasm: readFileSync(join(root, "node_modules/projectorrays/dist/projectorrays.wasm")),
     names: readFileSync(join(root, "runtime/lingo/names.txt"), "utf8"),
     bytecodeHeader: readFileSync(join(root, "runtime/lingo/lingo_bytecode.h")),
@@ -71,10 +83,11 @@ pool.close();
 const PACKS = ["images", "audio", "fonts", "streams", "data", "video", "print"];
 rmSync(out, {recursive: true, force: true});
 mkdirSync(out, {recursive: true});
-const bytes = {};
+const bytes = {}, hashes = {};
 const write = (name, data) => {
   writeFileSync(join(out, name), data);
   bytes[name] = data.length;
+  hashes[name] = createHash("sha256").update(data).digest("hex");
 };
 write("game.d64p", result.package);
 for (const kind of PACKS) {
@@ -86,6 +99,7 @@ const manifest = {
   ...JSON.parse(readFileSync(manifestPath, "utf8")),
   created: new Date().toISOString(),
   bytes,
+  sha256: hashes,
   report: result.report,
 };
 writeFileSync(join(out, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");

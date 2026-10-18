@@ -1,0 +1,35 @@
+-- Synthetic pixel inputs only; see docs/reference-capture.md.
+global out, pm, qm, p, q
+out=new(xtra("fileio"))
+out.createFile("C:\ink-shape.txt")
+out.openFile("C:\ink-shape.txt",2)
+pm=new(#shape)
+pm.shapeType=#rect
+pm.filled=1
+pm.pattern=1
+pm.lineSize=0
+pm.rect=rect(0,0,8,8)
+qm=new(#bitmap)
+q=image(8,8,32)
+q.fill(rect(0,0,8,8),rgb(0,0,255))
+qm.image=q
+puppetSprite(148,1)
+puppetSprite(149,1)
+sprite(148).member=qm
+sprite(149).member=pm
+sprite(149).visible=1
+sprite(148).rect=rect(0,0,8,8)
+sprite(149).rect=rect(0,0,8,8)
+sprite(148).ink=0
+sprite(149).color=rgb(255,0,0)
+sprite(149).bgColor=rgb(255,0,0)
+repeat with ink in [0,8,32]
+ repeat with blend in [0,1,10,25,49,50,51,75,90,99,100]
+  sprite(149).ink=ink
+  sprite(149).blend=blend
+  updateStage
+  center=(the stage).image.getPixel(point(4,4))
+  out.writeString(string([ink,blend,center]) & RETURN)
+ end repeat
+end repeat
+out.closeFile()

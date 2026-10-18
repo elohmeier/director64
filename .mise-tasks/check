@@ -5,6 +5,11 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "check requires the Rust compiler; install the pinned toolchain with mise install" >&2
+    exit 1
+fi
+cargo build --release --manifest-path compiler/Cargo.toml
 uv run --locked ruff check src tests games
 uv run --locked pytest
 uv run --locked director64 compatibility --game findus-workshop validate --inventory-mode optional
@@ -26,7 +31,4 @@ for module in export pool-worker video; do
 done
 node --test tests/node/*.test.mjs
 "$repo_root/.mise-tasks/test-native"
-if command -v cargo >/dev/null 2>&1; then
-    cargo build --release --manifest-path compiler/Cargo.toml
-    cargo test --release --manifest-path compiler/Cargo.toml
-fi
+cargo test --release --manifest-path compiler/Cargo.toml

@@ -1,0 +1,33 @@
+-- Synthetic 5-bit RGB brush quantizer probe. The caller substitutes only
+-- the eight RT_BITMAP palettes/pixels in an ignored copy of DIRAPI.DLL.
+-- Each resource contains 256 generated colors; no game texture is sampled.
+global out,pm,pat,x,y,snapshot,p
+out=new(xtra("fileio"))
+out.createFile("C:\pattern-grid.txt")
+out.openFile("C:\pattern-grid.txt",0)
+puppetSprite(149,1)
+repeat with pat=57 to 64
+ pm=new(#shape)
+ pm.shapeType=#rect
+ pm.filled=1
+ pm.rect=rect(0,0,16,16)
+ pm.pattern=pat
+ pm.lineSize=0
+ sprite(149).member=0
+ sprite(149).member=pm
+ sprite(149).rect=rect(0,0,16,16)
+ sprite(149).ink=0
+ sprite(149).blend=100
+ sprite(149).color=rgb(0,0,0)
+ sprite(149).bgColor=rgb(255,255,255)
+ sprite(149).visible=1
+ updateStage
+ snapshot=(the stage).image
+ repeat with y=0 to 15
+  repeat with x=0 to 15
+   p=snapshot.getPixel(point(x,y))
+   out.writeString(string([pat,x,y,p])&RETURN)
+  end repeat
+ end repeat
+end repeat
+out.closeFile()

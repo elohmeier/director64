@@ -26,20 +26,32 @@ fn block(nodes: &[Stmt], serial: &mut u32) -> Vec<Stmt> {
                 yes: block(yes, serial),
                 no: block(no, serial),
             },
-            StmtKind::While { condition, body } => {
-                StmtKind::While { condition: condition.clone(), body: block(body, serial) }
-            }
-            StmtKind::For { variable, first, last, step, body } => StmtKind::For {
+            StmtKind::While { condition, body } => StmtKind::While {
+                condition: condition.clone(),
+                body: block(body, serial),
+            },
+            StmtKind::For {
+                variable,
+                first,
+                last,
+                step,
+                body,
+            } => StmtKind::For {
                 variable: variable.clone(),
                 first: first.clone(),
                 last: last.clone(),
                 step: *step,
                 body: block(body, serial),
             },
-            StmtKind::Tell { target, body } => {
-                StmtKind::Tell { target: target.clone(), body: block(body, serial) }
-            }
-            StmtKind::ForEach { variable, sequence, body } => StmtKind::ForEach {
+            StmtKind::Tell { target, body } => StmtKind::Tell {
+                target: target.clone(),
+                body: block(body, serial),
+            },
+            StmtKind::ForEach {
+                variable,
+                sequence,
+                body,
+            } => StmtKind::ForEach {
                 variable: variable.clone(),
                 sequence: sequence.clone(),
                 body: block(body, serial),
@@ -69,12 +81,17 @@ fn block(nodes: &[Stmt], serial: &mut u32) -> Vec<Stmt> {
                     // behaviors.
                     let channel = temporary("tellsprite", serial);
                     let target = match &target {
-                        Expr::Reference { kind, number, .. } if kind == "sprite" => (**number).clone(),
+                        Expr::Reference { kind, number, .. } if kind == "sprite" => {
+                            (**number).clone()
+                        }
                         other => other.clone(),
                     };
                     output.push(Stmt {
                         line,
-                        kind: StmtKind::Set { target: Expr::Var(channel.clone()), value: retarget(&target, &channel) },
+                        kind: StmtKind::Set {
+                            target: Expr::Var(channel.clone()),
+                            value: retarget(&target, &channel),
+                        },
                     });
                     output.extend(resprite(&body, &channel));
                 }
@@ -83,7 +100,10 @@ fn block(nodes: &[Stmt], serial: &mut u32) -> Vec<Stmt> {
                 // Deleting a variable disposes its instance: assign VOID.
                 output.push(Stmt {
                     line,
-                    kind: StmtKind::Set { target: Expr::Var(name), value: Expr::Var("void".into()) },
+                    kind: StmtKind::Set {
+                        target: Expr::Var(name),
+                        value: Expr::Var("void".into()),
+                    },
                 });
             }
             StmtKind::Unrecovered { opcode } => {
@@ -91,11 +111,21 @@ fn block(nodes: &[Stmt], serial: &mut u32) -> Vec<Stmt> {
                 // to the explicit alert-and-continue runtime failure.
                 output.push(call("undecompiled_bytecode", vec![Expr::Str(opcode)]));
             }
-            StmtKind::ForEach { variable, sequence, body } => {
+            StmtKind::ForEach {
+                variable,
+                sequence,
+                body,
+            } => {
                 let seq = temporary("sequence", serial);
                 let bound = temporary("count", serial);
                 let index = temporary("index", serial);
-                output.push(Stmt { line, kind: StmtKind::Set { target: Expr::Var(seq.clone()), value: sequence } });
+                output.push(Stmt {
+                    line,
+                    kind: StmtKind::Set {
+                        target: Expr::Var(seq.clone()),
+                        value: sequence,
+                    },
+                });
                 output.push(Stmt {
                     line,
                     kind: StmtKind::Set {
@@ -107,7 +137,10 @@ fn block(nodes: &[Stmt], serial: &mut u32) -> Vec<Stmt> {
                     line,
                     kind: StmtKind::Set {
                         target: Expr::Var(variable),
-                        value: Expr::Call("getat".into(), vec![Expr::Var(seq), Expr::Var(index.clone())]),
+                        value: Expr::Call(
+                            "getat".into(),
+                            vec![Expr::Var(seq), Expr::Var(index.clone())],
+                        ),
                     },
                 }];
                 inner.extend(body);
@@ -131,16 +164,33 @@ fn block(nodes: &[Stmt], serial: &mut u32) -> Vec<Stmt> {
                         tail = body;
                         continue;
                     };
-                    let mut conditions = values
-                        .iter()
-                        .map(|v| Expr::Binary("=".into(), Box::new(Expr::Var(name.clone())), Box::new(v.clone())));
+                    let mut conditions = values.iter().map(|v| {
+                        Expr::Binary(
+                            "=".into(),
+                            Box::new(Expr::Var(name.clone())),
+                            Box::new(v.clone()),
+                        )
+                    });
                     let mut condition = conditions.next().expect("case branch without values");
                     for extra in conditions {
                         condition = Expr::Binary("or".into(), Box::new(condition), Box::new(extra));
                     }
-                    tail = vec![Stmt { line, kind: StmtKind::If { condition, yes: body, no: tail } }];
+                    tail = vec![Stmt {
+                        line,
+                        kind: StmtKind::If {
+                            condition,
+                            yes: body,
+                            no: tail,
+                        },
+                    }];
                 }
-                output.push(Stmt { line, kind: StmtKind::Set { target: Expr::Var(name), value: selector } });
+                output.push(Stmt {
+                    line,
+                    kind: StmtKind::Set {
+                        target: Expr::Var(name),
+                        value: selector,
+                    },
+                });
                 output.extend(tail);
             }
             other => output.push(Stmt { line, kind: other }),
@@ -164,12 +214,27 @@ fn retarget_in(value: &Expr, channel: &str, children: bool) -> Expr {
         Expr::The(name) if name == "frame" => Expr::Call("sprite_frame".into(), chan()),
         Expr::The(name) if name == "lastframe" => Expr::Call("sprite_lastframe".into(), chan()),
         Expr::Unary(op, e) => Expr::Unary(op.clone(), Box::new(retarget_in(e, channel, children))),
-        Expr::Binary(op, a, b) => {
-            Expr::Binary(op.clone(), Box::new(retarget_in(a, channel, children)), Box::new(retarget_in(b, channel, children)))
-        }
-        Expr::List(items) => Expr::List(items.iter().map(|e| retarget_in(e, channel, children)).collect()),
+        Expr::Binary(op, a, b) => Expr::Binary(
+            op.clone(),
+            Box::new(retarget_in(a, channel, children)),
+            Box::new(retarget_in(b, channel, children)),
+        ),
+        Expr::List(items) => Expr::List(
+            items
+                .iter()
+                .map(|e| retarget_in(e, channel, children))
+                .collect(),
+        ),
         Expr::PropList(pairs) => Expr::PropList(
-            pairs.iter().map(|(k, v)| (retarget_in(k, channel, children), retarget_in(v, channel, children))).collect(),
+            pairs
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        retarget_in(k, channel, children),
+                        retarget_in(v, channel, children),
+                    )
+                })
+                .collect(),
         ),
         Expr::Property { name, kind, value } => Expr::Property {
             name: name.clone(),
@@ -177,28 +242,64 @@ fn retarget_in(value: &Expr, channel: &str, children: bool) -> Expr {
             value: Box::new(retarget_in(value, channel, children)),
         },
         Expr::Get(name, e) => Expr::Get(name.clone(), Box::new(retarget_in(e, channel, children))),
-        Expr::Index(a, b) => Expr::Index(Box::new(retarget_in(a, channel, children)), Box::new(retarget_in(b, channel, children))),
-        Expr::LastChunk(kind, e) => Expr::LastChunk(kind.clone(), Box::new(retarget_in(e, channel, children))),
-        Expr::Method { name, receiver, args } => Expr::Method {
+        Expr::Index(a, b) => Expr::Index(
+            Box::new(retarget_in(a, channel, children)),
+            Box::new(retarget_in(b, channel, children)),
+        ),
+        Expr::LastChunk(kind, e) => {
+            Expr::LastChunk(kind.clone(), Box::new(retarget_in(e, channel, children)))
+        }
+        Expr::Method {
+            name,
+            receiver,
+            args,
+        } => Expr::Method {
             name: name.clone(),
             receiver: Box::new(retarget_in(receiver, channel, children)),
-            args: args.iter().map(|e| retarget_in(e, channel, children)).collect(),
+            args: args
+                .iter()
+                .map(|e| retarget_in(e, channel, children))
+                .collect(),
         },
-        Expr::Reference { kind, number, library: None } if children && kind == "sprite" => {
-            Expr::Call("tell_child".into(), vec![Expr::Var(channel.to_string()), retarget_in(number, channel, children)])
-        }
-        Expr::Reference { kind, number, library } => Expr::Reference {
+        Expr::Reference {
+            kind,
+            number,
+            library: None,
+        } if children && kind == "sprite" => Expr::Call(
+            "tell_child".into(),
+            vec![
+                Expr::Var(channel.to_string()),
+                retarget_in(number, channel, children),
+            ],
+        ),
+        Expr::Reference {
+            kind,
+            number,
+            library,
+        } => Expr::Reference {
             kind: kind.clone(),
             number: Box::new(retarget_in(number, channel, children)),
-            library: library.as_ref().map(|l| Box::new(retarget_in(l, channel, children))),
+            library: library
+                .as_ref()
+                .map(|l| Box::new(retarget_in(l, channel, children))),
         },
-        Expr::Chunk { kind, first, last, source } => Expr::Chunk {
+        Expr::Chunk {
+            kind,
+            first,
+            last,
+            source,
+        } => Expr::Chunk {
             kind: kind.clone(),
             first: Box::new(retarget_in(first, channel, children)),
             last: Box::new(retarget_in(last, channel, children)),
             source: Box::new(retarget_in(source, channel, children)),
         },
-        Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|e| retarget_in(e, channel, children)).collect()),
+        Expr::Call(name, args) => Expr::Call(
+            name.clone(),
+            args.iter()
+                .map(|e| retarget_in(e, channel, children))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -215,10 +316,17 @@ fn resprite(statements: &[Stmt], channel: &str) -> Vec<Stmt> {
                     yes: resprite(yes, channel),
                     no: resprite(no, channel),
                 },
-                StmtKind::While { condition, body } => {
-                    StmtKind::While { condition: rt(condition), body: resprite(body, channel) }
-                }
-                StmtKind::For { variable, first, last, step, body } => StmtKind::For {
+                StmtKind::While { condition, body } => StmtKind::While {
+                    condition: rt(condition),
+                    body: resprite(body, channel),
+                },
+                StmtKind::For {
+                    variable,
+                    first,
+                    last,
+                    step,
+                    body,
+                } => StmtKind::For {
                     variable: variable.clone(),
                     first: rt(first),
                     last: rt(last),
@@ -227,15 +335,29 @@ fn resprite(statements: &[Stmt], channel: &str) -> Vec<Stmt> {
                 },
                 StmtKind::Return(value) => StmtKind::Return(value.as_ref().map(rt)),
                 StmtKind::Call(value) => match rt(value) {
-                    // A told film loop's own channels: flattened loops have none
-                    // to puppet (Findus 8.5's puppetAllSprites sweep).
-                    Expr::Call(name, _) if name == "puppetsprite" => StmtKind::Call(Expr::Call("nothing".into(), vec![])),
-                    Expr::Call(name, args) if name == "go" && args.len() == 1 => StmtKind::Call(Expr::Call(
-                        "sprite_go".into(),
-                        vec![Expr::Var(channel.to_string()), args[0].clone()],
-                    )),
+                    Expr::Call(name, args) if name == "puppetsprite" && args.len() == 2 => {
+                        StmtKind::Call(Expr::Call(
+                            name,
+                            vec![
+                                Expr::Call(
+                                    "tell_child".into(),
+                                    vec![Expr::Var(channel.to_string()), args[0].clone()],
+                                ),
+                                args[1].clone(),
+                            ],
+                        ))
+                    }
+                    Expr::Call(name, args) if name == "go" && args.len() == 1 => {
+                        StmtKind::Call(Expr::Call(
+                            "sprite_go".into(),
+                            vec![Expr::Var(channel.to_string()), args[0].clone()],
+                        ))
+                    }
                     Expr::Call(name, args)
-                        if !matches!(name.as_str(), "sendsprite" | "sprite_go" | "sprite_frame" | "sprite_lastframe") =>
+                        if !matches!(
+                            name.as_str(),
+                            "sendsprite" | "sprite_go" | "sprite_frame" | "sprite_lastframe"
+                        ) =>
                     {
                         let mut sent = vec![Expr::Var(channel.to_string()), Expr::Sym(name)];
                         sent.extend(args);
@@ -244,12 +366,20 @@ fn resprite(statements: &[Stmt], channel: &str) -> Vec<Stmt> {
                     other => StmtKind::Call(other),
                 },
                 StmtKind::Delete(target) => StmtKind::Delete(rt(target)),
-                StmtKind::Set { target, value } => StmtKind::Set { target: rt(target), value: rt(value) },
+                StmtKind::Set { target, value } => StmtKind::Set {
+                    target: rt(target),
+                    value: rt(value),
+                },
                 StmtKind::Trace(value) => StmtKind::Trace(rt(value)),
-                StmtKind::Tell { target, body } => {
-                    StmtKind::Tell { target: rt(target), body: resprite(body, channel) }
-                }
-                StmtKind::ForEach { variable, sequence, body } => StmtKind::ForEach {
+                StmtKind::Tell { target, body } => StmtKind::Tell {
+                    target: rt(target),
+                    body: resprite(body, channel),
+                },
+                StmtKind::ForEach {
+                    variable,
+                    sequence,
+                    body,
+                } => StmtKind::ForEach {
                     variable: variable.clone(),
                     sequence: rt(sequence),
                     body: resprite(body, channel),
@@ -260,7 +390,65 @@ fn resprite(statements: &[Stmt], channel: &str) -> Vec<Stmt> {
                 },
                 other => other.clone(),
             };
-            Stmt { line: inner.line, kind }
+            Stmt {
+                line: inner.line,
+                kind,
+            }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod film_tell_tests {
+    use super::*;
+
+    #[test]
+    fn film_tell_keeps_puppet_control_and_child_property_writes() {
+        let number = |n| Expr::Number(Num::Int(n));
+        let source = vec![Stmt {
+            line: 1,
+            kind: StmtKind::Tell {
+                target: Expr::Reference {
+                    kind: "sprite".into(),
+                    number: Box::new(number(7)),
+                    library: None,
+                },
+                body: vec![
+                    Stmt {
+                        line: 2,
+                        kind: StmtKind::Call(Expr::Call(
+                            "puppetsprite".into(),
+                            vec![number(3), number(1)],
+                        )),
+                    },
+                    Stmt {
+                        line: 3,
+                        kind: StmtKind::Set {
+                            target: Expr::Get(
+                                "member".into(),
+                                Box::new(Expr::Reference {
+                                    kind: "sprite".into(),
+                                    number: Box::new(number(3)),
+                                    library: None,
+                                }),
+                            ),
+                            value: Expr::Var("replacement".into()),
+                        },
+                    },
+                ],
+            },
+        }];
+        let lowered = normalize(&source);
+        let mut expressions = Vec::new();
+        crate::ast::block_expressions(&lowered, &mut expressions);
+        assert!(expressions.iter().any(|e| matches!(e,Expr::Call(name,args)
+            if name=="puppetsprite" && matches!(&args[0],Expr::Call(target,_) if target=="tell_child"))));
+        assert!(expressions.iter().any(|e| matches!(e,Expr::Get(name,child)
+            if name=="member" && matches!(&**child,Expr::Call(target,_) if target=="tell_child"))));
+        assert!(
+            !expressions
+                .iter()
+                .any(|e| matches!(e,Expr::Call(name,_) if name=="nothing"))
+        );
+    }
 }

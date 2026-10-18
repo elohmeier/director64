@@ -5,12 +5,12 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::ast::{for_each_stmt, Handler, Program, StmtKind};
+use crate::ast::{Handler, Program, StmtKind, for_each_stmt};
 use crate::bytecode::listing;
-use crate::compiler::{polling_cycles, Compiler, Corpus, Interner, Sibling};
+use crate::compiler::{Compiler, Corpus, Interner, Sibling, polling_cycles};
 use crate::names::Names;
 use crate::normalize::normalize;
 use crate::pyfmt::{cstring, float_repr, json_dumps};
@@ -26,7 +26,11 @@ pub struct Summary {
 pub fn text_hash(name: &str) -> u32 {
     let mut digest: u32 = 2166136261;
     for byte in name.bytes() {
-        let folded = if byte.is_ascii_uppercase() { byte + 32 } else { byte };
+        let folded = if byte.is_ascii_uppercase() {
+            byte + 32
+        } else {
+            byte
+        };
         digest = (digest ^ folded as u32).wrapping_mul(16777619);
     }
     digest
@@ -106,7 +110,11 @@ pub struct Unit {
 impl Unit {
     /// The bucket count of the handler index (0 without handlers).
     pub fn bucket_count(&self) -> usize {
-        if self.entries.is_empty() { 0 } else { self.buckets.len() - 1 }
+        if self.entries.is_empty() {
+            0
+        } else {
+            self.buckets.len() - 1
+        }
     }
 }
 
@@ -156,7 +164,10 @@ pub fn compile_program(program: &Program, names: &Names) -> Result<Compiled, Str
     let handlers: Vec<Handler> = program
         .handlers
         .iter()
-        .map(|h| Handler { body: normalize(&h.body), ..h.clone() })
+        .map(|h| Handler {
+            body: normalize(&h.body),
+            ..h.clone()
+        })
         .collect();
     let mut declared: BTreeSet<String> = BTreeSet::new();
     for handler in &handlers {
@@ -166,17 +177,28 @@ pub fn compile_program(program: &Program, names: &Names) -> Result<Compiled, Str
             }
         });
     }
-    let globals: HashMap<String, usize> = declared.iter().enumerate().map(|(i, n)| (n.clone(), i)).collect();
+    let globals: HashMap<String, usize> = declared
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.clone(), i))
+        .collect();
     if globals.len() > 1024 {
         return Err("global budget exceeded".into());
     }
     let custom_calls: HashSet<String> = handlers.iter().map(|h| h.name.clone()).collect();
     let corpus = Corpus {
         handler_names: &custom_calls,
-        ancestors: handlers.iter().any(|h| format!("{:?}", h.body).to_lowercase().contains("ancestor")),
+        ancestors: handlers
+            .iter()
+            .any(|h| format!("{:?}", h.body).to_lowercase().contains("ancestor")),
     };
     let mut movies: BTreeSet<String> = handlers.iter().map(|h| h.movie.clone()).collect();
-    movies.extend(program.files.iter().map(|f| f.strip_suffix(".lingo").unwrap_or(f).to_string()));
+    movies.extend(
+        program
+            .files
+            .iter()
+            .map(|f| f.strip_suffix(".lingo").unwrap_or(f).to_string()),
+    );
     let mut total_bytes = 0usize;
     // Every symbol the corpus spells gets one id, so the runtime compares
     // symbols and property keys as integers and never interns a literal.
@@ -231,7 +253,10 @@ pub fn compile_program(program: &Program, names: &Names) -> Result<Compiled, Str
                 blocks.push((format!("code_{}", blocks.len()), code.clone(), Vec::new()));
                 blocks.len() - 1
             });
-            blocks[block].2.push(format!("{} ({} member {})", handler.name, handler.cast, handler.member));
+            blocks[block].2.push(format!(
+                "{} ({} member {})",
+                handler.name, handler.cast, handler.member
+            ));
             entries.push(HandlerEntry {
                 name: handler.name.clone(),
                 member: handler.member,
@@ -293,7 +318,10 @@ fn unit_source(unit: &Unit, compiled: &Compiled, names: &Names) -> String {
     for (name, code, _) in &unit.blocks {
         source.push_str(&format!(
             "static const uint8_t {name}[]={{{}}};\n",
-            code.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(",")
+            code.iter()
+                .map(|b| b.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         ));
     }
     let entries: Vec<String> = unit
@@ -330,12 +358,20 @@ fn unit_source(unit: &Unit, compiled: &Compiled, names: &Names) -> String {
         .collect();
     source.push_str(&format!(
         "static const lv_handler_t entries[]={{ {} }};\n",
-        if entries.is_empty() { "{0}".to_string() } else { entries.join(",") }
+        if entries.is_empty() {
+            "{0}".to_string()
+        } else {
+            entries.join(",")
+        }
     ));
     if !unit.doubles.is_empty() {
         source.push_str(&format!(
             "static const double lx_doubles[]={{{}}};\n",
-            unit.doubles.iter().map(|v| float_repr(*v)).collect::<Vec<_>>().join(",")
+            unit.doubles
+                .iter()
+                .map(|v| float_repr(*v))
+                .collect::<Vec<_>>()
+                .join(",")
         ));
     }
     if !unit.entries.is_empty() {
@@ -357,11 +393,18 @@ fn unit_source(unit: &Unit, compiled: &Compiled, names: &Names) -> String {
                     "{{{},{},{}}}",
                     cstring(name),
                     names.id(name),
-                    if *used { compiled.symbol_ids[&fold(name)].to_string() } else { "65535".to_string() }
+                    if *used {
+                        compiled.symbol_ids[&fold(name)].to_string()
+                    } else {
+                        "65535".to_string()
+                    }
                 )
             })
             .collect();
-        source.push_str(&format!("static const lv_name_t lx_names[]={{{}}};\n", records.join(",")));
+        source.push_str(&format!(
+            "static const lv_name_t lx_names[]={{{}}};\n",
+            records.join(",")
+        ));
     }
     let has_entries = !unit.entries.is_empty();
     source.push_str(&format!(
@@ -369,10 +412,26 @@ fn unit_source(unit: &Unit, compiled: &Compiled, names: &Names) -> String {
         unit.symbol,
         cstring(&unit.movie),
         unit.entries.len(),
-        if unit.names.is_empty() { "NULL" } else { "lx_names" },
-        if unit.doubles.is_empty() { "NULL" } else { "lx_doubles" },
-        if has_entries { "lx_handler_order" } else { "NULL" },
-        if has_entries { "lx_handler_buckets" } else { "NULL" },
+        if unit.names.is_empty() {
+            "NULL"
+        } else {
+            "lx_names"
+        },
+        if unit.doubles.is_empty() {
+            "NULL"
+        } else {
+            "lx_doubles"
+        },
+        if has_entries {
+            "lx_handler_order"
+        } else {
+            "NULL"
+        },
+        if has_entries {
+            "lx_handler_buckets"
+        } else {
+            "NULL"
+        },
         unit.bucket_count(),
     ));
     source
@@ -385,12 +444,22 @@ fn symbols_source(compiled: &Compiled) -> String {
         if compiled.symbols.is_empty() {
             "NULL".to_string()
         } else {
-            compiled.symbols.iter().map(|n| cstring(n)).collect::<Vec<_>>().join(",")
+            compiled
+                .symbols
+                .iter()
+                .map(|n| cstring(n))
+                .collect::<Vec<_>>()
+                .join(",")
         }
     ));
     source.push_str(&format!(
         "static const uint16_t buckets[]={{{}}};\n",
-        compiled.symbol_buckets.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+        compiled
+            .symbol_buckets
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
     ));
     source.push_str(&format!(
         "const lb_symbol_table_t lb_symbols={{text, {}, buckets, {}}};\n",
@@ -403,23 +472,32 @@ fn symbols_source(compiled: &Compiled) -> String {
 pub fn generate(program: &Program, output: &Path, names: &Names) -> Result<Summary, String> {
     let compiled = compile_program(program, names)?;
     std::fs::create_dir_all(output).map_err(|e| format!("{}: {e}", output.display()))?;
-    std::fs::write(output.join("symbols.c"), symbols_source(&compiled)).map_err(|e| e.to_string())?;
+    std::fs::write(output.join("symbols.c"), symbols_source(&compiled))
+        .map_err(|e| e.to_string())?;
     let mut specs = Vec::new();
     for unit in &compiled.units {
         let source = unit_source(unit, &compiled, names);
         let mut text = format!("# {} bytecode\n", unit.movie);
         for (name, code, owners) in &unit.blocks {
-            text.push_str(&format!("\n{name}: {}\n{}", owners.join("; "), listing(code)?));
+            text.push_str(&format!(
+                "\n{name}: {}\n{}",
+                owners.join("; "),
+                listing(code)?
+            ));
         }
-        std::fs::write(output.join(format!("{}.c", unit.stem)), &source).map_err(|e| e.to_string())?;
-        std::fs::write(output.join(format!("{}.lst", unit.stem)), &text).map_err(|e| e.to_string())?;
+        std::fs::write(output.join(format!("{}.c", unit.stem)), &source)
+            .map_err(|e| e.to_string())?;
+        std::fs::write(output.join(format!("{}.lst", unit.stem)), &text)
+            .map_err(|e| e.to_string())?;
         specs.push(json!({
             "movie": unit.movie,
             "file": format!("{}.c", unit.stem),
             "symbol": unit.symbol,
             "sha256": hex(&Sha256::digest(source.as_bytes())),
             "handlers": unit.entries.len(),
-            "native_functions": unit.blocks.len(),
+            "code_kind": "bytecode",
+            "native_functions": 0,
+            "bytecode_functions": unit.blocks.len(),
             "bytecode_bytes": unit.bytes,
             "local_calls": unit.local_calls,
             "builtin_calls": unit.builtin_calls,
@@ -431,10 +509,20 @@ pub fn generate(program: &Program, output: &Path, names: &Names) -> Result<Summa
         globals_json.insert(name.clone(), Value::from(i));
     }
     let globals_value = Value::Object(globals_json);
-    std::fs::write(output.join("globals.json"), json_dumps(&globals_value) + "\n").map_err(|e| e.to_string())?;
+    std::fs::write(
+        output.join("globals.json"),
+        json_dumps(&globals_value) + "\n",
+    )
+    .map_err(|e| e.to_string())?;
     std::fs::write(
         output.join("globals.inc"),
-        compiled.globals.iter().map(|n| cstring(n)).collect::<Vec<_>>().join(",\n") + "\n",
+        compiled
+            .globals
+            .iter()
+            .map(|n| cstring(n))
+            .collect::<Vec<_>>()
+            .join(",\n")
+            + "\n",
     )
     .map_err(|e| e.to_string())?;
     let mut manifest = Map::new();
@@ -447,9 +535,16 @@ pub fn generate(program: &Program, output: &Path, names: &Names) -> Result<Summa
     if let Some(fixes) = &program.compatibility_fixes {
         manifest.insert("compatibility_fixes".into(), fixes.clone());
     }
-    std::fs::write(output.join("manifest.json"), json_dumps(&Value::Object(manifest)) + "\n")
-        .map_err(|e| e.to_string())?;
-    Ok(Summary { movies: compiled.units.len(), bytecode_bytes: compiled.bytecode_bytes, globals: compiled.globals.len() })
+    std::fs::write(
+        output.join("manifest.json"),
+        json_dumps(&Value::Object(manifest)) + "\n",
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Summary {
+        movies: compiled.units.len(),
+        bytecode_bytes: compiled.bytecode_bytes,
+        globals: compiled.globals.len(),
+    })
 }
 
 #[cfg(test)]
@@ -468,7 +563,14 @@ mod tests {
 
     #[test]
     fn handler_index_groups_entries_by_name_bucket_in_table_order() {
-        let names = ["exitframe", "ExitFrame", "enterframe", "helper", "helper", "new"];
+        let names = [
+            "exitframe",
+            "ExitFrame",
+            "enterframe",
+            "helper",
+            "helper",
+            "new",
+        ];
         let (order, buckets) = handler_index(&names);
         assert_eq!(buckets.len(), 9);
         assert_eq!((buckets[0], buckets[8]), (0, names.len()));

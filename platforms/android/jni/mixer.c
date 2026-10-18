@@ -1,7 +1,10 @@
 #include "mixer.h"
 #include "decode.h"
+#include "audio_position.h"
+#include "flash_audio.h"
 #include <aaudio/AAudio.h>
 #include <android/log.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -11,18 +14,27 @@
 
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "director64", __VA_ARGS__)
 
-enum { CHANNELS = 8, VIDEO_VOICES = 8, VOICES = CHANNELS + VIDEO_VOICES, JOBS = 32 };
+enum { CHANNELS = 8, VIDEO_VOICES = 8, FLASH_VOICES = 64,
+       VOICES = CHANNELS + VIDEO_VOICES + FLASH_VOICES, JOBS = 80 };
 // Decoded sounds are many times their stored size; keep the recent ones.
 #define CACHE_BYTES (48u * 1024u * 1024u)
 
 typedef struct {
   sound_t *sound;
   double position, rate;
-  bool looping;
+  bool looping, paused;
+  double paused_at, paused_total;
+  double requested, release_offset; // active seconds before loop release; -1 while looping
   double loop_start, loop_end; // in decoded frames
   // A start waiting for its sound to decode: the decoder's answer applies
   // only while the voice still waits for it.
   unsigned pending;
+#if DG_D10
+  bool flash;
+  uint32_t flash_rate,flash_start,flash_end;
+  uint16_t flash_loops;
+  dg_flash_sound_event_t event;
+#endif
 } voice_t;
 
 typedef struct {
@@ -47,6 +59,9 @@ static voice_t voices[VOICES];
 static float gains[VOICES];
 static float master = 1.0f;
 static unsigned video_sprite[VIDEO_VOICES];
+#if DG_D10
+static uint32_t flash_ids[FLASH_VOICES];
+#endif
 static unsigned tokens;
 static cached_t *cache;
 static unsigned cache_count, cache_cap, cache_clock;
@@ -59,6 +74,20 @@ static job_t jobs[JOBS];
 static unsigned job_count;
 static pthread_t worker;
 static bool worker_running, stopping;
+static char failure[512]; // guarded by lock
+
+static void fail(const char *reason, const char *name) {
+  if (!*failure)
+    snprintf(failure, sizeof(failure), "%s: %s", reason, name);
+}
+
+bool audio_error(char *out, size_t capacity) {
+  pthread_mutex_lock(&lock);
+  bool failed = *failure != 0;
+  if (capacity) snprintf(out, capacity, "%s", failure);
+  pthread_mutex_unlock(&lock);
+  return failed;
+}
 
 static double now(void) {
   struct timespec t;
@@ -78,13 +107,23 @@ static aaudio_data_callback_result_t render(AAudioStream *s, void *user, void *d
   for (unsigned v = 0; v < VOICES; v++) {
     voice_t *voice = &voices[v];
     sound_t *sound = voice->sound;
-    if (!sound)
+    if (!sound || voice->paused)
       continue;
     float gain = gains[v] * master;
     double step = voice->rate * sound->rate / output_rate;
     double end = voice->looping ? voice->loop_end : sound->frames;
     const int16_t *pcm = sound->pcm;
     unsigned ch = sound->channels;
+#if DG_D10
+    if(voice->flash) {
+      if(!dg_flash_mix_pcm(pcm,sound->frames,ch,sound->rate,voice->flash_rate,
+          voice->flash_start,voice->flash_end,voice->flash_loops,&voice->event,
+          &voice->position,out,(unsigned)frames,(unsigned)output_rate,gain)) {
+        voice->sound=NULL;sound_release(sound);
+      }
+      continue;
+    }
+#endif
     for (int32_t i = 0; i < frames; i++) {
       if (voice->position >= end) {
         if (!voice->looping || voice->loop_end <= voice->loop_start) {
@@ -207,25 +246,20 @@ static void start(unsigned v, sound_t *sound, bool looping, uint32_t loop_start,
     sound_release(voice->sound);
   voice->sound = NULL;
   voice->pending = 0;
-  double position = offset * sound->rate;
-  voice->looping = looping;
-  voice->loop_start = 0;
-  voice->loop_end = sound->frames;
-  if (looping) {
-    // The console's rule (platforms/n64/audio_bounds.h): the loop end clamps
-    // to the decoded length, and an empty loop loops the whole sound.
-    uint32_t end = loop_end < sound->frames ? loop_end : sound->frames;
-    if (loop_start < end) {
-      voice->loop_start = loop_start;
-      voice->loop_end = end;
-    }
-    while (position >= voice->loop_end && voice->loop_end > voice->loop_start)
-      position -= voice->loop_end - voice->loop_start;
-  } else if (position >= sound->frames) {
-    sound_release(sound);
-    return;
+#if DG_D10
+  if(voice->flash) {
+    double duration=(double)(voice->flash_end-voice->flash_start)*voice->flash_loops/voice->flash_rate;
+    if(offset>=duration){sound_release(sound);return;}
+    voice->position=offset*sound->rate;voice->rate=1;voice->sound=sound;return;
   }
-  voice->position = position;
+#endif
+  audio_start_position_t at = audio_start_position(sound->frames, sound->rate,
+      looping, loop_start, loop_end, offset, voice->release_offset);
+  voice->looping = at.looping;
+  voice->loop_start = at.loop_start;
+  voice->loop_end = at.loop_end;
+  if (!at.looping && at.position >= sound->frames) { sound_release(sound); return; }
+  voice->position = at.position;
   voice->rate = voice->rate > 0 ? voice->rate : 1.0;
   voice->sound = sound;
 }
@@ -233,9 +267,15 @@ static void start(unsigned v, sound_t *sound, bool looping, uint32_t loop_start,
 static void stop_voice(unsigned v) {
   voice_t *voice = &voices[v];
   voice->pending = 0;
+  voice->paused = false;
+  voice->paused_total = 0;
+  voice->release_offset = -1;
   if (voice->sound)
     sound_release(voice->sound);
   voice->sound = NULL;
+#if DG_D10
+  free((void *)voice->event.envelopes);memset(&voice->event,0,sizeof(voice->event));voice->flash=false;
+#endif
 }
 
 static void *decoder(void *arg) {
@@ -252,18 +292,23 @@ static void *decoder(void *arg) {
       continue;
     pthread_mutex_unlock(&lock);
     sound_t *sound = NULL;
+    char decode_error[160] = "could not decode sound";
     if (job.bytes && is_wav(job.bytes, job.length))
       sound = decode_wav(job.bytes, job.length);
     else
-      sound = decode_media(job.stream ? stream_pack->fd : sound_pack->fd, job.offset, job.length);
+      sound = decode_media(job.stream ? stream_pack->fd : sound_pack->fd, job.offset,
+                           job.length, decode_error, sizeof(decode_error));
     if (!sound)
       LOG("could not decode %s", job.name);
     pthread_mutex_lock(&lock);
+    if (!sound && voices[job.voice].pending == job.token)
+      fail(decode_error, job.name);
     if (sound && !job.stream)
       keep(job.name, sound);
     if (sound && voices[job.voice].pending == job.token)
       start(job.voice, sound_retain(sound), job.looping, job.loop_start, job.loop_end,
-            job.offset_seconds + (now() - job.requested));
+            job.offset_seconds + ((voices[job.voice].paused ? voices[job.voice].paused_at : now())
+                                  - job.requested - voices[job.voice].paused_total));
     sound_release(sound);
   }
   pthread_mutex_unlock(&lock);
@@ -281,27 +326,36 @@ static void play_entry(unsigned v, const pack_t *pack, const pack_entry_t *entry
     sound = decode_wav(bytes, entry->length);
     if (sound && !stream_entry)
       keep(name, sound);
-    if (!sound)
+    if (!sound) {
       LOG("malformed sound %s", name);
+      fail("malformed sound", name);
+      return;
+    }
   }
   if (sound) {
     start(v, sound, looping, loop_start, loop_end, offset);
     return;
   }
-  if (job_count == JOBS)
+  if (job_count == JOBS) {
+    fail("audio decode queue full", name);
     return;
+  }
   unsigned token = ++tokens ? tokens : ++tokens;
   voices[v].pending = token;
+  voices[v].requested = now();
   job_t *job = &jobs[job_count++];
   *job = (job_t){.voice = v, .token = token, .bytes = bytes, .offset = pack->base + entry->offset,
                  .length = entry->length, .looping = looping, .stream = stream_entry,
-                 .loop_start = loop_start, .loop_end = loop_end, .requested = now(),
+                 .loop_start = loop_start, .loop_end = loop_end, .requested = voices[v].requested,
                  .offset_seconds = offset};
   snprintf(job->name, sizeof(job->name), "%s", name);
   pthread_cond_signal(&wake);
 }
 
 void audio_init(const pack_t *sounds, const pack_t *streams) {
+  failure[0] = 0;
+  atomic_store(&suspended, false);
+  atomic_store(&disconnected, false);
   sound_pack = sounds;
   stream_pack = streams;
   for (unsigned i = 0; i < VOICES; i++) {
@@ -310,6 +364,7 @@ void audio_init(const pack_t *sounds, const pack_t *streams) {
   }
   stopping = false;
   worker_running = pthread_create(&worker, NULL, decoder, NULL) == 0;
+  if (!worker_running) fail("could not start audio decoder", "worker");
   open_output();
 }
 
@@ -333,6 +388,10 @@ void audio_shutdown(void) {
   cache = NULL;
   cache_count = cache_cap = 0;
   cache_bytes = 0;
+  memset(video_sprite, 0, sizeof(video_sprite));
+#if DG_D10
+  memset(flash_ids, 0, sizeof(flash_ids));
+#endif
 }
 
 void audio_play(unsigned channel, const char *name, bool looping, uint32_t loop_start,
@@ -344,8 +403,10 @@ void audio_play(unsigned channel, const char *name, bool looping, uint32_t loop_
   const pack_entry_t *entry = name ? pack_find(sound_pack, name) : NULL;
   if (entry)
     play_entry(channel, sound_pack, entry, name, false, looping, loop_start, loop_end, 0);
-  else if (name)
+  else if (name) {
     LOG("missing sound %s", name);
+    fail("missing sound", name);
+  }
   pthread_mutex_unlock(&lock);
 }
 
@@ -357,10 +418,27 @@ uint32_t audio_play_stream(unsigned channel, const char *name) {
   const pack_entry_t *entry = name ? pack_find(stream_pack, name) : NULL;
   if (entry)
     play_entry(channel, stream_pack, entry, name, true, false, 0, 0, 0);
-  else if (name)
+  else if (name) {
     LOG("missing stream %s", name);
+    fail("missing sound stream", name);
+  }
   pthread_mutex_unlock(&lock);
   return entry ? entry->extra : 0;
+}
+
+void audio_pause(unsigned channel, bool paused) {
+  if (channel >= CHANNELS)
+    return;
+  pthread_mutex_lock(&lock);
+  voice_t *voice = &voices[channel];
+  if (voice->paused != paused && (voice->sound || voice->pending)) {
+    if (paused)
+      voice->paused_at = now();
+    else
+      voice->paused_total += now() - voice->paused_at;
+    voice->paused = paused;
+  }
+  pthread_mutex_unlock(&lock);
 }
 
 void audio_stop(unsigned channel) {
@@ -368,6 +446,19 @@ void audio_stop(unsigned channel) {
     return;
   pthread_mutex_lock(&lock);
   stop_voice(channel);
+  pthread_mutex_unlock(&lock);
+}
+void audio_break_loop(unsigned channel) {
+  if (channel >= CHANNELS) return;
+  pthread_mutex_lock(&lock);
+  voice_t *voice = &voices[channel];
+  if (voice->pending && voice->release_offset < 0)
+    voice->release_offset = fmax(0, (voice->paused ? voice->paused_at : now()) - voice->requested - voice->paused_total);
+  if (voice->sound && voice->looping) {
+    if (voice->position >= voice->loop_end && voice->loop_end > voice->loop_start)
+      voice->position = voice->loop_start + fmod(voice->position - voice->loop_start, voice->loop_end - voice->loop_start);
+    voice->looping = false;
+  }
   pthread_mutex_unlock(&lock);
 }
 
@@ -383,6 +474,9 @@ void audio_stop_all(void) {
   for (unsigned i = 0; i < VOICES; i++)
     stop_voice(i);
   memset(video_sprite, 0, sizeof(video_sprite));
+#if DG_D10
+  memset(flash_ids,0,sizeof(flash_ids));
+#endif
   pthread_mutex_unlock(&lock);
 }
 
@@ -437,3 +531,41 @@ void audio_stop_video(unsigned sprite) {
   }
   pthread_mutex_unlock(&lock);
 }
+#if DG_D10
+void audio_flash_update(uint32_t id,const dg_flash_audio_t *request) {
+  pthread_mutex_lock(&lock);
+  unsigned slot=0;while(slot<FLASH_VOICES&&flash_ids[slot]!=id)slot++;
+  if(!request) {
+    if(slot<FLASH_VOICES){stop_voice(CHANNELS+VIDEO_VOICES+slot);flash_ids[slot]=0;}
+    pthread_mutex_unlock(&lock);return;
+  }
+  bool fresh=slot==FLASH_VOICES;
+  if(fresh){slot=0;while(slot<FLASH_VOICES&&flash_ids[slot])slot++;}
+  if(slot==FLASH_VOICES){fail("concurrent Flash event sound capacity exceeded","");pthread_mutex_unlock(&lock);return;}
+  unsigned index=CHANNELS+VIDEO_VOICES+slot;voice_t *voice=&voices[index];
+  if(fresh) {
+    const pack_entry_t *entry=pack_find(sound_pack,request->sound->asset);
+    if(!entry){fail("missing Flash event sound",request->sound->asset);pthread_mutex_unlock(&lock);return;}
+    stop_voice(index);flash_ids[slot]=id;voice->flash=true;
+    voice->flash_rate=request->sound->rate;voice->flash_start=request->start_sample;
+    voice->flash_end=request->end_sample;voice->flash_loops=request->loops;
+    if(request->event)voice->event=*request->event;
+    voice->event.envelopes=NULL;
+    if(voice->event.envelope_count) {
+      dg_flash_envelope_t *points=malloc(voice->event.envelope_count*sizeof(*points));
+      if(!points){fail("Flash event envelope allocation failed","");flash_ids[slot]=0;pthread_mutex_unlock(&lock);return;}
+      memcpy(points,request->event->envelopes,voice->event.envelope_count*sizeof(*points));voice->event.envelopes=points;
+    }
+    play_entry(index,sound_pack,entry,request->sound->asset,false,false,0,0,
+        (double)request->position/request->sound->rate);
+  }
+  gains[index]=request->gain;
+  if(voice->paused!=request->paused) {
+    double stamp=now();
+    if(request->paused)voice->paused_at=stamp;
+    else voice->paused_total+=stamp-voice->paused_at;
+    voice->paused=request->paused;
+  }
+  pthread_mutex_unlock(&lock);
+}
+#endif

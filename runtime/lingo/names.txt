@@ -177,6 +177,7 @@ forget
 frame
 framecount
 framelabel
+framerate
 framesound1
 framesound2
 framestohms
@@ -331,6 +332,7 @@ paramcount
 parsestring
 pass
 pathname
+pattern
 pause
 pausedatstart
 period
@@ -426,6 +428,7 @@ skew
 sleep
 sort
 sound
+sound_fadein
 sound_fadeout
 sound_playfile
 sound_stop

@@ -242,6 +242,8 @@ static lv_t allocate(lv_runtime_t *r, unsigned type, unsigned count) {
   allocation_append(r, handle);
 #endif
   r->object_count++;
+  if (r->object_count > r->object_high_water)
+    r->object_high_water = r->object_count;
   r->object_hint = handle + 1;
   if (r->object_limit <= handle) r->object_limit = handle + 1;
   if (offset + bytes > r->heap_used) {
@@ -599,6 +601,9 @@ bool lv_has_reference(lv_runtime_t *r, lv_type_t type, int32_t id) {
   // expression is atomic. Unreachable heap garbage must not retain FileIO slots.
   uint8_t seen[(LV_OBJECTS + 7) / 8] = {0};
 #define REFERENCED(value) referenced(r, value, type, id, seen, 0)
+  for (lv_root_span_t *span = r->external_roots; span; span = span->next)
+    for (unsigned i = 0; i < span->count; i++)
+      if (REFERENCED(span->values[i])) return true;
   for (unsigned i = 0; i < r->global_count; i++)
     if (REFERENCED(r->globals[i])) return true;
   for (unsigned i = 0; i < LV_ROOTS; i++)
@@ -620,6 +625,8 @@ bool lv_has_reference(lv_runtime_t *r, lv_type_t type, int32_t id) {
 #if DG_EXTENDED && !DG_D7_UP
 #endif
 static void mark_roots(lv_runtime_t *r) {
+  for (lv_root_span_t *span = r->external_roots; span; span = span->next)
+    for (unsigned i = 0; i < span->count; i++) mark(r, span->values[i], 0);
   for (unsigned i = 0; i < r->global_count; i++)
     mark(r, r->globals[i], 0);
   for (unsigned i = 0; i < LV_ROOTS; i++)
@@ -1293,6 +1300,11 @@ lv_t lv_index_get(lv_runtime_t *r, lv_t owner, lv_t key) {
     return lv_at(r, owner, index * 2);
   }
   if (lv_type(owner) == LV_PROPLIST || lv_type(owner) == LV_INSTANCE) {
+    if (lv_type(owner) == LV_PROPLIST && r->services.property_get &&
+        (lv_type(key) == LV_SYMBOL || lv_type(key) == LV_STRING)) {
+      lv_t value;
+      if (r->services.property_get(r, owner, lv_cstr(r, key), &value)) return value;
+    }
     unsigned index = prop_index(r, owner, key);
     return index ? lv_at(r, owner, index) : (lv_t){0};
   }
@@ -1314,10 +1326,16 @@ void lv_index_set(lv_runtime_t *r, lv_t owner, lv_t key, lv_t value) {
     unsigned index = (unsigned)lv_integer(r, key);
     if (!index || index > lv_count(r, owner))
       lv_script_fail(r, "property list index out of range");
-    else lv_set_at(r, owner, index * 2, value);
+    else {
+      if(r->services.property_set && r->services.property_set(r,owner,lv_cstr(r,lv_at(r,owner,index*2-1)),value))return;
+      lv_set_at(r, owner, index * 2, value);
+      if (r->services.property_changed)
+        r->services.property_changed(r, owner, lv_cstr(r, lv_at(r, owner, index * 2 - 1)));
+    }
     return;
   }
   if (lv_type(owner) == LV_PROPLIST || lv_type(owner) == LV_INSTANCE) {
+    if(lv_type(owner)==LV_PROPLIST && r->services.property_set && r->services.property_set(r,owner,lv_cstr(r,key),value))return;
     unsigned index = prop_index(r, owner, key);
     if (!index) {
       lv_object_t *o = object(r, owner);
@@ -1327,6 +1345,8 @@ void lv_index_set(lv_runtime_t *r, lv_t owner, lv_t key, lv_t value) {
       lv_set_at(r, owner, index - 1, key);
     }
     lv_set_at(r, owner, index, value);
+    if (lv_type(owner) == LV_PROPLIST && r->services.property_changed)
+      r->services.property_changed(r, owner, lv_cstr(r, key));
     return;
   }
   lv_set_at(r, owner, (unsigned)lv_integer(r, key), value);
@@ -1437,6 +1457,10 @@ lv_t lv_get(lv_runtime_t *r, lv_frame_t *f, const char *property, lv_t owner) {
       lv_type(owner) == LV_SCRIPT) {
     if (lv_type(owner) == LV_PROPLIST && (ln == LN_COUNT))
       return lv_num(lv_count(r, owner));
+    if (lv_type(owner) == LV_PROPLIST && r->services.property_get) {
+      lv_t value;
+      if (r->services.property_get(r, owner, property, &value)) return value;
+    }
     if (lv_type(owner) == LV_SCRIPT) owner = singleton(r, owner);
     unsigned index = inherited_property(r, &owner, property);
 #if DG_D10
@@ -1493,6 +1517,7 @@ void lv_set(lv_runtime_t *r, lv_frame_t *f, const char *property, lv_t owner,
             lv_t value) {
   unsigned ln = lv_name_id(r, property);
   (void)f;
+  if(lv_type(owner)==LV_PROPLIST && r->services.property_set && r->services.property_set(r,owner,property,value))return;
   if (lv_type(owner) == LV_VOID && (ln == LN_ITEMDELIMITER)) {
     r->item_delimiter = (unsigned char)*lv_cstr(r, value);
     return;
@@ -1508,6 +1533,8 @@ void lv_set(lv_runtime_t *r, lv_frame_t *f, const char *property, lv_t owner,
       lv_set_at(r, owner, index - 1, lv_text(r, property, true));
     }
     lv_set_at(r, owner, index, value);
+    if (lv_type(owner) == LV_PROPLIST && r->services.property_changed)
+      r->services.property_changed(r, owner, property);
     return;
   }
   if (lv_type(owner) == LV_LIST) {
@@ -1974,6 +2001,9 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
   if (ln == LN_XTRA) goto service;
   if (ln == LN_DUPLICATE) {
     ARITY(1);
+#if DG_D10
+    if (lv_type(args[0]) == LV_IMAGE) goto service;
+#endif
     if (lv_type(args[0]) != LV_LIST && lv_type(args[0]) != LV_PROPLIST) {
       *result = args[0];
       return true;
@@ -2479,7 +2509,7 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
                      // Members are objects from Director 7 on: the Findus 8.5
                      // lip sync tests behavior parameters this way against a
                      // "(kein Mund)" text default.
-                     || lv_type(args[0]) == LV_MEMBER
+                     || lv_type(args[0]) == LV_MEMBER || lv_type(args[0]) == LV_IMAGE
 #endif
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
                      // Lists are objects too: Circus's engine keeps its

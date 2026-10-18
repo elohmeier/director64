@@ -1,0 +1,45 @@
+-- Synthetic pixel inputs only; see docs/reference-capture.md.
+global p,q,out,pm,qm
+out=new(xtra("fileio"))
+out.createFile("C:\ink-alpha.txt")
+out.openFile("C:\ink-alpha.txt",2)
+pm=new(#bitmap)
+qm=new(#bitmap)
+q=image(8,8,32)
+q.fill(rect(0,0,8,8),rgb(0,0,255))
+qm.image=q
+puppetSprite(148,1)
+puppetSprite(149,1)
+sprite(148).member=qm
+sprite(148).rect=rect(0,0,8,8)
+sprite(148).ink=0
+repeat with depth in [1,8,32]
+ repeat with sc in [rgb(255,255,255),rgb(255,0,0)]
+  repeat with opacity in [0,255]
+   repeat with useFlag in [0,1]
+    if depth=32 then
+     p=image(8,8,32,8)
+    else
+     p=image(8,8,depth)
+    end if
+    p.fill(rect(0,0,8,8),sc)
+    if depth=32 then p.setAlpha(opacity)
+    pm.image=p
+    if depth=32 then pm.useAlpha=useFlag
+    sprite(149).member=pm
+    sprite(149).rect=rect(0,0,8,8)
+    sprite(149).color=rgb(0,0,0)
+    sprite(149).bgColor=rgb(255,255,255)
+    repeat with ink in [0,8]
+     repeat with blend in [50,100]
+      sprite(149).ink=ink
+      sprite(149).blend=blend
+      updateStage
+      out.writeString(string([depth,sc,opacity,useFlag,pm.useAlpha,ink,blend,(the stage).image.getPixel(point(4,4))]) & RETURN)
+     end repeat
+    end repeat
+   end repeat
+  end repeat
+ end repeat
+end repeat
+out.closeFile()

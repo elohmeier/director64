@@ -1,0 +1,36 @@
+-- Synthetic shape pixels only; no game assets or recovered scripts.
+global out, pm, snapshot, patternId, origin, row, column, bits, pixel, paletteMode
+out=new(xtra("fileio"))
+out.createFile("C:\shape-palette.txt")
+out.openFile("C:\shape-palette.txt",2)
+pm=new(#shape)
+pm.shapeType=#rect
+pm.filled=1
+pm.lineSize=0
+pm.rect=rect(0,0,64,64)
+puppetSprite(149,1)
+sprite(149).member=pm
+sprite(149).visible=1
+sprite(149).ink=0
+sprite(149).blend=100
+sprite(149).color=rgb(0,0,0)
+sprite(149).bgColor=rgb(255,255,255)
+repeat with paletteMode in ["System - Mac","System - Win"]
+ puppetPalette paletteMode
+ origin=point(0,0)
+ sprite(149).rect=rect(origin.locH,origin.locV,origin.locH+64,origin.locV+64)
+ repeat with patternId in [58]
+  pm.pattern=patternId
+  updateStage
+  snapshot=(the stage).image
+  repeat with row=0 to 15
+   bits=[]
+   repeat with column=0 to 15
+    pixel=snapshot.getPixel(point(origin.locH+column,origin.locV+row))
+    bits.add(pixel)
+   end repeat
+   out.writeString(string([paletteMode,patternId,row,bits])&RETURN)
+  end repeat
+ end repeat
+end repeat
+out.closeFile()

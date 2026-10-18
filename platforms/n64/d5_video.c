@@ -1,10 +1,14 @@
 #include "d5_video.h"
+#if DG_D10
+#include "flash_audio.h"
+#endif
 #include <libdragon.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 typedef struct {
+  unsigned identity;
   unsigned sprite, member, serial;
   int frame;
   video_t *video;
@@ -45,23 +49,53 @@ void d5_video_init(void) {
   video_register_codec(&h264_codec);
 }
 void d5_video_close(void) {
+#if DG_D10
+  flash_audio_close();
+#endif
   for (unsigned i = 0; i < D5_VIDEO_SLOTS; i++)
     close_slot(i);
 }
+typedef struct { dg_runtime_t *owner; unsigned channel; const dg_member_t *member; bool sound, paused; } video_request_t;
+static bool video_requests(dg_runtime_t *d, video_request_t *requests, unsigned *count, bool sound, bool paused) {
+  for (unsigned ch = 1; ch < DG_SPRITES; ch++) {
+    dg_sprite_t *s = &d->sprites[ch];
+    if (!s->value.type) continue;
+    const dg_member_t *m = dg_member(d, s->value.member);
+    if (dg_has_media(m)) {
+      if (*count == D5_VIDEO_SLOTS) { lv_fail(d->values, "concurrent digital video capacity exceeded"); return false; }
+      requests[(*count)++] = (video_request_t){d,ch,m,sound,paused};
+    }
+#if DG_D10
+    if (dg_linked_movie(d,ch)) {
+      dg_runtime_t *child = dg_linked_begin(d,ch);
+      bool ok = child && video_requests(child,requests,count,sound && m && (m->linked_flags & 8), paused || s->film_paused || child->linked_paused);
+      dg_linked_end(d);
+      if (!ok) return false;
+    }
+#endif
+  }
+  return true;
+}
 void d5_video_update(dg_runtime_t *d, float volume) {
+  video_request_t requests[D5_VIDEO_SLOTS];
+  unsigned count = 0;
+  if (!video_requests(d,requests,&count,true,false)) return;
+  // Never dereference a slot's old owner: its child context may have gone away.
   for (unsigned i = 0; i < D5_VIDEO_SLOTS; i++) {
     video_slot_t *v = &slots[i];
-    if (v->sprite && (!d->sprites[v->sprite].value.type ||
-                      d->sprites[v->sprite].value.member != v->member))
-      close_slot(i);
+    bool found = false;
+    for (unsigned n = 0; n < count; n++)
+      if (v->identity == dg_video_player_id(requests[n].owner, requests[n].channel) &&
+          v->member == requests[n].member->id) found = true;
+    if (v->sprite && !found) close_slot(i);
   }
-  for (unsigned channel = 1; channel < DG_SPRITES; channel++) {
-    dg_sprite_t *s = &d->sprites[channel];
-    const dg_member_t *m = dg_member(d, s->value.member);
-    if (!m || m->type != 10 || !s->value.type)
-      continue;
+  for (unsigned n = 0; n < count; n++) {
+    dg_runtime_t *owner = requests[n].owner;
+    unsigned channel = requests[n].channel;
+    dg_sprite_t *s = &owner->sprites[channel];
+    const dg_member_t *m = requests[n].member;
     unsigned slot = 0;
-    while (slot < D5_VIDEO_SLOTS && slots[slot].sprite != channel)
+    while (slot < D5_VIDEO_SLOTS && slots[slot].identity != dg_video_player_id(owner, channel))
       slot++;
     if (slot == D5_VIDEO_SLOTS) {
       slot = 0;
@@ -72,12 +106,13 @@ void d5_video_update(dg_runtime_t *d, float volume) {
         return;
       }
       video_slot_t *v = &slots[slot];
+      v->identity = dg_video_player_id(owner, channel);
       v->sprite = channel;
       v->member = m->id;
       v->frame = -1;
       video_revision++;
       char path[128];
-      if (m->asset && *m->asset && !(m->video_flags & 512)) {
+      if (dg_is_video(m) && m->asset && *m->asset && !(m->video_flags & 512)) {
         snprintf(path, sizeof(path), "rom:/video/%s", m->asset);
         v->video = video_open(path, NULL);
         if (!v->video) {
@@ -86,7 +121,7 @@ void d5_video_update(dg_runtime_t *d, float volume) {
         }
         v->info = video_get_info(v->video);
       }
-      if (m->video_audio && *m->video_audio && (m->video_flags & 8)) {
+      if (m->video_audio && *m->video_audio && dg_media_sound(m)) {
         snprintf(path, sizeof(path), "rom:/audio/%s", m->video_audio);
         wav64_open(&v->audio, path);
         v->audio_open = true;
@@ -117,7 +152,7 @@ void d5_video_update(dg_runtime_t *d, float volume) {
     }
     if (v->audio_open) {
       unsigned ch = voice(slot);
-      bool play = s->video_rate > 0 && s->video_time < m->samples;
+      bool play = requests[n].sound && !requests[n].paused && s->video_rate > 0 && s->video_time < dg_media_duration(m);
       if (play && (!v->playing || v->serial != s->video_serial)) {
         if (!v->playing)
           wav64_play(&v->audio, ch);
@@ -134,10 +169,19 @@ void d5_video_update(dg_runtime_t *d, float volume) {
     v->rate = s->video_rate;
   }
 }
-void d5_video_draw(unsigned sprite, int l, int t, int r, int b) {
+bool d5_video_dimensions(const dg_runtime_t *owner, unsigned sprite, unsigned *width, unsigned *height) {
+  for (unsigned i=0;i<D5_VIDEO_SLOTS;i++) {
+    const video_slot_t *v=&slots[i];
+    if (v->identity == dg_video_player_id(owner,sprite) && v->video && v->frame>=0) {
+      *width=v->info.width; *height=v->info.height; return true;
+    }
+  }
+  return false;
+}
+void d5_video_draw(const dg_runtime_t *owner, unsigned sprite, int l, int t, int r, int b) {
   for (unsigned i = 0; i < D5_VIDEO_SLOTS; i++) {
     video_slot_t *v = &slots[i];
-    if (v->sprite != sprite || !v->video || v->frame < 0)
+    if (v->identity != dg_video_player_id(owner, sprite) || !v->video || v->frame < 0)
       continue;
     yuv_frame_t frame = video_get_frame(v->video);
     yuv_tex_blit(&frame, l, t,

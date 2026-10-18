@@ -40,7 +40,10 @@ fn main() -> ExitCode {
             None => return usage(),
         }
     }
-    if positional.first().is_some_and(|p| p.as_os_str() == "director") {
+    if positional
+        .first()
+        .is_some_and(|p| p.as_os_str() == "director")
+    {
         return match director(&positional[1..]) {
             Ok(summary) => {
                 println!("{summary}");
@@ -52,10 +55,24 @@ fn main() -> ExitCode {
             }
         };
     }
-    if positional.first().is_some_and(|p| p.as_os_str() == "lingo-server") {
+    if positional
+        .first()
+        .is_some_and(|p| p.as_os_str() == "lingo-server")
+    {
         return lingo_server();
     }
-    let result = if positional.first().is_some_and(|p| p.as_os_str() == "iso-inventory") {
+    let result = if positional
+        .first()
+        .is_some_and(|p| p.as_os_str() == "capabilities")
+    {
+        if positional.len() != 3 {
+            return usage();
+        }
+        capabilities(&positional[1], &positional[2])
+    } else if positional
+        .first()
+        .is_some_and(|p| p.as_os_str() == "iso-inventory")
+    {
         if positional.len() != 2 {
             return usage();
         }
@@ -75,11 +92,21 @@ fn main() -> ExitCode {
             return usage();
         }
         lingo(&positional[1], &positional[2])
-    } else if positional.first().is_some_and(|p| p.as_os_str() == "package") {
+    } else if positional
+        .first()
+        .is_some_and(|p| p.as_os_str() == "package")
+    {
         if positional.len() != 4 {
             return usage();
         }
-        package(&positional[1], &positional[2], &positional[3], &names_path, &bytecode_path, meta_path.as_ref())
+        package(
+            &positional[1],
+            &positional[2],
+            &positional[3],
+            &names_path,
+            &bytecode_path,
+            meta_path.as_ref(),
+        )
     } else if positional.len() == 2 {
         run(&positional[0], &positional[1], &names_path)
     } else {
@@ -97,11 +124,28 @@ fn main() -> ExitCode {
     }
 }
 
+fn capabilities(path: &PathBuf, target: &PathBuf) -> Result<String, String> {
+    use director64_aot::capabilities::{Target, audit};
+    let source = if path.as_os_str() == "-" {
+        std::io::read_to_string(std::io::stdin()).map_err(|e| e.to_string())?
+    } else {
+        read(path)?
+    };
+    let model = serde_json::from_str(&source).map_err(|e| format!("model: {e}"))?;
+    let report = audit(
+        &model,
+        Target::parse(target.to_str().ok_or("invalid target")?)?,
+        None,
+    )?;
+    serde_json::to_string_pretty(&report).map_err(|e| e.to_string())
+}
+
 fn usage() -> ExitCode {
     eprintln!(
         "usage: director64-aot <program.json> <output dir> [--names names.txt]\n       \
          director64-aot package <program.json> <model.json> <output.d64p> [--names names.txt] \
-         [--bytecode lingo_bytecode.h] [--meta meta.json]"
+         [--bytecode lingo_bytecode.h] [--meta meta.json]\n       \
+         director64-aot capabilities <model.json|-> <web|android|n64>"
     );
     ExitCode::from(2)
 }
@@ -115,19 +159,30 @@ fn lingo_server() -> ExitCode {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
     for line in stdin.lock().lines() {
-        let Ok(line) = line else { return ExitCode::FAILURE };
+        let Ok(line) = line else {
+            return ExitCode::FAILURE;
+        };
         let reply = (|| -> Result<serde_json::Value, String> {
-            let request: serde_json::Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
-            let text = |v: &serde_json::Value| v.as_str().map(str::to_string).ok_or("expected text".to_string());
-            let pairs = |v: &serde_json::Value| -> Result<Vec<(serde_json::Value, String)>, String> {
-                v.as_array()
-                    .ok_or("expected pairs")?
-                    .iter()
-                    .map(|p| Ok((p[0].clone(), text(&p[1])?)))
-                    .collect()
+            let request: serde_json::Value =
+                serde_json::from_str(&line).map_err(|e| e.to_string())?;
+            let text = |v: &serde_json::Value| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or("expected text".to_string())
             };
+            let pairs =
+                |v: &serde_json::Value| -> Result<Vec<(serde_json::Value, String)>, String> {
+                    v.as_array()
+                        .ok_or("expected pairs")?
+                        .iter()
+                        .map(|p| Ok((p[0].clone(), text(&p[1])?)))
+                        .collect()
+                };
             if let Some(movie) = request.get("movie") {
-                Ok(serde_json::Value::Array(lingo::parse_movie(&text(&movie[0])?, &text(&movie[1])?)?))
+                Ok(serde_json::Value::Array(lingo::parse_movie(
+                    &text(&movie[0])?,
+                    &text(&movie[1])?,
+                )?))
             } else if let Some(expression) = request.get("expression") {
                 lingo::expression(&text(expression)?)
             } else if let Some(lines) = request.get("block") {
@@ -137,8 +192,10 @@ fn lingo_server() -> ExitCode {
                     .collect();
                 Ok(serde_json::Value::Array(lingo::block(&lines)?))
             } else if let Some(files) = request.get("program") {
-                let files: Vec<(String, String)> =
-                    pairs(files)?.into_iter().map(|(n, t)| (n.as_str().unwrap_or("").to_string(), t)).collect();
+                let files: Vec<(String, String)> = pairs(files)?
+                    .into_iter()
+                    .map(|(n, t)| (n.as_str().unwrap_or("").to_string(), t))
+                    .collect();
                 lingo::program(&files)
             } else {
                 Err("unknown request".into())
@@ -148,7 +205,10 @@ fn lingo_server() -> ExitCode {
             Ok(value) => serde_json::json!({"ok": value}),
             Err(error) => serde_json::json!({"error": error}),
         };
-        if writeln!(stdout, "{out}").and_then(|_| stdout.flush()).is_err() {
+        if writeln!(stdout, "{out}")
+            .and_then(|_| stdout.flush())
+            .is_err()
+        {
             return ExitCode::FAILURE;
         }
     }
@@ -164,25 +224,57 @@ fn lingo_server() -> ExitCode {
 fn director(args: &[PathBuf]) -> Result<String, String> {
     use director64_aot::convert::{analyze, audit, compile, files::Disk, js, plan, recover};
     let text = |i: usize| -> Result<String, String> {
-        args.get(i).and_then(|p| p.to_str()).map(str::to_string).ok_or_else(|| "missing argument".to_string())
+        args.get(i)
+            .and_then(|p| p.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| "missing argument".to_string())
     };
     let json_file = |i: usize| -> Result<serde_json::Value, String> {
-        serde_json::from_str(&read(&args.get(i).cloned().ok_or("missing argument")?)?).map_err(|e| e.to_string())
+        serde_json::from_str(&read(&args.get(i).cloned().ok_or("missing argument")?)?)
+            .map_err(|e| e.to_string())
     };
-    let mut fs = Disk { root: std::env::current_dir().map_err(|e| e.to_string())? };
+    let mut fs = Disk {
+        root: std::env::current_dir().map_err(|e| e.to_string())?,
+    };
     match text(0)?.as_str() {
         "plan" => {
             let plan = plan::write_plan(&mut fs, &text(1)?, &json_file(2)?, &text(3)?)?;
-            Ok(format!("Planned {} Director parses", plan["dumps"].as_array().map_or(0, Vec::len)))
+            Ok(format!(
+                "Planned {} Director parses",
+                plan["dumps"].as_array().map_or(0, Vec::len)
+            ))
         }
         "analyze" => {
-            let now = std::process::Command::new("date").args(["-u", "+%Y-%m-%dT%H:%M:%S.000Z"]).output()
-                .ok().and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or_default();
-            let totals = analyze::analyze(&mut fs, &text(1)?, &text(2)?, &text(3)?, &json_file(4)?, now.trim())?;
+            let now = std::process::Command::new("date")
+                .args(["-u", "+%Y-%m-%dT%H:%M:%S.000Z"])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .unwrap_or_default();
+            let totals = analyze::analyze(
+                &mut fs,
+                &text(1)?,
+                &text(2)?,
+                &text(3)?,
+                &json_file(4)?,
+                now.trim(),
+            )?;
             Ok(js::stringify_pretty(&totals))
         }
-        "audit" => Ok(js::serialize(&audit::audit(&mut fs, &text(1)?, &text(2)?, &text(3)?, &json_file(4)?, &text(5)?)?)),
-        "recover" => Ok(js::stringify_pretty(&recover::recover(&mut fs, &text(1)?, &text(2)?, &recover::provenance())?)),
+        "audit" => Ok(js::serialize(&audit::audit(
+            &mut fs,
+            &text(1)?,
+            &text(2)?,
+            &text(3)?,
+            &json_file(4)?,
+            &text(5)?,
+        )?)),
+        "recover" => Ok(js::stringify_pretty(&recover::recover(
+            &mut fs,
+            &text(1)?,
+            &text(2)?,
+            &recover::provenance(),
+        )?)),
         // director port-program PROGRAM SOURCE-MANIFEST SLUG SOURCE-SHA [LAUNCHER] [compat]
         "port-program" => {
             let port = director64_aot::ports::Port {
@@ -191,7 +283,8 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                 launcher_movie: text(5).ok().filter(|m| m != "-"),
                 native_compatibility: text(6).is_ok_and(|c| c == "compat"),
             };
-            let program = director64_aot::ports::executable_program(&json_file(1)?, &port, &json_file(2)?)?;
+            let program =
+                director64_aot::ports::executable_program(&json_file(1)?, &port, &json_file(2)?)?;
             Ok(program.to_string())
         }
         // director port-plan SLUG MODEL
@@ -199,10 +292,17 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
         // director port-model MODEL SLUG SUBSTITUTE-TTF DATA-FILES [KEY=FONT64 ...] [external=RECORDS.json]
         "port-model" => {
             let mut model = json_file(1)?;
-            let port = director64_aot::ports::Port { slug: text(2)?, ..Default::default() };
+            let port = director64_aot::ports::Port {
+                slug: text(2)?,
+                ..Default::default()
+            };
             let measured: Vec<(String, String)> = args[5..]
                 .iter()
-                .filter_map(|a| a.to_str()?.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+                .filter_map(|a| {
+                    a.to_str()?
+                        .split_once('=')
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                })
                 .collect();
             // external=RECORDS.json: the port's converted external media.
             let external_media = match measured.iter().find(|(k, _)| k == "external") {
@@ -218,7 +318,10 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                 external_media,
             };
             let mut measure = |key: &str| -> Result<Vec<u8>, String> {
-                let (_, path) = measured.iter().find(|(k, _)| k == key).ok_or(format!("{key} not measured"))?;
+                let (_, path) = measured
+                    .iter()
+                    .find(|(k, _)| k == key)
+                    .ok_or(format!("{key} not measured"))?;
                 std::fs::read(path).map_err(|e| format!("{path}: {e}"))
             };
             director64_aot::ports::postprocess_model(&mut model, &port, &fonts, &mut measure)?;
@@ -237,12 +340,20 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                     .filter_map(|e| e.ok())
                     .filter(|e| e.path().is_file())
                     // Sound Forge's peak files ship beside some sounds.
-                    .filter(|e| !e.file_name().to_string_lossy().to_lowercase().ends_with(".sfk"))
+                    .filter(|e| {
+                        !e.file_name()
+                            .to_string_lossy()
+                            .to_lowercase()
+                            .ends_with(".sfk")
+                    })
                     .collect();
                 names.sort_by_key(|e| e.file_name());
                 for entry in names {
                     let name = entry.file_name().to_string_lossy().to_string();
-                    let stem = name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s).to_lowercase();
+                    let stem = name
+                        .rsplit_once('.')
+                        .map_or(name.as_str(), |(s, _)| s)
+                        .to_lowercase();
                     files.push((format!("{folder}/{stem}"), entry.path()));
                 }
             }
@@ -268,6 +379,8 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             std::fs::write(text(1)?, &blob).map_err(|e| e.to_string())?;
             Ok(serde_json::Value::Object(index).to_string())
         }
+        // director mpeg-info FILE: bounded MPEG-1 timing and stream metadata.
+        "mpeg-info" => Ok(director64_aot::convert::mpeg::info(&read_bytes(&args[1])?)?.to_string()),
         // director mov-info FILE: the movie's duration and tracks as JSON.
         "mov-info" => {
             let movie = director64_aot::convert::quicktime::parse(&read_bytes(&args[1])?)?;
@@ -285,11 +398,15 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                     })
                 })
                 .collect();
-            Ok(serde_json::json!({"timescale": movie.timescale, "duration": movie.duration,
-                "duration_seconds": movie.duration_seconds, "tracks": tracks}).to_string())
+            Ok(
+                serde_json::json!({"timescale": movie.timescale, "duration": movie.duration,
+                "duration_seconds": movie.duration_seconds, "tracks": tracks})
+                .to_string(),
+            )
         }
         // director mov-audio FILE OUT.wav: the first sound track as s16le WAV.
-        "mov-audio" => match director64_aot::convert::quicktime::audio_wav(&read_bytes(&args[1])?)? {
+        "mov-audio" => match director64_aot::convert::quicktime::audio_wav(&read_bytes(&args[1])?)?
+        {
             Some(wav) => {
                 std::fs::write(text(2)?, &wav).map_err(|e| e.to_string())?;
                 Ok(format!("{}", wav.len()))
@@ -312,17 +429,31 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             if track.codec != "cvid" {
                 return Err(format!("video codec {:?}", track.codec));
             }
-            let mut decoder = director64_aot::convert::cinepak::Decoder::new(track.width as usize, track.height as usize);
+            let mut decoder = director64_aot::convert::cinepak::Decoder::new(
+                track.width as usize,
+                track.height as usize,
+            );
             let mut lines = Vec::new();
             let mut dump = Vec::new();
             // ffmpeg drops the samples the edit list ends before.
-            for sample in track.samples.iter().filter(|s| track.edit_end.is_none_or(|end| s.time < end)) {
+            for sample in track
+                .samples
+                .iter()
+                .filter(|s| track.edit_end.is_none_or(|end| s.time < end))
+            {
                 let start = sample.offset as usize;
-                let data = bytes.get(start..start + sample.size as usize).ok_or("sample outside the movie")?;
+                let data = bytes
+                    .get(start..start + sample.size as usize)
+                    .ok_or("sample outside the movie")?;
                 if decoder.decode(data) {
                     use sha2::Digest;
                     let digest = sha2::Sha256::digest(decoder.frame());
-                    lines.push(digest.iter().map(|b| format!("{b:02x}")).collect::<String>());
+                    lines.push(
+                        digest
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>(),
+                    );
                     if args.len() > 2 {
                         dump.extend_from_slice(decoder.frame());
                     }
@@ -339,7 +470,10 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
         "print-pack" => {
             let documents = director64_aot::convert::print::documents(&json_file(2)?)?;
             let dir = text(3)?;
-            let mut files = vec![("documents.json".to_string(), documents.to_string().into_bytes())];
+            let mut files = vec![(
+                "documents.json".to_string(),
+                documents.to_string().into_bytes(),
+            )];
             let mut pictures: Vec<_> = std::fs::read_dir(&dir)
                 .map_err(|e| format!("{dir}: {e}"))?
                 .filter_map(|e| e.ok())
@@ -348,8 +482,10 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             pictures.sort_by_key(|e| e.file_name());
             for entry in pictures {
                 let name = entry.file_name().to_string_lossy().replace(".PCT", ".png");
-                let (png, _, _) = director64_aot::convert::print::pict_png(&std::fs::read(entry.path()).map_err(|e| e.to_string())?)
-                    .map_err(|e| format!("{name}: {e}"))?;
+                let (png, _, _) = director64_aot::convert::print::pict_png(
+                    &std::fs::read(entry.path()).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| format!("{name}: {e}"))?;
                 files.push((name, png));
             }
             files.sort_by(|a, b| a.0.cmp(&b.0));
@@ -365,8 +501,9 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
         "stream" => {
             let mut lines = Vec::new();
             for i in 1..args.len() {
-                let (bytes, ms) = director64_aot::convert::stream::browser_stream(&read_bytes(&args[i])?)
-                    .map_err(|e| format!("{}: {e}", text(i).unwrap_or_default()))?;
+                let (bytes, ms) =
+                    director64_aot::convert::stream::browser_stream(&read_bytes(&args[i])?)
+                        .map_err(|e| format!("{}: {e}", text(i).unwrap_or_default()))?;
                 lines.push(format!("{} {} {ms}", text(i)?, bytes.len()));
             }
             Ok(lines.join("\n"))
@@ -374,7 +511,9 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
         "glyph" => director64_aot::convert::pfr::glyph_json(&js::unhex(&text(1)?)?),
         "font" => {
             let aliases: Vec<String> = (3..args.len()).filter_map(|i| text(i).ok()).collect();
-            Ok(js::stringify_pretty(&director64_aot::convert::font::recover(&mut fs, &text(1)?, &text(2)?, &aliases)?))
+            Ok(js::stringify_pretty(
+                &director64_aot::convert::font::recover(&mut fs, &text(1)?, &text(2)?, &aliases)?,
+            ))
         }
         "compile" => {
             let flags: Vec<String> = (6..args.len()).filter_map(|i| text(i).ok()).collect();
@@ -393,7 +532,11 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                 let shown: Vec<_> = result.fatal.iter().take(25).cloned().collect();
                 return Err(js::stringify_pretty(&serde_json::Value::Array(shown)));
             }
-            Ok(format!("Model: {} files, {} unresolved resource conversions", result.movies, result.problems.len()))
+            Ok(format!(
+                "Model: {} files, {} unresolved resource conversions",
+                result.movies,
+                result.problems.len()
+            ))
         }
         other => Err(format!("unknown director stage {other}")),
     }
@@ -406,7 +549,9 @@ impl director64_aot::iso::Source for FileSource {
     }
     fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), String> {
         use std::io::{Read, Seek, SeekFrom};
-        self.0.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+        self.0
+            .seek(SeekFrom::Start(offset))
+            .map_err(|e| e.to_string())?;
         self.0.read_exact(buffer).map_err(|e| e.to_string())
     }
 }
@@ -419,9 +564,12 @@ fn iso_inventory(image: &PathBuf) -> Result<String, String> {
     let mut source = FileSource(handle, size);
     let layout = director64_aot::iso::Layout::detect(&mut source)?;
     let entries = director64_aot::iso::inventory(&mut source)?;
-    let rows: Vec<serde_json::Value> =
-        entries.iter().map(|e| serde_json::json!([e.path, e.offset, e.length])).collect();
-    Ok(serde_json::json!({"layout": [layout.stride, layout.data], "files": rows}).to_string())
+    let rows: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| serde_json::json!([e.path, e.offset, e.length]))
+        .collect();
+    let aliases = director64_aot::iso::path_aliases(&mut source)?;
+    Ok(serde_json::json!({"layout": [layout.stride, layout.data], "files": rows, "aliases": aliases}).to_string())
 }
 
 /// The image's inventory with each file's SHA-256, one JSON line per file.
@@ -434,8 +582,13 @@ fn iso(image: &PathBuf) -> Result<String, String> {
     let mut out = String::new();
     for entry in &entries {
         let data = director64_aot::iso::file(&mut source, entry)?;
-        let digest: String = Sha256::digest(&data).iter().map(|b| format!("{b:02x}")).collect();
-        out.push_str(&serde_json::json!([entry.path, entry.offset, entry.length, digest]).to_string());
+        let digest: String = Sha256::digest(&data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        out.push_str(
+            &serde_json::json!([entry.path, entry.offset, entry.length, digest]).to_string(),
+        );
         out.push('\n');
     }
     Ok(out.trim_end().to_string())
@@ -451,7 +604,10 @@ fn zip(archive: &PathBuf) -> Result<String, String> {
     let mut out = String::new();
     for entry in &entries {
         let data = director64_aot::zip::file(&mut source, entry)?;
-        let digest: String = Sha256::digest(&data).iter().map(|b| format!("{b:02x}")).collect();
+        let digest: String = Sha256::digest(&data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         out.push_str(&serde_json::json!([entry.path, entry.length, digest]).to_string());
         out.push('\n');
     }
@@ -475,7 +631,11 @@ fn lingo(directory: &PathBuf, output: &PathBuf) -> Result<String, String> {
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(output, director64_aot::lingo::dumps_compact(&program) + "\n").map_err(|e| e.to_string())?;
+    std::fs::write(
+        output,
+        director64_aot::lingo::dumps_compact(&program) + "\n",
+    )
+    .map_err(|e| e.to_string())?;
     Ok(format!(
         "Parsed {} files / {} handlers; native execution is a separate gate",
         files.len(),
@@ -489,7 +649,8 @@ fn read(path: &PathBuf) -> Result<String, String> {
 
 fn run(program: &PathBuf, output: &PathBuf, names_path: &PathBuf) -> Result<String, String> {
     let text = read(program)?;
-    let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", program.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", program.display()))?;
     let program = ast::Program::from_json(&value)?;
     let table = names::load(names_path)?;
     let manifest = emit::generate(&program, output, &table)?;
@@ -507,14 +668,25 @@ fn package(
     bytecode_path: &PathBuf,
     meta_path: Option<&PathBuf>,
 ) -> Result<String, String> {
-    let bytecode = std::fs::read(bytecode_path).map_err(|e| format!("{}: {e}", bytecode_path.display()))?;
+    let bytecode =
+        std::fs::read(bytecode_path).map_err(|e| format!("{}: {e}", bytecode_path.display()))?;
     let meta = match meta_path {
         Some(path) => read(path)?,
         None => "{}".to_string(),
     };
-    let bytes = build_package(&read(program)?, &read(model)?, &read(names_path)?, &bytecode, &meta)?;
+    let bytes = build_package(
+        &read(program)?,
+        &read(model)?,
+        &read(names_path)?,
+        &bytecode,
+        &meta,
+    )?;
     std::fs::write(output, &bytes).map_err(|e| format!("{}: {e}", output.display()))?;
-    Ok(format!("Packaged {} bytes into {}", bytes.len(), output.display()))
+    Ok(format!(
+        "Packaged {} bytes into {}",
+        bytes.len(),
+        output.display()
+    ))
 }
 
 fn read_bytes(path: &PathBuf) -> Result<Vec<u8>, String> {

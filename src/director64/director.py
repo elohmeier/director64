@@ -5,15 +5,53 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import struct
 from pathlib import Path
 
 from director64.project import work_dir
 
+from . import flash_native
 from .aot import cstring, text_hash
 
 # Mirrors DG_SPAN in runtime/director/director.h: the mask bit that marks a
 # delta as the start of a new sprite span rather than a change within one.
 DG_SPAN = 0x8000
+
+
+def film_track_data(keys):
+    """Portable field deltas shared with package.rs and film_track.h."""
+    fields = (
+        ("I", ("member",)), ("h", ("x",)), ("h", ("y",)),
+        ("h", ("width",)), ("h", ("height",)), ("BB", ("ink", "blend")),
+        ("BB", ("type", "flags")), ("BB", ("fore", "back")),
+        ("BBB", ("thickness", "stretch", "trails")), ("h", ("loc_z",)),
+        ("I", ("fore_rgb",)), ("I", ("back_rgb",)),
+        ("i", ("rotation",)), ("i", ("skew",)),
+    )
+
+    def groups(spec):
+        return [struct.pack("<" + fmt, *(spec.get(name, 0) for name in names))
+                for fmt, names in fields]
+
+    previous, last, result = groups({}), -1, bytearray()
+    if not keys:
+        raise ValueError("empty native film track")
+    for frame, spec in keys:
+        if not last < frame <= 65535:
+            raise ValueError("native film keys are not in frame order")
+        if any(spec.get(name) for name in ("script", "tempo", "delay", "behaviors")):
+            raise ValueError("native film key contains script/main-channel state")
+        current = groups(spec)
+        mask = sum(1 << i for i, (before, after) in enumerate(zip(previous, current, strict=True))
+                   if before != after)
+        if not mask:
+            raise ValueError("redundant native film key")
+        result.extend(struct.pack("<HH", frame, mask))
+        for i, value in enumerate(current):
+            if mask & (1 << i):
+                result.extend(value)
+        previous, last = current, frame
+    return bytes(result)
 
 
 def member_name_hash(name: str) -> int:
@@ -54,6 +92,9 @@ def validate_script_casts(model: dict, program: dict) -> None:
 def generate(model: dict, output: Path) -> None:
     if model["problems"]:
         raise ValueError("resource conversion is incomplete")
+    from .audit import require_capabilities
+
+    require_capabilities(model, "n64", str(output))
     movies = model["movies"]
     by_name = {m["name"]: m for m in movies}
     output.mkdir(parents=True, exist_ok=True)
@@ -68,6 +109,31 @@ def generate(model: dict, output: Path) -> None:
         target_cast = cast if target is movie else 1
         return target["id"] << 21 | target_cast << 16 | member
 
+    def film_reference(movie, film, encoded):
+        owner = film["cast"]
+        if encoded in (-1, 65535):
+            return movie, owner
+        library = next((c for c in movie["casts"] if c["number"] == owner), {})
+        if "filmCastMap" in library:
+            mapping = library["filmCastMap"]
+            if not 0 <= encoded < len(mapping):
+                raise ValueError(f"film cast relocation index {encoded} outside owner cast {owner}")
+            entry = mapping[encoded]
+            if isinstance(entry, int) and entry > 0:
+                return movie, entry
+            if (isinstance(entry, dict) and entry.get("file") in by_name
+                    and entry.get("cast", 0) > 0):
+                return by_name[entry["file"]], entry["cast"]
+            raise ValueError(f"unresolved film cast relocation {owner}:{encoded}: {entry}")
+        if film.get("filmScore", {}).get("version", 0) < 13 and encoded >= 0:
+            return movie, encoded
+        raise ValueError(
+            f"film cast relocation table missing for owner cast {owner}, index {encoded}"
+        )
+
+    member_by_id = {movie["id"] << 21 | member["cast"] << 16 | member["number"]: member
+                    for movie in movies for member in movie["members"]}
+
     font_metrics = model.get("fontMetrics", {})
     font_aliases = {}
     for font in model.get("fonts", []):
@@ -76,6 +142,8 @@ def generate(model: dict, output: Path) -> None:
     for movie in movies:
         score = movie.get("score", {})
         declared_version = movie.get("directorVersion", 6)
+        if declared_version >= 850:
+            declared_version = 1000
         if declared_version >= 100:
             declared_version //= 100
         version = (
@@ -148,8 +216,8 @@ def generate(model: dict, output: Path) -> None:
             from its recorded descriptor and the embedded font's metrics."""
             size = max(1, round(field.get("fontHeight") or 12))
             leading = round(field.get("leading") or 0)
-            font_id = font_aliases.get((field.get("fontName") or "").casefold(), 0)
-            metrics = font_metrics.get(f"{font_id}:{size}") if font_id else None
+            font_id = font_aliases.get((field.get("fontName") or "").casefold(), 255)
+            metrics = font_metrics.get(f"{font_id}:{size}") if font_id != 255 else None
             color = field.get("color") or [0, 0, 0, 255]
             return {
                 "fontName": field.get("fontName") or "",
@@ -165,10 +233,136 @@ def generate(model: dict, output: Path) -> None:
                 "color": color[0] * 65536 + color[1] * 256 + color[2],
             }
 
-        members, member_names = [], []
+        palette = movie.get("palette", [0xFFFFFF] * 255 + [0])
+        if len(palette) != 256:
+            raise ValueError("scene palette must have 256 colors")
+        members, member_names, text_extras = [], [], []
         for m in sorted(movie["members"], key=lambda m: (m["cast"], m["number"])):
             member_names.append(m.get("name", ""))
+            runtime_frames = "NULL"
+            runtime_tracks, track_count = "NULL", 0
+            if version >= 10 and m.get("filmScore") and "filmLayers" not in m:
+                tracks = {}
+                source_frames = m["filmScore"]["frames"]
+                if len(source_frames) != len(m.get("filmAssets", [])):
+                    raise ValueError("runtime film frame count differs from poses")
+                for frame_index, frame in enumerate(source_frames):
+                    for record in frame["channels"]:
+                        channel = record["channel"] - 5
+                        if channel < 1:
+                            continue
+                        if channel >= 1001:
+                            raise ValueError("runtime film channel exceeds profile")
+                        b = bytes(record["bytes"])
+                        if len(b) != 48:
+                            raise ValueError("invalid runtime film sprite record")
+
+                        def word(at, data=b):
+                            return int.from_bytes(data[at:at + 2], "big")
+
+                        def signed(at, data=b):
+                            return int.from_bytes(data[at:at + 2], "big", signed=True)
+
+                        def color(i, g, blue, flag, data=b, colors=palette):
+                            return (data[i] << 16 | data[g] << 8 | data[blue]
+                                    if data[20] & flag else colors[data[i]])
+
+                        spec = {}
+                        if b[0] and word(6):
+                            source, cast = film_reference(movie, m, word(4))
+                            member_id = reference(source, cast, word(6))
+                            child = member_by_id.get(member_id, {})
+                            nonvisual = child.get("type") in (6, 11, 14) or (
+                                child.get("type") == 15
+                                and child.get("xtra", {}).get("symbol") == "font"
+                                and child.get("embeddedFont", 0) > 0
+                            )
+                            spec = {
+                                "member": member_id,
+                                "x": signed(14), "y": signed(12),
+                                "width": signed(18), "height": signed(16),
+                                "ink": b[1] & 63, "blend": (255 - b[21]) * 100 // 255,
+                                "type": 0 if nonvisual else b[0], "flags": b[20],
+                                "fore": b[2], "back": b[3], "thickness": b[22],
+                                "stretch": int(bool(b[1] & 128)),
+                                "trails": int(bool(b[1] & 64)),
+                                "loc_z": channel, "fore_rgb": color(2, 24, 26, 16),
+                                "back_rgb": color(3, 25, 27, 32),
+                                "rotation": int.from_bytes(b[28:32], "big", signed=True),
+                                "skew": int.from_bytes(b[32:36], "big", signed=True),
+                            }
+                        keys = tracks.setdefault(channel, [])
+                        if not keys and not spec:
+                            continue
+                        if not keys or keys[-1][1] != spec:
+                            keys.append((frame_index, spec))
+                descriptors = []
+                runtime_tracks = f"film_tracks_{m['cast']}_{m['number']}"
+                for channel, keys in sorted(tracks.items()):
+                    if not keys:
+                        continue
+                    key_name = f"{runtime_tracks}_{channel}"
+                    data = film_track_data(keys)
+                    lines.append(f"static const uint8_t {key_name}[]={{"
+                                 + ",".join(map(str, data)) + "};")
+                    descriptors.append("{" + f"{channel},{len(keys)},{len(data)},{key_name}" + "}")
+                track_count = len(descriptors)
+                if descriptors:
+                    lines.append(f"static const dg_film_track_t {runtime_tracks}[]={{"
+                                 + ",".join(descriptors) + "};")
+                else:
+                    runtime_tracks = "NULL"
+            if "filmLayers" in m:
+                if version < 10:
+                    raise ValueError("Flash depth layers require the D10 profile")
+                if len(m["filmLayers"]) != len(m.get("filmAssets", [])):
+                    raise ValueError("Flash layer frame count differs from poses")
+                runtime_frames = flash_native.frames(
+                    lines, f"film_frames_{m['cast']}_{m['number']}", m["filmLayers"]
+                )
+            if version >= 10:
+                runs = []
+                typography = m.get("typography") or {}
+                styles = typography.get("styles", [])
+                for run in typography.get("styleRuns", []):
+                    if not 0 <= run["index"] < len(styles):
+                        raise ValueError(f"{movie['name']} member {m['number']}: style run")
+                    if run["offset"] >= len(m.get("text", "")):
+                        continue
+                    color = styles[run["index"]].get("foreground", [0, 0, 0])
+                    rgb = sum(((color[i] >> 8) & 255) << (16 - 8 * i) for i in range(3))
+                    if not runs or runs[-1][1] != rgb:
+                        runs.append((run["offset"], rgb))
+                if len(runs) < 2:
+                    runs = []
+                links = m.get("hyperlinks", [])
+                if len(runs) > 65535 or len(links) > 65535:
+                    raise ValueError("text runs or hyperlinks over 65535")
+                if runs or links:
+                    suffix = f"{m['cast']}_{m['number']}"
+                    runs_name = f"text_runs_{suffix}" if runs else "NULL"
+                    links_name = f"text_links_{suffix}" if links else "NULL"
+                    if runs:
+                        lines.append(f"static const dg_text_run_t {runs_name}[]={{"
+                                     + ",".join(f"{{{offset},{rgb}}}" for offset, rgb in runs)
+                                     + "};")
+                    if links:
+                        lines.append(f"static const dg_link_t {links_name}[]={{"
+                                     + ",".join("{" + f"{first},{last},{cstring(data)}" + "}"
+                                                for first, last, data in links) + "};")
+                    text_extras.append("{" + f"{reference(movie, m['cast'], m['number'])},"
+                                       + f"{len(runs)},{len(links)},{runs_name},{links_name}" + "}")
             film = m.get("filmAssets", [])
+            flash_variants = m.get("flashVariantCount", 1)
+            if not 1 <= flash_variants <= 255 or len(film) % flash_variants:
+                raise ValueError("invalid Flash variant storage")
+            if flash_variants > 1 and (version < 10 or m["type"] != 2
+                    or (m.get("xtra") or {}).get("symbol") != "flash"
+                    or not film or m.get("filmSounds")):
+                raise ValueError("invalid Flash variant storage")
+            film_count = len(film) // flash_variants
+            if film_count > 65535:
+                raise ValueError("film frame count exceeds the runtime profile")
             film_name = f"film_{m['cast']}_{m['number']}" if film else "NULL"
             if film:
                 lines.append(
@@ -176,8 +370,39 @@ def generate(model: dict, output: Path) -> None:
                     + ",".join(cstring(n) for n in film)
                     + "};"
                 )
+            flash_audio = m.get("flashAudioPositions", [])
+            flash_audio_name = "NULL"
+            if version >= 10 and flash_audio:
+                if len(flash_audio) != film_count or not m.get("videoAudio"):
+                    raise ValueError("invalid Flash stream audio metadata")
+                flash_audio_name = f"flash_audio_{m['cast']}_{m['number']}"
+                lines.append(f"static const uint32_t {flash_audio_name}[]={{"
+                             + ",".join(map(str, flash_audio)) + "};")
             flash_labels = (m.get("flashTimeline") or {}).get("labels", [])
+            flash_stops = (m.get("flashTimeline") or {}).get("stopFrames", [])
+            flash_stops_name = "NULL"
+            if version >= 10 and flash_stops:
+                if any(not 1 <= frame <= max(1, film_count)
+                       for frame in flash_stops):
+                    raise ValueError("Flash stop frame outside timeline")
+                flash_stops_name = f"flash_stops_{m['cast']}_{m['number']}"
+                lines.append(f"static const uint16_t {flash_stops_name}[]={{"
+                             + ",".join(map(str, flash_stops)) + "};")
             flash_labels_name = "NULL"
+            flash_helpers = m.get("flashHelpers", [])
+            flash_helpers_name = "NULL"
+            if version >= 10 and flash_helpers:
+                flash_helpers_name = f"flash_helpers_{m['cast']}_{m['number']}"
+                helpers = []
+                for helper in flash_helpers:
+                    helpers.append("{" + ",".join([
+                        cstring(helper["name"]), cstring(helper["target"]),
+                        cstring(helper["property"]), str(helper["operation"]),
+                        str(helper["argument"]),
+                        "true" if helper.get("method") else "false",
+                    ]) + "}")
+                lines.append(f"static const dg_flash_helper_t {flash_helpers_name}[]={{"
+                             + ",".join(helpers) + "};")
             if version >= 10 and flash_labels:
                 flash_labels_name = f"flash_labels_{m['cast']}_{m['number']}"
                 lines.append(
@@ -197,6 +422,9 @@ def generate(model: dict, output: Path) -> None:
                         continue
                     seen.add(binding)
                     flash_fields.append(field)
+            flash_runtime = flash_native.runtime(
+                lines, f"flash_runtime_{m['cast']}_{m['number']}", m.get("flashRuntime")
+            )
             flash_fields_name = "NULL"
             if flash_fields:
                 flash_fields_name = f"flash_fields_{m['cast']}_{m['number']}"
@@ -213,6 +441,7 @@ def generate(model: dict, output: Path) -> None:
                         "{"
                         + ",".join(
                             [
+                                f".id={field.get('id', 0)}",
                                 f".name={cstring(field.get('name') or field.get('variable'))}",
                                 f".variable={cstring(field.get('variable') or '')}",
                                 f".text={cstring(initial)}",
@@ -226,8 +455,12 @@ def generate(model: dict, output: Path) -> None:
                                 f".align={ {0: 0, 1: 2, 2: 1}.get(field.get('align') or 0, 0)}",
                                 f".word_wrap={int(bool(field.get('wordWrap')))}",
                                 f".multiline={int(bool(field.get('multiline')))}",
+                                f".embed_fonts={int(bool(field.get('embedFonts')))}",
                                 f".leading={round(field.get('leading') or 0)}",
                                 f".style={text_style(flash_field_style(field))}",
+                                ".local_bounds={" + ",".join(
+                                    str(round(field.get("localBounds", {}).get(key, 0) * 65536))
+                                    for key in ("left", "top", "width", "height")) + "}",
                             ]
                         )
                         + "}"
@@ -236,6 +469,15 @@ def generate(model: dict, output: Path) -> None:
                     f"static const dg_flash_field_t {flash_fields_name}[]={{"
                     + ",".join(entries)
                     + "};"
+                )
+            flash_font_refs = [text_style(flash_field_style(font))
+                               for font in m.get("flashFontUses", [])]
+            flash_fonts_name = "NULL"
+            if flash_font_refs:
+                flash_fonts_name = f"flash_fonts_{m['cast']}_{m['number']}"
+                lines.append(
+                    f"static const dg_text_style_t *const {flash_fonts_name}[]={{"
+                    + ",".join(flash_font_refs) + "};"
                 )
             cues_name, cue_points = "NULL", m.get("cuePoints") or []
             if model.get("extendedD6") and cue_points:
@@ -249,10 +491,20 @@ def generate(model: dict, output: Path) -> None:
                     + "};"
                 )
             film_sounds = "NULL"
-            if version == 5 and m.get("filmSounds"):
+            if ((version == 5 or version >= 10) and m.get("filmSounds")
+                    and m.get("filmFlags", 0) & 8):
+                if len(m["filmSounds"]) != len(m.get("filmAssets", [])) or any(
+                    len(frame) != 2 for frame in m["filmSounds"]
+                ):
+                    raise ValueError(
+                        f"{movie['name']} member {m['number']}: film sound frame pairs"
+                    )
                 film_sounds = f"film_sounds_{m['cast']}_{m['number']}"
                 values = [
-                    reference(movie, pair["cast"], pair["member"]) if pair else 0
+                    reference(
+                        by_name[pair.get("file", movie["name"])], pair["cast"], pair["member"]
+                    )
+                    if pair else 0
                     for frame in m["filmSounds"]
                     for pair in frame
                 ]
@@ -284,12 +536,22 @@ def generate(model: dict, output: Path) -> None:
                 texts[2] = f"(const char *){text_name}"
             sound = [m.get(k, 0) for k in ("frames", "rate", "loopStart", "loopEnd")]
             sound += [m.get(k, 0) for k in ("shape", "pattern", "filled", "lineWidth")]
-            sound += [m.get("looping", 0), len(film), m.get("filmLoop", 0)]
+            sound += [m.get("looping", 0), m.get("filmLoop", 0), film_count]
             styles = (
                 [text_style(m.get("textStyle")), text_style(m.get("textInsertStyle"))]
                 if version != 6 or model.get("extendedD6")
                 else []
             )
+            member_palette = "NULL"
+            if m["type"] == 4 and m.get("palette") is not None:
+                colors = m["palette"]
+                if m["type"] != 4 or not 1 <= len(colors) <= 256 or any(
+                    not isinstance(color, int) or not 0 <= color <= 0xFFFFFF for color in colors
+                ):
+                    raise ValueError("palette member must have 1..256 RGB colors")
+                member_palette = f"palette_{m['cast']}_{m['number']}"
+                lines.append(f"static const uint32_t {member_palette}[]={{"
+                             + ",".join(map(str, colors)) + "};")
             members.append(
                 "{"
                 + ",".join(
@@ -315,11 +577,11 @@ def generate(model: dict, output: Path) -> None:
                             [
                                 cstring(m.get("videoAudio", "")),
                                 str(m.get("videoFlags", 0)),
-                                film_sounds,
                             ]
-                            if version == 5
+                            if version == 5 or version >= 10
                             else []
                         ),
+                        *([film_sounds] if version == 5 or version >= 10 else []),
                         *(
                             # Members born from Flash/vectorShape Xtras answer
                             # their authored type to scripts even when playback
@@ -327,7 +589,8 @@ def generate(model: dict, output: Path) -> None:
                             # surface (labels, fields) follows.
                             [
                                 str(
-                                    {"flash": 1, "vectorShape": 2}.get(
+                                    {"flash": 1, "vectorShape": 2, "TBDIRECTMEDIA": 3,
+                                     "quickTimeMedia": 4, "cursor": 5}.get(
                                         (m.get("xtra") or {}).get("symbol"), 0
                                     )
                                 ),
@@ -335,10 +598,36 @@ def generate(model: dict, output: Path) -> None:
                                 str(len(flash_fields)),
                                 flash_labels_name,
                                 flash_fields_name,
+                                str(by_name[m["linkedMovie"]]["id"] if m.get("linkedMovie") else 0),
+                                str(m.get("linkedFlags", 0)),
+                                str(m.get("linkedLeft", 0)),
+                                str(m.get("linkedTop", 0)),
+                                runtime_frames,
+                                str(m.get("left", 0)),
+                                str(m.get("top", 0)),
+                                str(m.get("filmFlags", 0)),
+                                str(track_count),
+                                runtime_tracks,
+                                str(len(flash_stops)),
+                                flash_stops_name,
+                                str(len(flash_helpers)),
+                                flash_helpers_name,
+                                str(flash_variants),
+                                str(m.get("flashRate", 0)),
+                                flash_audio_name,
+                                str(m.get("flashPlaybackMode", 0)),
+                                str(m.get("flashFixedRate", 0)),
+                                str(m.get("flashDirectToStage", 0)),
+                                str(m.get("flashVersion", 0)),
+                                *flash_runtime,
+                                str(len(flash_font_refs)),
+                                flash_fonts_name,
                             ]
                             if version >= 10
                             else []
                         ),
+                        str(len(m.get("palette") or []) if m["type"] == 4 else 0),
+                        member_palette,
                     ]
                 )
                 + "}"
@@ -363,13 +652,23 @@ def generate(model: dict, output: Path) -> None:
         if len(palette) != 256:
             raise ValueError("scene palette must have 256 colors")
         lines.append("static const uint32_t palette[]={" + ",".join(map(str, palette)) + "};")
-        casts = [
-            "{"
-            + f"{cstring(c['name'])},{by_name[c['file']]['id']},"
-            + str(c["number"] if c["file"] == movie["name"] else 1)
-            + "}"
-            for c in movie["casts"]
-        ]
+        casts = []
+        for ci, cast in enumerate(movie["casts"]):
+            catalog = cast.get("patternAssets")
+            pattern_name = "NULL"
+            if catalog is not None:
+                if len(catalog) != 8 or any(
+                    a is not None and (not isinstance(a, str) or not a) for a in catalog
+                ):
+                    raise ValueError("shape pattern catalog must have eight asset/null slots")
+                pattern_name = f"cast_patterns_{ci}"
+                lines.append(f"static const char *const {pattern_name}[]={{"
+                             + ",".join(cstring(a) if a else "NULL" for a in catalog) + "};")
+            value = (f".name={cstring(cast['name'])},.file={by_name[cast['file']]['id']},"
+                     f".cast={cast['number'] if cast['file'] == movie['name'] else 1}")
+            if version == 5 or version >= 7 or model.get("extendedD6"):
+                value += f",.shape_patterns={pattern_name}"
+            casts.append("{" + value + "}")
         lines.append("static const dg_cast_t casts[]={" + ",".join(casts) + "};")
         deltas, frames = [], []
         behavior_tables = {}
@@ -397,6 +696,19 @@ def generate(model: dict, output: Path) -> None:
                     if c not in (1, 5)
                     else 0
                 )
+                if c == 5 and i16(2):
+                    if b[5] or u16(8) > 1 or u16(10) > 1 or any(b[12:15]):
+                        raise ValueError(
+                            f"{movie['name']}: palette fade/cycle interpolation is unsupported"
+                        )
+                    if i16(2) < 0:
+                        if i16(2) not in (-1, -3, -102):
+                            raise ValueError(
+                                f"{movie['name']}: unsupported builtin palette {i16(2)}"
+                            )
+                        member = u16(2)
+                    else:
+                        member = reference(movie, u16(0), u16(2))
                 scripts = channel["behaviors"]
                 if len(scripts) > 1 and not model.get("extendedD6"):
                     raise ValueError("multiple behaviors require additional dispatch slots")
@@ -552,6 +864,9 @@ def generate(model: dict, output: Path) -> None:
             )
             + "};"
         )
+        if text_extras:
+            lines.append("static const dg_text_extra_t text_extras[]={"
+                         + ",".join(text_extras) + "};")
         lines.append(
             f"const dg_movie_t dg_{stem}={{&aot_{stem},{movie['id']},{movie['tempo']},"
             f"{len(casts)},{len(members)},{len(frames)},{len(labels)},"
@@ -561,6 +876,8 @@ def generate(model: dict, output: Path) -> None:
                 if version != 6 or model.get("extendedD6")
                 else ""
             )
+            + (f",{len(text_extras)}," + ("text_extras" if text_extras else "NULL")
+               if version >= 10 else "")
             + "};"
         )
         (output / f"{stem}_scene.c").write_text("\n".join(lines) + "\n")

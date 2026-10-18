@@ -3,7 +3,10 @@
   "extended_d6": true,
   "field_text_styles": true,
   "image_codec_tiers": [
-    { "min_decompressed_bytes": 65536, "level": 2 }
+    {
+      "min_decompressed_bytes": 65536,
+      "level": 2
+    }
   ],
   "image_color_bits": 4,
   "startup_movie": "DEUTSCH.DXR",
@@ -25,107 +28,19 @@
   },
   "projector": "Deutsch.dat",
   "source_sha256": "4c87e10dcc99dfb68882b51c9daceb7ce4761b482a2a43bf620093289353e0f4",
-  "deferred_conversions": [
-    {
-      "movie": "GAME002_PICT.CXT",
-      "cast": 1,
-      "member": 89,
-      "error": "SWF frame count exceeds conversion bounds",
-      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
-    },
-    {
-      "movie": "GAME002_PICT.CXT",
-      "cast": 1,
-      "member": 91,
-      "error": "SWF frame count exceeds conversion bounds",
-      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
-    },
-    {
-      "movie": "GAME002_PICT.CXT",
-      "cast": 1,
-      "member": 93,
-      "error": "SWF frame count exceeds conversion bounds",
-      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
-    },
-    {
-      "movie": "GAME002_PICT.CXT",
-      "cast": 1,
-      "member": 95,
-      "error": "SWF frame count exceeds conversion bounds",
-      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
-    },
-    {
-      "movie": "GAME002_PICT.CXT",
-      "cast": 1,
-      "member": 97,
-      "error": "SWF frame count exceeds conversion bounds",
-      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
-    },
-    {
-      "movie": "GAME002_PICT.CXT",
-      "cast": 1,
-      "member": 114,
-      "error": "SWF frame count exceeds conversion bounds",
-      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
-    },
-    {
-      "movie": "GAME002_PICT.CXT",
-      "cast": 1,
-      "member": 116,
-      "error": "SWF frame count exceeds conversion bounds",
-      "disposition": "goToFrame-driven 800x600 track display; selected native Flash playback, not flattening"
-    },
-    {
-      "movie": "SCRIPTS2.CXT",
-      "cast": 1,
-      "member": 55,
-      "error": "Xtra cursor requires native conversion",
-      "disposition": "Cursor Asset member; native cursor selection pending"
-    },
-    {
-      "movie": "SCRIPTS2.CXT",
-      "cast": 1,
-      "member": 72,
-      "error": "unsupported static SWF tag 34",
-      "disposition": "Flash button member; interactive playback pending"
-    },
-    {
-      "movie": "TIVOLAINTRO2.CXT",
-      "cast": 1,
-      "member": 3,
-      "error": "unsupported static SWF tag 18",
-      "disposition": "intro timeline with streaming sound; native playback pending"
-    },
-    {
-      "movie": "TIVOLAINTRO2.CXT",
-      "cast": 1,
-      "member": 5,
-      "error": "unsupported static SWF tag 18",
-      "disposition": "intro timeline with streaming sound; native playback pending"
-    },
-    {
-      "movie": "LOGIN.DXR",
-      "cast": 5,
-      "member": 3,
-      "error": "film-loop non-bitmap/script child",
-      "disposition": "film loop with text child; native composition pending"
-    },
-    {
-      "movie": "ROOM08.DXR",
-      "cast": 5,
-      "member": 37,
-      "error": "film-loop non-bitmap/script child",
-      "disposition": "film loop nesting another film loop; native composition pending"
-    },
-    {
-      "movie": "TIVOLAINTRO2.CXT",
-      "cast": 1,
-      "member": 4,
-      "error": "film-loop non-bitmap/script child",
-      "disposition": "film loop with Flash Xtra child; native composition pending"
-    }
-  ],
+  "deferred_conversions": [],
   "stage_prescale": true,
   "image_pack_budget_mib": 30.5,
-  "image_indexed": true
+  "image_indexed": true,
+  "system_font_resources": [
+    {
+      "path": "director64-system-fonts/arial32.exe",
+      "sha256": "85297a4d146e9c87ac6f74822734bdee5f4b2a722d7eaa584b7f2cbf76f478f6",
+      "entry": "Arial.TTF",
+      "font_sha256": "35c0f3559d8db569e36c31095b8a60d441643d95f59139de40e23fada819b833",
+      "aliases": [
+        "Arial"
+      ]
+    }
+  ]
 }

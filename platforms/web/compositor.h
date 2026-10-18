@@ -44,7 +44,7 @@ typedef struct {
   void *ctx;
   // The digital video frame a sprite shows now (D5), as RGBA8888 in `out`
   // (at most `cap` pixels); returns false while none is decoded. Optional.
-  bool (*video_frame)(void *ctx, unsigned sprite, uint32_t *out, uint32_t cap,
+  bool (*video_frame)(void *ctx, const dg_runtime_t *owner, unsigned sprite, uint32_t *out, uint32_t cap,
                       unsigned *width, unsigned *height);
 } wc_host_t;
 
@@ -53,9 +53,14 @@ typedef struct {
 // ink pass.
 typedef struct {
   char name[40];
-  unsigned ink, width, height;
-  bool follow_alpha;
+  unsigned ink, width, height, depth;
+  unsigned stride; // pixels per row, zero for tightly packed images
+  bool follow_alpha, force_opaque, rgb555, rich_text, palette_brush;
+#if DG_D10
+  const dg_member_t *linked_member; // crop/center mapping for a nested scene
+#endif
   uint32_t *pixels;
+  const uint8_t *coverage; // optional independent Imaging Lingo matte
   size_t bytes;
   unsigned last;
   // The stored registration point: a trimmed film-loop pose places itself by
@@ -109,6 +114,7 @@ typedef struct {
   unsigned serial;
   // What the last composite showed; an unchanged stage is not redrawn.
   bool drawn;
+  const dg_runtime_t *owner;
   unsigned revision;
   dg_cursor_t cursor;
   wc_pointer_t pointers[WC_POINTERS];
@@ -144,12 +150,14 @@ bool wc_hit(wc_t *, lv_runtime_t *, const dg_member_t *, unsigned ink, int x,
 #if DG_D10
 // Keeps what the stage shows now (without cursors) as the member's image.
 void wc_capture_stage(wc_t *, uint32_t member);
+bool wc_read_image(wc_t *, dg_runtime_t *, uint32_t member, dg_pixel_image_t *);
+bool wc_flash_field_hit(wc_t *, dg_runtime_t *, struct dg_flash_instance *, float, float);
+#endif
 // Which character of a text member's `text`, set in a width x height box,
 // lies at (x, y): 0-based in Unicode characters, -1 for none (the host's
 // layout callback places them).
-int wc_text_char_at(wc_t *, const dg_member_t *, const char *text, int width, int height, int x,
+int wc_text_char_at(wc_t *, dg_runtime_t *, const dg_member_t *, const char *text, int width, int height, int x,
                     int y);
-#endif
 bool wc_render(wc_t *, dg_runtime_t *, int pointer_x, int pointer_y,
                bool pointer_shown, unsigned externals);
 // The same with up to WC_POINTERS cursors, drawn in order (the last on top).

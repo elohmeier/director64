@@ -1,0 +1,41 @@
+-- Synthetic pixel inputs only; see docs/reference-capture.md.
+global p, q, out, pm, qm
+out = new(xtra("fileio"))
+out.createFile("C:\ink-modern-colors.txt")
+out.openFile("C:\ink-modern-colors.txt",2)
+pm=new(#bitmap)
+qm=new(#bitmap)
+puppetSprite(148,1)
+puppetSprite(149,1)
+repeat with depth in [8,32]
+ p=image(8,8,depth)
+ q=image(8,8,32)
+ repeat with ink in [35,37,39,40,41]
+  repeat with sc in [rgb(0,0,0),rgb(64,64,64),rgb(128,128,128),rgb(255,255,255),rgb(20,90,180),rgb(255,0,0)]
+   repeat with fc in [rgb(0,0,0),rgb(20,40,60)]
+    repeat with bc in [rgb(255,255,255),rgb(220,180,140),rgb(64,64,64)]
+     repeat with blend in [50,100]
+      p.fill(rect(0,0,8,8),sc)
+      q.fill(rect(0,0,8,8),rgb(0,0,255))
+      pm.image=p
+      qm.image=q
+      sprite(148).member=qm
+      sprite(149).member=pm
+      sprite(148).rect=rect(0,0,8,8)
+      sprite(149).rect=rect(0,0,8,8)
+      sprite(148).ink=0
+      sprite(149).ink=ink
+      sprite(149).color=fc
+      sprite(149).bgColor=bc
+      sprite(149).blend=blend
+      updateStage
+      stagePixel=(the stage).image.getPixel(point(4,4))
+      q.copyPixels(p,rect(0,0,8,8),rect(0,0,8,8),[#ink:ink,#color:fc,#bgColor:bc,#blendLevel:integer(blend*255/100.0)])
+      out.writeString(string([depth,ink,p.getPixel(point(4,4)),fc,bc,blend,q.getPixel(point(4,4)),stagePixel]) & RETURN)
+     end repeat
+    end repeat
+   end repeat
+  end repeat
+ end repeat
+end repeat
+out.closeFile()

@@ -12,22 +12,25 @@ export async function encodeVideo(frames) {
     },
     error: (error) => { failure = error; },
   });
-  encoder.configure({codec: "vp8", width: frames.width, height: frames.height,
-    bitrate: 400_000, framerate: 15, latencyMode: "quality"});
-  let lastKey = -Infinity;
-  for (let frame; (frame = frames.next());) {
-    const picture = new VideoFrame(frame.rgbx, {format: "RGBX", codedWidth: frames.width,
-      codedHeight: frames.height, timestamp: frame.microseconds});
-    const keyFrame = frame.microseconds - lastKey >= 2_000_000;
-    if (keyFrame) lastKey = frame.microseconds;
-    encoder.encode(picture, {keyFrame});
-    picture.close();
-    // Keep the queue short: the converter's frames are large.
-    while (encoder.encodeQueueSize > 8) await new Promise((resolve) => setTimeout(resolve, 0));
-    if (failure) throw failure;
+  try {
+    encoder.configure({codec: "vp8", width: frames.width, height: frames.height,
+      bitrate: 400_000, framerate: frames.rate ?? 15, latencyMode: "quality"});
+    let lastKey = -Infinity;
+    for (let frame; (frame = frames.next());) {
+      const picture = new VideoFrame(frame.rgbx, {format: "RGBX", codedWidth: frames.width,
+        codedHeight: frames.height, timestamp: frame.microseconds});
+      const keyFrame = frame.microseconds - lastKey >= 2_000_000;
+      if (keyFrame) lastKey = frame.microseconds;
+      try { encoder.encode(picture, {keyFrame}); }
+      finally { picture.close(); }
+      // Keep the queue short: the converter's frames are large.
+      while (!failure && encoder.encodeQueueSize > 8) await new Promise((resolve) => setTimeout(resolve, 0));
+      if (failure) throw failure;
+    }
+    await encoder.flush();
+  } finally {
+    if (encoder.state !== "closed") encoder.close();
   }
-  await encoder.flush();
-  encoder.close();
   if (failure) throw failure;
   chunks.sort((a, b) => a[0] - b[0]);
   let offset = 0;

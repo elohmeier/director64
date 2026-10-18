@@ -10,7 +10,7 @@
 #include <string.h>
 
 static uint8_t buffer[8192];
-static size_t used;
+static size_t used, palette_count_at;
 static void put8(uint8_t v) { buffer[used++] = v; }
 static void put16(uint16_t v) { put8((uint8_t)v); put8((uint8_t)(v >> 8)); }
 static void put32(uint32_t v) { put16((uint16_t)v); put16((uint16_t)(v >> 16)); }
@@ -63,12 +63,20 @@ static size_t build(void) {
   put32(1); put16(0); put16(0); put16(1); // handler index
   put16(1); put16(30);         // id, tempo
   put16(1); put32(S_CAST); put16(1); put16(1);
-  put32(1);                    // one member
+  put32(2);                    // bitmap and palette members
   put32(1u << 21 | 1u << 16 | 1); put16(1); put16(1); put16(1); put16(8); put16(4);
   put16(0); put16(0); put32(S_EMPTY); put32(S_ASSET); put32(S_EMPTY);
   put32(0); put32(0); put32(0); put32(0); put16(0); put16(0);
   put8(0); put8(0); put8(0); put16(0); put8(0); put8(0); // film count u16
+  put16(0); // bitmap palette is its source index, not a palette-cast CLUT
+  put32(1u << 21 | 1u << 16 | 2); put16(2); put16(1); put16(4); put16(0); put16(0);
+  put16(0); put16(0); put32(S_EMPTY); put32(S_EMPTY); put32(S_EMPTY);
+  put32(0); put32(0); put32(0); put32(0); put16(0); put16(0);
+  put8(0); put8(0); put8(0); put16(0); put8(0); put8(0);
+  palette_count_at=used;put16(256);
+  for(unsigned i=0;i<256;i++)put32(i*0x010101u);
   put32(0x12345678); put16(0); // member index
+  put32(0x22345678); put16(1);
   for (unsigned i = 0; i < 256; i++) put32(i);
   put32(1); put32(0); put16(1); // one frame, one delta
   put32(1); put16(6); put16(0x8000); put32(1u << 21 | 1u << 16 | 1); put32(0);
@@ -98,8 +106,11 @@ int main(void) {
   assert(m->id == 1 && m->tempo == 30 && !strcmp(m->code->name, "MOVIE.DXR"));
   assert(m->code->count == 1 && m->code->handlers[0].member == 7);
   assert(m->code->handlers[0].code_size == 13 && m->code->handlers[0].code[0] == LB_LINE);
-  assert(m->member_count == 1 && !strcmp(m->members[0].asset, "a.fdi"));
+  assert(m->member_count == 2 && !strcmp(m->members[0].asset, "a.fdi"));
   assert(m->members[0].width == 8 && m->palette[255] == 255);
+  assert(m->members[0].palette_count==0 && !m->members[0].palette);
+  assert(m->members[1].type==4 && m->members[1].palette_count==256);
+  assert(m->members[1].palette[0]==0 && m->members[1].palette[255]==0xffffff);
   assert(m->frame_count == 1 && m->deltas[0].channel == 6 && m->deltas[0].mask == 0x8000);
   assert(m->deltas[0].value.x == 10 && m->deltas[0].value.trails == 8);
   assert(m->label_count == 1 && !strcmp(m->labels[0].name, "exitframe"));
@@ -116,9 +127,14 @@ int main(void) {
   memcpy(copy, buffer, length);
   copy[4] = DG_PACKAGE_FORMAT + 1;
   assert(!load(copy, length, &p, error) && strstr(error, "format"));
+  copy[4] = DG_PACKAGE_FORMAT - 1; // stale pre-Flash-catalog cache
+  assert(!load(copy, length, &p, error) && strstr(error, "format"));
   memcpy(copy, buffer, length);
   copy[0] = 'X';
   assert(!load(copy, length, &p, error));
+
+  memcpy(copy,buffer,length);copy[palette_count_at]=1; // 257 exceeds the CLUT bound
+  assert(!load(copy,length,&p,error) && strstr(error,"palette"));
 
   // Every truncation is rejected; nothing stays allocated (ASan checks).
   for (size_t n = 0; n < length; n++) {
@@ -138,6 +154,11 @@ int main(void) {
       if (load(copy, length, &p, error)) {
         accepted++;
         const dg_movie_t *movie = p.registry[0];
+        for(unsigned i=0;i<movie->member_count;i++) {
+          const dg_member_t *member=&movie->members[i];
+          assert(member->palette_count<=256);
+          for(unsigned c=0;c<member->palette_count;c++)assert(member->palette[c]<=0xffffff);
+        }
         for (unsigned f = 0; f < movie->frame_count; f++)
           assert(movie->frames[f].first + movie->frames[f].count <= 1);
         for (unsigned h = 0; h < movie->code->count; h++)

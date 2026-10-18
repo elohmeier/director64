@@ -264,6 +264,8 @@ static bool d5_call(dg_runtime_t *d, const char *name, unsigned argc,
       // the volume window must not restore its previous mixer settings.
       memcpy(stage->channel_volume, d->channel_volume, sizeof(d->channel_volume));
       memcpy(stage->fade_volume, d->fade_volume, sizeof(d->fade_volume));
+      memcpy(stage->fade_target, d->fade_target, sizeof(d->fade_target));
+      memcpy(stage->fade_restore, d->fade_restore, sizeof(d->fade_restore));
       memcpy(stage->fade_start, d->fade_start, sizeof(d->fade_start));
       memcpy(stage->fade_duration, d->fade_duration, sizeof(d->fade_duration));
       *d = *stage;

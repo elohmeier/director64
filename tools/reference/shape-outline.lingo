@@ -1,0 +1,44 @@
+-- Synthetic patterns and stroke geometry only; no game media.
+global out,pm,qm,q,patternId,thickness,foreground,background,x,y,pixels
+out=new(xtra("fileio"))
+out.createFile("C:\shape-outline.txt")
+out.openFile("C:\shape-outline.txt",2)
+qm=new(#bitmap)
+q=image(32,32,32)
+q.fill(rect(0,0,32,32),rgb(10,80,200))
+qm.image=q
+pm=new(#shape)
+pm.shapeType=#rect
+pm.filled=1
+pm.rect=rect(0,0,32,32)
+puppetSprite(148,1)
+puppetSprite(149,1)
+sprite(148).member=qm
+sprite(149).member=pm
+sprite(148).visible=1
+sprite(149).visible=1
+sprite(148).rect=rect(0,0,32,32)
+sprite(149).rect=rect(0,0,32,32)
+sprite(148).ink=0
+sprite(149).ink=0
+sprite(149).blend=100
+repeat with foreground in [rgb(0,0,0),rgb(255,0,0)]
+ repeat with background in [rgb(255,255,255),rgb(255,0,0)]
+  sprite(149).color=foreground
+  sprite(149).bgColor=background
+  repeat with patternId in [1,15,58]
+   pm.pattern=patternId
+   repeat with thickness in [0,1,2,3,4,8]
+    pm.lineSize=thickness
+    sprite(149).lineSize=thickness
+    updateStage
+    pixels=[]
+    repeat with x in [0,1,2,3,4,8,16,27,28,29,30,31]
+     pixels.add((the stage).image.getPixel(point(x,16)))
+    end repeat
+    out.writeString(string([patternId,thickness,pm.lineSize,sprite(149).lineSize,foreground,background,pixels])&RETURN)
+   end repeat
+  end repeat
+ end repeat
+end repeat
+out.closeFile()

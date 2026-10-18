@@ -1,0 +1,32 @@
+-- Synthetic rectangles using the currently loaded movie's authored texture table.
+-- Capture stage pixels only after the completion record; raw captures stay ignored.
+global out, pm, patternId, xPos, channel
+out=new(xtra("fileio"))
+out.createFile("C:\texture-authored.txt")
+out.openFile("C:\texture-authored.txt",2)
+puppetPalette "System - Win"
+repeat with channel=1 to 120
+ sprite(channel).visible=0
+end repeat
+repeat with patternId in [57,61,62]
+ pm=new(#shape)
+ pm.shapeType=#rect
+ pm.filled=1
+ pm.lineSize=0
+ pm.rect=rect(0,0,64,64)
+ pm.pattern=patternId
+ puppetSprite(patternId,1)
+ sprite(patternId).member=pm
+ sprite(patternId).visible=1
+ sprite(patternId).ink=0
+ sprite(patternId).blend=100
+ sprite(patternId).color=rgb(0,0,0)
+ sprite(patternId).bgColor=rgb(255,255,255)
+ xPos=(patternId-57)*80
+ if patternId=62 then xPos=160
+ if patternId=61 then xPos=80
+ sprite(patternId).rect=rect(xPos,0,xPos+64,64)
+end repeat
+updateStage
+out.writeString(string([the stageLeft,the stageTop,the colorDepth,the movieName])&RETURN)
+out.closeFile()

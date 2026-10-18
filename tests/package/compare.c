@@ -122,13 +122,46 @@ static void compare_scene(const dg_movie_t *a, const dg_movie_t *b) {
     SAME(style_equal(x->text_style, y->text_style));
     SAME(style_equal(x->text_insert_style, y->text_insert_style));
 #endif
-#if DG_D5
+#if DG_D5 || DG_D10
     SAME(text_equal(x->video_audio, y->video_audio) && x->video_flags == y->video_flags);
     SAME(!x->film_sounds == !y->film_sounds);
     if (x->film_sounds && y->film_sounds && x->film_count == y->film_count)
       SAME(!memcmp(x->film_sounds, y->film_sounds, 2u * x->film_count * sizeof(uint32_t)));
 #endif
 #if DG_D10
+    SAME(x->linked_movie == y->linked_movie && x->linked_flags == y->linked_flags &&
+         x->linked_left == y->linked_left && x->linked_top == y->linked_top);
+    SAME(!x->film_frames == !y->film_frames && x->film_left == y->film_left && x->film_top == y->film_top);
+    SAME(x->flash_stop_count == y->flash_stop_count);
+    SAME(x->flash_helper_count == y->flash_helper_count);
+    for (unsigned h = 0; h < x->flash_helper_count && x->flash_helper_count == y->flash_helper_count; h++) {
+      const dg_flash_helper_t *a = &x->flash_helpers[h], *b = &y->flash_helpers[h];
+      SAME(text_equal(a->name, b->name) && text_equal(a->target, b->target) && text_equal(a->property, b->property));
+      SAME(a->operation == b->operation && a->argument == b->argument && a->method == b->method);
+    }
+    if (x->flash_stop_count && x->flash_stop_count == y->flash_stop_count)
+      SAME(!memcmp(x->flash_stops, y->flash_stops, x->flash_stop_count * sizeof(uint16_t)));
+    if (x->film_frames && y->film_frames && x->film_count == y->film_count)
+      for (unsigned f = 0; f < x->film_count; f++) {
+        const dg_film_frame_t *p = &x->film_frames[f], *q = &y->film_frames[f];
+        SAME(p->count == q->count);
+        for (unsigned k = 0; k < p->count && p->count == q->count; k++) {
+          const dg_film_layer_t *a = &p->layers[k], *b = &q->layers[k];
+          SAME(a->channel == b->channel && a->film_frame == b->film_frame);
+          SAME(text_equal(a->asset, b->asset) && text_equal(a->name, b->name));
+          SAME(a->origin_x == b->origin_x && a->origin_y == b->origin_y);
+          SAME(a->affine == b->affine && !memcmp(a->matrix, b->matrix, sizeof(a->matrix)));
+          const dg_spec_t *s = &a->value, *t = &b->value;
+          SAME(s->member == t->member && s->script == t->script && s->x == t->x && s->y == t->y);
+          SAME(s->width == t->width && s->height == t->height && s->ink == t->ink &&
+               s->blend == t->blend && s->type == t->type && s->flags == t->flags);
+          SAME(s->fore == t->fore && s->back == t->back && s->thickness == t->thickness &&
+               s->stretch == t->stretch && s->trails == t->trails);
+          SAME(s->loc_z == t->loc_z && s->tempo == t->tempo && s->delay == t->delay &&
+               s->fore_rgb == t->fore_rgb && s->back_rgb == t->back_rgb &&
+               s->rotation == t->rotation && s->skew == t->skew);
+        }
+      }
     SAME(x->source_xtra == y->source_xtra && x->flash_label_count == y->flash_label_count &&
          x->flash_field_count == y->flash_field_count);
     for (unsigned f = 0; f < x->flash_label_count && x->flash_label_count == y->flash_label_count; f++)
@@ -143,6 +176,7 @@ static void compare_scene(const dg_movie_t *a, const dg_movie_t *b) {
            p->indent == q->indent && p->align == q->align && p->word_wrap == q->word_wrap &&
            p->multiline == q->multiline && p->leading == q->leading);
       SAME(style_equal(p->style, q->style));
+      SAME(!memcmp(p->local_bounds, q->local_bounds, sizeof(p->local_bounds)));
     }
 #endif
     SAME(a->member_index[i].hash == b->member_index[i].hash &&

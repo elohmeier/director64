@@ -101,40 +101,6 @@ def image_pack_budget(root: Path) -> int:
     return int(budget * 1024 * 1024)
 
 
-def mask_pairs(model: dict) -> dict[str, set[str]]:
-    """Per image asset, the mask assets of the members that carry it: a
-    bitmap member's mask is the next member of its cast, named
-    "<name>_mask" (the D10 mask ink pairing the console applies)."""
-    pairs: dict[str, set[str]] = {}
-    for movie in model["movies"]:
-        members = {(m["cast"], m["number"]): m for m in movie["members"]}
-        for (cast, number), member in members.items():
-            if member.get("type") != 1 or not member.get("asset"):
-                continue
-            mask = members.get((cast, number + 1))
-            masked = (
-                mask is not None
-                and mask.get("type") == 1
-                and mask.get("asset")
-                and mask.get("name", "") == member.get("name", "") + "_mask"
-            )
-            pairs.setdefault(member["asset"], set()).add(mask["asset"] if masked else "")
-    return pairs
-
-
-def baked_masks(model: dict, inks: dict[str, set[int]]) -> dict[str, str]:
-    """Which image assets get their mask baked, and with which mask: the
-    assets some scene draws with mask ink, whose every member carries the
-    same mask. An asset a member draws unmasked as well, or with another
-    ink, keeps the console's per-pixel fallback."""
-    pairs = mask_pairs(model)
-    return {
-        asset: next(iter(masks))
-        for asset, masks in pairs.items()
-        if 9 in inks.get(asset, ()) and inks[asset] == {9} and len(masks) == 1 and "" not in masks
-    }
-
-
 def working_sets(root: Path) -> dict:
     """The port's recorded working sets (director64 working-sets): per
     movie, the (asset, ink) pairs the stage drew and the score references,
@@ -279,7 +245,34 @@ def font_inputs(model_dir: Path, model: dict) -> dict:
     return expected
 
 
-def pack(root: Path, image: str):
+def readonly_data_inputs(extracted: Path, folders) -> dict:
+    """Manifest every file in the compiler's shared read-only data plan."""
+    expected = {}
+    folded = set()
+    for folder in folders:
+        relative = Path(folder)
+        if (not folder or relative.is_absolute() or ".." in relative.parts
+                or relative.parts[0] in {"code", "images", "audio", "video", "fonts"}):
+            raise ValueError(f"invalid read-only data folder: {folder}")
+        source = extracted / relative
+        if not source.is_dir():
+            raise ValueError(f"missing read-only data folder: {folder}")
+        files = sorted(p for p in source.rglob("*") if p.is_file())
+        if not files:
+            raise ValueError(f"empty read-only data folder: {folder}")
+        for raw in files:
+            if not raw.resolve().is_relative_to(extracted.resolve()):
+                raise ValueError(f"read-only data escapes extraction: {raw}")
+            name = raw.relative_to(extracted).as_posix()
+            if name.casefold() in folded:
+                raise ValueError(f"duplicate read-only data path: {name}")
+            folded.add(name.casefold())
+            expected[name] = {"raw": raw, "source_sha256": digest(raw),
+                              "conversion": {"tool": "copy", "args": []}}
+    return expected
+
+
+def pack(root: Path, image: str, *, data_folders=()):
     inspect = inspect_image(root, image)
     image = inspect["Id"]
     revision = inspect["Config"].get("Labels", {}).get("org.director64.libdragon-commit")
@@ -308,12 +301,29 @@ def pack(root: Path, image: str):
         for record in model.get("externalMedia", [])
         if record.get("video")
     }
+    from .flash_native import assets as flash_assets
+
+    # Event envelopes and arbitrary in/out points must address exact PCM
+    # samples. Keep these small independently mixed sounds uncompressed at
+    # their authored rate; ULC seeks and global resampling change that grid.
+    flash_sounds = {
+        sound["asset"]
+        for movie in model["movies"] for member in movie["members"]
+        for sound in member.get("flashRuntime", {}).get("sounds", [])
+    }
+
     for movie in model["movies"]:
-        for member in movie["members"]:
+        catalog_assets = {asset for cast in movie.get("casts", [])
+                          for asset in cast.get("patternAssets", []) if asset}
+        for member in [*movie["members"], *({"asset": a} for a in sorted(catalog_assets))]:
             for name in {
                 member.get("asset", ""),
                 member.get("videoAudio", ""),
+                *flash_assets(member.get("flashRuntime", {})),
                 *member.get("filmAssets", []),
+                *(layer.get(key, "")
+                  for frame in member.get("filmLayers", []) for layer in frame
+                  for key in ("asset", "maskAsset")),
             } - {""}:
                 folder = (
                     "video"
@@ -341,7 +351,7 @@ def pack(root: Path, image: str):
                 if folder == "audio":
                     expected[f"{folder}/{name}"]["conversion"] = {
                         "tool": "audioconv64",
-                        "args": audio_flags,
+                        "args": ["--wav-compress", "0"] if name in flash_sounds else audio_flags,
                     }
                 if folder == "video":
                     seek = raw.with_suffix(".seek")
@@ -368,7 +378,10 @@ def pack(root: Path, image: str):
                 drawn_in.setdefault(row["asset"], set()).add(movie_name)
     # The mask ink, baked: the manifest records the mask as part of the
     # conversion, so a change to either image repacks the pair.
-    baked = baked_masks(model, inks)
+    # Preserve authored pixels for the renderer's member-specific mask pass.
+    # The old baked form clamped edge coordinates, lost registration offsets
+    # and reduced D8.5 gray coverage to a binary threshold.
+    baked = {}
     for asset, mask in baked.items():
         if f"images/{mask}" not in expected:
             raise ValueError(f"mask image is not manifested: {mask}")
@@ -376,6 +389,8 @@ def pack(root: Path, image: str):
             "source_sha256"
         ]
     expected.update(font_inputs(model_path.parent, model))
+    data_inputs = readonly_data_inputs(root / work_dir() / "extracted", data_folders)
+    expected.update(data_inputs)
     previous_path = root / f"{work_dir()}/director/packed.json"
     previous = json.loads(previous_path.read_text()) if previous_path.exists() else {}
     target = root / f"{work_dir()}/filesystem"
@@ -389,7 +404,10 @@ def pack(root: Path, image: str):
     for name, entry in sorted(expected.items()):
         old = previous.get("files", {}).get(name, {})
         packed = (image_cache if name.startswith("images/") else target) / name
-        if name.startswith("video/"):
+        if name in data_inputs:
+            (staging / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(entry["raw"], staging / name)
+        elif name.startswith("video/"):
             shutil.copyfile(entry["raw"], staging / name)
         elif (
             previous.get("toolchain") == toolchain
@@ -402,7 +420,8 @@ def pack(root: Path, image: str):
         else:
             folder = name.split("/")[0]
             pending[folder].append(
-                name if folder in ("fonts", "images") else str(entry["raw"].relative_to(root))
+                name if folder in ("fonts", "images", "audio")
+                else str(entry["raw"].relative_to(root))
             )
     # Every image is staged as a copy under its manifest name: a port that
     # spends a colour bit or indexes its palettes packs the reduced copy. The
@@ -431,17 +450,25 @@ def pack(root: Path, image: str):
             staged.append(str(copy.relative_to(root)))
             levels[staged[-1]] = image_level(entry["raw"].stat().st_size, tiers)
         pending["images"] = staged
-    # Images are listed per compression level; everything else keeps one list.
+    # Images and sounds are grouped by their exact converter arguments.
     by_level = {}
     for source in pending["images"]:
         by_level.setdefault(levels[source], []).append(source)
     for folder, files in pending.items():
-        if folder == "images":
+        if folder in ("images", "audio"):
             continue
         listing = staging / f"{folder}.list"
         listing.write_bytes(b"".join(n.encode() + b"\0" for n in files))
     for level, sources in by_level.items():
         listing = staging / f"images-{level}.list"
+        listing.write_bytes(b"".join(n.encode() + b"\0" for n in sources))
+    audio_groups = {}
+    for name in pending["audio"]:
+        entry = expected[name]
+        flags = tuple(entry["conversion"]["args"])
+        audio_groups.setdefault(flags, []).append(str(entry["raw"].relative_to(root)))
+    for number, sources in enumerate(audio_groups.values()):
+        listing = staging / f"audio-{number}.list"
         listing.write_bytes(b"".join(n.encode() + b"\0" for n in sources))
     relative = staging.relative_to(root).as_posix()
     # All dynamic paths are generated hexadecimal/numeric basenames under this
@@ -454,10 +481,11 @@ def pack(root: Path, image: str):
             for level in sorted(by_level)
         ]
         + [
-            f"xargs -r -0 -a {relative}/audio.list -n 1 -P {jobs} "
-            f"audioconv64 {' '.join(audio_flags)} -o {relative}/audio"
+            f"xargs -r -0 -a {relative}/audio-{number}.list -n 1 -P {jobs} "
+            f"audioconv64 {' '.join(flags)} -o {relative}/audio"
+            for number, flags in enumerate(audio_groups)
         ]
-    )
+    ) or "true"
     subprocess.run(
         [
             container_engine(),
@@ -509,7 +537,7 @@ def pack(root: Path, image: str):
     files = {}
     for name, entry in sorted(expected.items()):
         packed = staging / name
-        if not packed.is_file() or packed.stat().st_size < 16:
+        if not packed.is_file() or (name not in data_inputs and packed.stat().st_size < 16):
             raise ValueError(f"missing/truncated packed asset: {name}")
         files[name] = {
             "source_sha256": entry["source_sha256"],
@@ -662,6 +690,14 @@ def pack(root: Path, image: str):
         if (target / folder).exists():
             (target / folder).rename(backup / folder)
         (staging / folder).rename(target / folder)
+    data_roots = {name.split("/")[0] for name in data_inputs}
+    data_roots.update(name.split("/")[0] for name, entry in previous.get("files", {}).items()
+                      if entry.get("conversion", {}).get("tool") == "copy")
+    for folder in sorted(data_roots):
+        if (target / folder).exists():
+            (target / folder).rename(backup / folder)
+        if (staging / folder).exists():
+            (staging / folder).rename(target / folder)
     # Per-image files never enter the ROM filesystem; the pack does.
     if (target / "images").exists():
         (target / "images").rename(backup / "images")
@@ -692,7 +728,10 @@ def main():
         default=os.environ.get("DIRECTOR64_TOOLCHAIN_IMAGE", "director64-toolchain:local"),
     )
     args = parser.parse_args()
-    pack(Path.cwd(), args.image)
+    from .project import selected_game
+    from .web import port_plan
+
+    pack(Path.cwd(), args.image, data_folders=port_plan(selected_game()).get("data", []))
 
 
 if __name__ == "__main__":

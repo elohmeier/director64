@@ -8,9 +8,27 @@
 // header {codec, width, height, frames: [[microseconds, key, offset, size]]}
 // and the encoded chunks.
 export function parseVideo(bytes) {
+  if (bytes.length < 4) throw new Error("truncated video header");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const length = view.getUint32(0, true);
+  if (length > bytes.length - 4) throw new Error("truncated video index");
   const header = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + length)));
+  if (!header || !Array.isArray(header.frames) || !header.frames.length || typeof header.codec !== "string")
+    throw new Error("video has no indexed frames or codec");
+  const dimensions = [header.width, header.height];
+  if (!dimensions.every((n) => Number.isInteger(n) && n >= 0 && n <= 4096) ||
+      ((!header.width || !header.height) &&
+        (header.width !== 0 || header.height !== 0 || !/^avc1\.[0-9a-f]{6}$/i.test(header.codec))))
+    throw new Error("invalid video dimensions");
+  let last = -1;
+  for (const entry of header.frames) {
+    if (!Array.isArray(entry) || entry.length !== 4 || !entry.every(Number.isSafeInteger) ||
+        entry[0] < 0 || entry[0] < last || (entry[1] !== 0 && entry[1] !== 1) ||
+        entry[2] < 0 || entry[3] <= 0 || entry[2] + entry[3] > bytes.length - 4 - length)
+      throw new Error("invalid video frame index");
+    last = entry[0];
+  }
+  if (header.frames[0][1] !== 1) throw new Error("video does not begin with a keyframe");
   return {...header, data: bytes.subarray(4 + length)};
 }
 
@@ -28,9 +46,10 @@ export function frameAt(frames, microseconds) {
 }
 
 class Player {
-  constructor(video, onFrame) {
+  constructor(video, onFrame, onError) {
     this.video = video;
     this.onFrame = onFrame;
+    this.onError = onError;
     this.canvas = new OffscreenCanvas(video.width || 1, video.height || 1);
     this.context = this.canvas.getContext("2d", {willReadFrequently: true});
     this.fed = -1; // the last chunk given to the decoder
@@ -38,24 +57,27 @@ class Player {
     this.pixels = null;
     this.decoder = new VideoDecoder({
       output: (frame) => this.output(frame),
-      error: (error) => console.warn("video decoder", error),
+      error: onError,
     });
-    this.decoder.configure(this.config());
+    try { this.decoder.configure(this.config()); }
+    catch (error) { this.close(); throw error; }
   }
   output(frame) {
-    // Only the frame the runtime wants is drawn; frames decoded on the way
-    // there are dropped unread.
-    if (this.wanted >= 0 && frame.timestamp === this.video.frames[this.wanted][0]) {
-      // A console stream's header leaves the size to its first frame.
-      if (!this.video.width) {
-        this.video.width = this.canvas.width = frame.displayWidth;
-        this.video.height = this.canvas.height = frame.displayHeight;
+    try {
+      // Only the frame the runtime wants is drawn; frames decoded on the way
+      // there are dropped unread.
+      if (this.wanted >= 0 && frame.timestamp === this.video.frames[this.wanted][0]) {
+        // A console stream's header leaves the size to its first frame.
+        if (!this.video.width) {
+          this.video.width = this.canvas.width = frame.displayWidth;
+          this.video.height = this.canvas.height = frame.displayHeight;
+        }
+        this.context.drawImage(frame, 0, 0);
+        this.pixels = this.context.getImageData(0, 0, this.video.width, this.video.height).data;
+        this.onFrame();
       }
-      this.context.drawImage(frame, 0, 0);
-      this.pixels = this.context.getImageData(0, 0, this.video.width, this.video.height).data;
-      this.onFrame();
-    }
-    frame.close();
+    } catch (error) { this.onError(error); }
+    finally { frame.close(); }
   }
   config() {
     const {codec, width, height} = this.video;
@@ -93,6 +115,7 @@ export class VideoPlayers {
     this.audio = audio;
     this.players = new Map();
     this.revision = 0;
+    this.errors = [];
   }
   // The runtime's per-step report for one sprite (web_runtime.c update_videos).
   update(sprite, asset, sound, time600, rate, serial, gain) {
@@ -106,15 +129,17 @@ export class VideoPlayers {
       let player = null;
       if (bytes && typeof VideoDecoder !== "undefined") {
         try {
-          player = new Player(parseVideo(bytes), () => this.revision++);
+          player = new Player(parseVideo(bytes), () => this.revision++, (error) =>
+            this.errors.push(`video ${asset}: ${error.message ?? error}`));
         } catch (error) {
-          console.warn(`video ${asset}`, error);
+          this.errors.push(`video ${asset}: ${error.message ?? error}`);
         }
-      } else if (asset) console.warn(`missing video ${asset}`);
+      } else if (asset) this.errors.push(bytes ? "video decoding is unavailable in this browser" : `missing video ${asset}`);
       entry = {player, sound, serial: -1, playing: false};
       this.players.set(sprite, entry);
     }
-    entry.player?.seek(time600);
+    try { entry.player?.seek(time600); }
+    catch (error) { this.errors.push(`video ${asset}: ${error.message ?? error}`); }
     // The movie's sound: started (or re-seeked) when it plays and the time
     // jumped, stopped when it stops, pitched by the rate, as the console's.
     if (entry.sound) {

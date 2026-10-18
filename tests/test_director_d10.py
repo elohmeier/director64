@@ -1,6 +1,33 @@
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from director64.director import generate, score_tempo
+
+
+@pytest.mark.parametrize("version,flags", [
+    (600, []), (850, ["-DDIRECTOR64_DIRECTOR_VERSION=10", "-DDIRECTOR64_D85=1"]),
+    (1000, ["-DDIRECTOR64_DIRECTOR_VERSION=10"]),
+])
+def test_generated_members_preserve_large_film_count_and_loop_flag(tmp_path, version, flags):
+    model = {"problems": [], "movies": [{"name": "FILM.DXR", "id": 1, "tempo": 30,
+                        "directorVersion": version,
+                        "casts": [{"number": 1, "name": "Internal", "file": "FILM.DXR"}],
+                        "members": [{"cast": 1, "number": 1, "type": 2,
+                                     "filmLoop": 1, "filmAssets": ["frame.fdi"] * 505}]}]}
+    generate(model, tmp_path)
+    source = tmp_path / "verify.c"
+    source.write_text('#include "film_dxr_scene.c"\n'
+                      'const lv_movie_t aot_film_dxr={0};\n'
+                      'int main(void){const dg_member_t *m=dg_film_dxr.members;'
+                      'return m->film_count!=505 || m->film_loop!=1 || m->looping!=0;}\n')
+    root = Path(__file__).parents[1]
+    executable = tmp_path / "verify"
+    subprocess.run(["cc", "-std=c17", "-Wall", "-Wextra", "-Werror", "-pedantic", *flags,
+                    "-Iruntime/director", "-Iruntime/lingo", source, "-o", executable],
+                   cwd=root, check=True, capture_output=True)
+    subprocess.run([executable], check=True)
 
 
 def movie(version, channel, record):
@@ -43,7 +70,7 @@ def test_declared_director_1000_retains_d7_plus_lowering(tmp_path):
     generate(movie(1000, 1, rate), tmp_path)
     scene = (tmp_path / "d10_dxr_scene.c").read_text()
     assert ",0,999,0,0,0,0,0}}" in scene
-    assert ",palette,1193046}" in scene
+    assert ",palette,1193046,0,NULL}" in scene
 
 
 def test_d10_accepts_the_full_authored_sprite_range(tmp_path):

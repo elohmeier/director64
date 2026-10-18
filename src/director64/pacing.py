@@ -279,6 +279,13 @@ def assert_pacing(report: dict[str, Any], budget: dict[str, Any] | None = None) 
     limits = DEFAULT_BUDGET | (budget or {})
     summary = report["summary"]
     failures = []
+    measured = sum(row["tick_delivery"] is not None for row in report["windows"])
+    required = limits["sustained_windows"]
+    if measured < required:
+        failures.append(
+            f"insufficient pacing measurements: {measured} usable windows; "
+            f"need at least {required} to judge sustained tick delivery"
+        )
     # Recounted against the caller's threshold: the summary's own run is
     # measured at the default, so trusting it would silently ignore an
     # override and judge every scenario by the same delivery floor.
@@ -304,10 +311,13 @@ def assert_pacing(report: dict[str, Any], budget: dict[str, Any] | None = None) 
             )
     ceiling = limits.get("max_service_us_per_step")
     per_step = summary.get("service_us_per_step")
-    if ceiling is not None and per_step is not None and per_step > ceiling:
-        failures.append(
-            f"service cost {per_step:.2f} us per Lingo step exceeds {ceiling:.2f} "
-            "(an interpreter or runtime-layout regression; re-measure deliberately)"
-        )
+    if ceiling is not None:
+        if per_step is None:
+            failures.append("missing service cost measurement for the requested Lingo step budget")
+        elif per_step > ceiling:
+            failures.append(
+                f"service cost {per_step:.2f} us per Lingo step exceeds {ceiling:.2f} "
+                "(an interpreter or runtime-layout regression; re-measure deliberately)"
+            )
     if failures:
         raise ValueError("pacing budget violated: " + "; ".join(failures))

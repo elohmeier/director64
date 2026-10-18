@@ -25,7 +25,8 @@ TIMEOUT = 240
 FRAMES = (0, 720, 1440, 2160, 2880, 3540)
 FAILURE = re.compile(
     r"\b(?:NATIVE_\w*(?:FAIL|ERROR|UNSUPPORTED)\w*|REQUIREMENT_FAIL|RSP ?CRASH|"
-    r"ASSERTION FAILED|FULL_REPLAY_\w*)\b|^Error:|\bpanick?ed\b|\bpanic\b",
+    r"ASSERTION FAILED|EXCEPTION|SCRIPT_ERROR|"
+    r"INVALID MEMORY ADDRESS|FULL_REPLAY_\w*)\b|^Error:|\bpanick?ed\b|\bpanic\b",
     re.IGNORECASE | re.MULTILINE,
 )
 

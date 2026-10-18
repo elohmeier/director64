@@ -1,0 +1,15 @@
+-- Synthetic four-bit palette indices only; no game media.
+global out, p, q, paletteIndex
+out=new(xtra("fileio"))
+out.createFile("C:\palette-mac-four.txt")
+out.openFile("C:\palette-mac-four.txt",2)
+p=image(16,1,4,#systemMac)
+q=image(16,1,32)
+repeat with paletteIndex=0 to 15
+ p.setPixel(point(paletteIndex,0),paletteIndex)
+end repeat
+q.copyPixels(p,rect(0,0,16,1),rect(0,0,16,1),[#ink:0])
+repeat with paletteIndex=0 to 15
+ out.writeString(string([paletteIndex,p.getPixel(point(paletteIndex,0)),q.getPixel(point(paletteIndex,0))])&RETURN)
+end repeat
+out.closeFile()

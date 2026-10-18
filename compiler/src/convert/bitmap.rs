@@ -3,18 +3,22 @@
 //! 41ac2b31847622d0662d22c03fe6979e3b43cfbc, engines/director/{frame.cpp,
 //! score.cpp,spriteinfo.h}; independently implemented.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::js::{self, latin1, unhex};
 
 fn be16(b: &[u8], at: usize) -> Result<u16, String> {
-    b.get(at..at + 2).map(|s| u16::from_be_bytes([s[0], s[1]])).ok_or_else(|| "read outside buffer".into())
+    b.get(at..at + 2)
+        .map(|s| u16::from_be_bytes([s[0], s[1]]))
+        .ok_or_else(|| "read outside buffer".into())
 }
 fn bei16(b: &[u8], at: usize) -> Result<i64, String> {
     Ok(be16(b, at)? as i16 as i64)
 }
 fn be32(b: &[u8], at: usize) -> Result<u32, String> {
-    b.get(at..at + 4).map(|s| u32::from_be_bytes(s.try_into().unwrap())).ok_or_else(|| "read outside buffer".into())
+    b.get(at..at + 4)
+        .map(|s| u32::from_be_bytes(s.try_into().unwrap()))
+        .ok_or_else(|| "read outside buffer".into())
 }
 
 pub struct Decoded {
@@ -28,7 +32,10 @@ pub fn decode_packbits(data: &[u8], required: usize) -> Result<Decoded, String> 
         return Err("BITD decoded size is outside conversion bounds".into());
     }
     if data.len() == required {
-        return Ok(Decoded { pixels: data.to_vec(), compressed: false });
+        return Ok(Decoded {
+            pixels: data.to_vec(),
+            compressed: false,
+        });
     }
     let mut pixels = vec![0u8; required];
     let (mut source, mut target) = (0usize, 0usize);
@@ -36,7 +43,11 @@ pub fn decode_packbits(data: &[u8], required: usize) -> Result<Decoded, String> 
         let control = data[source];
         source += 1;
         let repeated = control & 0x80 != 0;
-        let count = if repeated { 257 - control as usize } else { control as usize + 1 };
+        let count = if repeated {
+            257 - control as usize
+        } else {
+            control as usize + 1
+        };
         let consumed = if repeated { 1 } else { count };
         if consumed > data.len() - source || count > required - target {
             return Err("BITD compressed run exceeds source or decoded bounds".into());
@@ -52,7 +63,10 @@ pub fn decode_packbits(data: &[u8], required: usize) -> Result<Decoded, String> 
     if target != required {
         return Err(format!("BITD decoded {target} bytes; expected {required}"));
     }
-    Ok(Decoded { pixels, compressed: true })
+    Ok(Decoded {
+        pixels,
+        compressed: true,
+    })
 }
 
 pub fn decode_palette(data: &[u8]) -> Result<Vec<[u8; 3]>, String> {
@@ -82,8 +96,14 @@ impl Meta {
     pub fn to_json(&self) -> Map<String, Value> {
         let mut out = Map::new();
         for (k, v) in [
-            ("width", self.width), ("height", self.height), ("depth", self.depth), ("pitch", self.pitch),
-            ("palette", self.palette), ("paletteCast", self.palette_cast), ("regX", self.reg_x), ("regY", self.reg_y),
+            ("width", self.width),
+            ("height", self.height),
+            ("depth", self.depth),
+            ("pitch", self.pitch),
+            ("palette", self.palette),
+            ("paletteCast", self.palette_cast),
+            ("regX", self.reg_x),
+            ("regY", self.reg_y),
         ] {
             out.insert(k.into(), json!(v));
         }
@@ -107,7 +127,11 @@ pub fn bitmap_metadata(cast: &[u8], version: i64) -> Result<Meta, String> {
     }
     let b = &cast[start..start + length];
     let pitch_raw = be16(b, 0)? as i64;
-    let color = if version < 600 { length > 22 } else { pitch_raw & 0x8000 != 0 };
+    let color = if version < 600 {
+        length > 22
+    } else {
+        pitch_raw & 0x8000 != 0
+    };
     if color && length < 28 {
         return Err("truncated color bitmap metadata".into());
     }
@@ -115,12 +139,22 @@ pub fn bitmap_metadata(cast: &[u8], version: i64) -> Result<Meta, String> {
     let left = bei16(b, 4)?;
     let width = bei16(b, 8)? - left;
     let height = bei16(b, 6)? - top;
-    let depth = if color { if b[23] == 0 { 1 } else { b[23] as i64 } } else { 1 };
+    let depth = if color {
+        if b[23] == 0 { 1 } else { b[23] as i64 }
+    } else {
+        1
+    };
     let palette = if color { bei16(b, 26)? } else { 0 };
-    if width < 0 || height < 0 || (width == 0) != (height == 0) || width > 4096 || height > 4096
+    if width < 0
+        || height < 0
+        || (width == 0) != (height == 0)
+        || width > 4096
+        || height > 4096
         || ![1, 2, 4, 8, 16, 24, 32].contains(&depth)
     {
-        return Err(format!("unsupported bitmap dimensions/depth {width}x{height}x{depth}"));
+        return Err(format!(
+            "unsupported bitmap dimensions/depth {width}x{height}x{depth}"
+        ));
     }
     let use_alpha = version >= 700 && depth == 32 && b[22] & 0x10 != 0;
     Ok(Meta {
@@ -138,17 +172,43 @@ pub fn bitmap_metadata(cast: &[u8], version: i64) -> Result<Meta, String> {
     })
 }
 
+/// Original eight-bit palette slots, stripped only of row padding. VWTL
+/// textures follow the active stage palette; round-tripping through RGB loses
+/// those identities (including distinct entries with the same RGB color).
+pub fn bitmap_indices(meta: &Meta, bitd: &[u8]) -> Result<Vec<u8>, String> {
+    if meta.depth != 8 || meta.width <= 0 || meta.height <= 0 || meta.pitch < meta.width {
+        return Err("indexed pattern source requires an eight-bit bitmap".into());
+    }
+    let (w, h, pitch) = (
+        meta.width as usize,
+        meta.height as usize,
+        meta.pitch as usize,
+    );
+    let extent = pitch.checked_mul(h).ok_or("bitmap index extent overflow")?;
+    let decoded = decode_packbits(bitd, extent)?;
+    Ok(decoded
+        .pixels
+        .chunks_exact(pitch)
+        .flat_map(|row| row[..w].iter().copied())
+        .collect())
+}
+
 /// The complete first BITD plane of a FollowAlpha bitmap.
 pub fn bitmap_source_alpha(meta: &Meta, bitd: &[u8]) -> Result<Vec<u8>, String> {
     if !meta.use_alpha || meta.depth != 32 {
         return Err("bitmap has no authored alpha channel".into());
     }
-    let (w, h, pitch) = (meta.width as usize, meta.height as usize, meta.pitch as usize);
+    let (w, h, pitch) = (
+        meta.width as usize,
+        meta.height as usize,
+        meta.pitch as usize,
+    );
     let decoded = decode_packbits(bitd, pitch * h)?;
     let mut alpha = vec![0u8; w * h];
     for y in 0..h {
         for x in 0..w {
-            alpha[y * w + x] = decoded.pixels[y * pitch + if decoded.compressed { x } else { x * 4 }];
+            alpha[y * w + x] =
+                decoded.pixels[y * pitch + if decoded.compressed { x } else { x * 4 }];
         }
     }
     Ok(alpha)
@@ -173,7 +233,10 @@ pub fn decode_jpeg(parts: &[&[u8]]) -> Result<(usize, usize, Vec<[u8; 3]>), Stri
                     break 'parts;
                 }
                 _ => {
-                    let len = u16::from_be_bytes([data[p + 2], *data.get(p + 3).ok_or("truncated JPEG segment")?]) as usize;
+                    let len = u16::from_be_bytes([
+                        data[p + 2],
+                        *data.get(p + 3).ok_or("truncated JPEG segment")?,
+                    ]) as usize;
                     let end = (p + 2 + len).min(data.len());
                     stream.extend_from_slice(&data[p..end]);
                     p = end;
@@ -189,7 +252,9 @@ pub fn decode_jpeg(parts: &[&[u8]]) -> Result<(usize, usize, Vec<[u8; 3]>), Stri
         .map(|i| match info.pixel_format {
             jpeg_decoder::PixelFormat::L8 => [pixels[i]; 3],
             jpeg_decoder::PixelFormat::L16 => [pixels[i * 2]; 3],
-            jpeg_decoder::PixelFormat::RGB24 => [pixels[i * 3], pixels[i * 3 + 1], pixels[i * 3 + 2]],
+            jpeg_decoder::PixelFormat::RGB24 => {
+                [pixels[i * 3], pixels[i * 3 + 1], pixels[i * 3 + 2]]
+            }
             jpeg_decoder::PixelFormat::CMYK32 => {
                 let k = 255 - pixels[i * 4 + 3] as u32;
                 let c = |v: u8| ((255 - v as u32) * k / 255) as u8;
@@ -210,7 +275,11 @@ pub fn jpeg_bitd(meta: &Meta, jpeg: &[u8], alfa: Option<&[u8]>) -> Result<(Meta,
         decode_png(jpeg).map_err(|e| format!("ediM PNG: {e}"))?
     } else {
         let (w, h, rgb) = decode_jpeg(&[jpeg]).map_err(|e| format!("ediM JPEG: {e}"))?;
-        (w, h, rgb.into_iter().map(|[r, g, b]| [r, g, b, 255]).collect())
+        (
+            w,
+            h,
+            rgb.into_iter().map(|[r, g, b]| [r, g, b, 255]).collect(),
+        )
     };
     // The image's own size wins: some imported PNGs keep a stale member rect.
     if w > 4096 || h > 4096 {
@@ -225,7 +294,9 @@ pub fn jpeg_bitd(meta: &Meta, jpeg: &[u8], alfa: Option<&[u8]>) -> Result<(Meta,
         for x in 0..w {
             let i = y * w + x;
             let [r, g, b, a] = rgba[i];
-            out[i * 4] = alpha.as_ref().map_or(a, |plane| plane[y * ((w + 1) & !1) + x]);
+            out[i * 4] = alpha
+                .as_ref()
+                .map_or(a, |plane| plane[y * ((w + 1) & !1) + x]);
             out[i * 4 + 1..i * 4 + 4].copy_from_slice(&[r, g, b]);
         }
     }
@@ -242,15 +313,29 @@ pub fn jpeg_bitd(meta: &Meta, jpeg: &[u8], alfa: Option<&[u8]>) -> Result<(Meta,
 /// A non-interlaced PNG of any standard color type and depth, as RGBA.
 pub fn decode_png(b: &[u8]) -> Result<(usize, usize, Vec<[u8; 4]>), String> {
     let be32 = |at: usize| -> Result<usize, String> {
-        Ok(u32::from_be_bytes(b.get(at..at + 4).ok_or("truncated PNG")?.try_into().unwrap()) as usize)
+        Ok(u32::from_be_bytes(
+            b.get(at..at + 4)
+                .ok_or("truncated PNG")?
+                .try_into()
+                .unwrap(),
+        ) as usize)
     };
-    let (mut p, mut header, mut palette, mut trns, mut idat) = (8, None, Vec::new(), Vec::new(), Vec::new());
+    let (mut p, mut header, mut palette, mut trns, mut idat) =
+        (8, None, Vec::new(), Vec::new(), Vec::new());
     while p + 8 <= b.len() {
         let length = be32(p)?;
         let kind = &b[p + 4..p + 8];
         let body = b.get(p + 8..p + 8 + length).ok_or("truncated PNG chunk")?;
         match kind {
-            b"IHDR" => header = Some((be32(p + 8)?, be32(p + 12)?, body[8] as usize, body[9], body[12])),
+            b"IHDR" => {
+                header = Some((
+                    be32(p + 8)?,
+                    be32(p + 12)?,
+                    body[8] as usize,
+                    body[9],
+                    body[12],
+                ))
+            }
             b"PLTE" => palette = body.chunks(3).map(|c| [c[0], c[1], c[2]]).collect(),
             b"tRNS" => trns = body.to_vec(),
             b"IDAT" => idat.extend_from_slice(body),
@@ -286,9 +371,17 @@ pub fn decode_png(b: &[u8]) -> Result<(usize, usize, Vec<[u8; 4]>), String> {
         let filter = raw[y * (stride + 1)];
         for x in 0..stride {
             let v = raw[y * (stride + 1) + 1 + x];
-            let a = if x >= bpp { rows[y * stride + x - bpp] } else { 0 } as i32;
+            let a = if x >= bpp {
+                rows[y * stride + x - bpp]
+            } else {
+                0
+            } as i32;
             let up = if y > 0 { rows[(y - 1) * stride + x] } else { 0 } as i32;
-            let c = if x >= bpp && y > 0 { rows[(y - 1) * stride + x - bpp] } else { 0 } as i32;
+            let c = if x >= bpp && y > 0 {
+                rows[(y - 1) * stride + x - bpp]
+            } else {
+                0
+            } as i32;
             let predicted = match filter {
                 0 => 0,
                 1 => a,
@@ -297,7 +390,13 @@ pub fn decode_png(b: &[u8]) -> Result<(usize, usize, Vec<[u8; 4]>), String> {
                 4 => {
                     let base = a + up - c;
                     let (pa, pb, pc) = ((base - a).abs(), (base - up).abs(), (base - c).abs());
-                    if pa <= pb && pa <= pc { a } else if pb <= pc { up } else { c }
+                    if pa <= pb && pa <= pc {
+                        a
+                    } else if pb <= pc {
+                        up
+                    } else {
+                        c
+                    }
                 }
                 _ => return Err(format!("PNG filter {filter}")),
             };
@@ -310,7 +409,8 @@ pub fn decode_png(b: &[u8]) -> Result<(usize, usize, Vec<[u8; 4]>), String> {
             8 => row[index] as u16,
             _ => {
                 let per = 8 / depth;
-                ((row[index / per] >> (8 - depth * (index % per + 1))) & ((1 << depth) - 1) as u8) as u16
+                ((row[index / per] >> (8 - depth * (index % per + 1))) & ((1 << depth) - 1) as u8)
+                    as u16
             }
         }
     };
@@ -321,7 +421,10 @@ pub fn decode_png(b: &[u8]) -> Result<(usize, usize, Vec<[u8; 4]>), String> {
             _ => (v as u32 * 255 / ((1u32 << depth) - 1)) as u8,
         }
     };
-    let key = |at: usize| trns.get(at..at + 2).map(|k| u16::from_be_bytes([k[0], k[1]]));
+    let key = |at: usize| {
+        trns.get(at..at + 2)
+            .map(|k| u16::from_be_bytes([k[0], k[1]]))
+    };
     let mut out = Vec::with_capacity(w * h);
     for y in 0..h {
         let row = &rows[y * stride..(y + 1) * stride];
@@ -390,6 +493,16 @@ pub fn builtin_palette(operand: i64, depth: i64) -> Result<Vec<u8>, String> {
     if operand == -101 {
         return windows_palette(depth, true);
     }
+    if operand == 0 && depth == 4 {
+        // Original Director 8.5.1r104 image(16,1,4,#systemMac), each
+        // palette index copied into a 32-bit image without stage conversion.
+        // Reproduce with tools/reference/palette-mac-four.lingo. This is
+        // Director's four-bit lookup, not the Macintosh OS CLUT resource.
+        return Ok(rgb_bytes(&[
+            0xffffff, 0xbebebe, 0xffe600, 0x808080, 0x9fd8ff, 0x7c601b, 0x009e00, 0x8ed200,
+            0xde00bf, 0x8d00a3, 0xfa0039, 0xff8c32, 0x0000ea, 0x00f0db, 0x646464, 0x000000,
+        ]));
+    }
     if ![1, 4, 8].contains(&depth) {
         return Err("unsupported builtin palette depth".into());
     }
@@ -412,7 +525,13 @@ pub fn builtin_palette(operand: i64, depth: i64) -> Result<Vec<u8>, String> {
         }
         for channel in 0..4 {
             for value in [238u8, 221, 187, 170, 136, 119, 85, 68, 34, 17] {
-                let pick = |i: usize| if channel == 3 || channel == i { value } else { 0 };
+                let pick = |i: usize| {
+                    if channel == 3 || channel == i {
+                        value
+                    } else {
+                        0
+                    }
+                };
                 colors.push([pick(0), pick(1), pick(2)]);
             }
         }
@@ -420,21 +539,38 @@ pub fn builtin_palette(operand: i64, depth: i64) -> Result<Vec<u8>, String> {
     } else {
         return Err(format!("unsupported builtin palette {operand}/{depth}"));
     }
-    Ok(colors.iter().flat_map(|c| [c[0], c[0], c[1], c[1], c[2], c[2]]).collect())
+    Ok(colors
+        .iter()
+        .flat_map(|c| [c[0], c[0], c[1], c[1], c[2], c[2]])
+        .collect())
 }
 
 /// Director's indexed Windows system colors.
 pub fn windows_palette(depth: i64, modern: bool) -> Result<Vec<u8>, String> {
     if depth == 4 {
         return Ok(rgb_bytes(&[
-            0xffffff, 0x00ffff, 0xff00ff, 0x0000ff, 0xffff00, 0x00ff00, 0xff0000, 0x808080,
-            if modern { 0xa0a0a4 } else { 0xc0c0c0 }, 0x008080, 0x800080, 0x000080, 0x808000, 0x008000, 0x800000,
+            0xffffff,
+            0x00ffff,
+            0xff00ff,
+            0x0000ff,
+            0xffff00,
+            0x00ff00,
+            0xff0000,
+            0x808080,
+            if modern { 0xa0a0a4 } else { 0xc0c0c0 },
+            0x008080,
+            0x800080,
+            0x000080,
+            0x808000,
+            0x008000,
+            0x800000,
             0x000000,
         ]));
     }
     let mut colors: Vec<u32> = vec![
-        0xffffff, 0x00ffff, 0xff00ff, 0x0000ff, 0xffff00, 0x00ff00, 0xff0000, 0x808080, 0xa0a0a4, 0xfffbf0,
-        0x333333, 0x996600, 0x336633, 0x003399, 0xcc00ff, 0x880000, 0xffcc66, 0xff99cc, 0xdddddd, 0xff9900,
+        0xffffff, 0x00ffff, 0xff00ff, 0x0000ff, 0xffff00, 0x00ff00, 0xff0000, 0x808080, 0xa0a0a4,
+        0xfffbf0, 0x333333, 0x996600, 0x336633, 0x003399, 0xcc00ff, 0x880000, 0xffcc66, 0xff99cc,
+        0xdddddd, 0xff9900,
     ];
     let steps = [255u32, 204, 153, 102, 51, 0];
     for g in [102u32, 51] {
@@ -469,14 +605,29 @@ pub fn windows_palette(depth: i64, modern: bool) -> Result<Vec<u8>, String> {
         }
     }
     colors.extend([
-        0x222230, 0xff9999, 0xffccff, 0x99d4ff, 0x99d499, 0xffff99, 0xf0f0f0, 0xa4c8f0, 0xc0dcc0, 0xc0c0c0,
-        0x00bfbf, 0xbf00bf, 0x0000bf, 0xbfbf00, 0x00bf00, 0xbf0000, 0,
+        0x222230, 0xff9999, 0xffccff, 0x99d4ff, 0x99d499, 0xffff99, 0xf0f0f0, 0xa4c8f0, 0xc0dcc0,
+        0xc0c0c0, 0x00bfbf, 0xbf00bf, 0x0000bf, 0xbfbf00, 0x00bf00, 0xbf0000, 0,
     ]);
-    for (i, n) in [(66, 0xd408ff), (95, 0xa16600), (166, 0x336e33), (172, 0x33333b), (204, 0x0033a1), (215, 0x900000)] {
+    for (i, n) in [
+        (66, 0xd408ff),
+        (95, 0xa16600),
+        (166, 0x336e33),
+        (172, 0x33333b),
+        (204, 0x0033a1),
+        (215, 0x900000),
+    ] {
         colors[i] = n;
     }
     if modern {
-        for (i, n) in [(246, 0xa6c8f0), (249, 0x008080), (250, 0x800080), (251, 0x000080), (252, 0x808000), (253, 0x008000), (254, 0x800000)] {
+        for (i, n) in [
+            (246, 0xa6caf0),
+            (249, 0x008080),
+            (250, 0x800080),
+            (251, 0x000080),
+            (252, 0x808000),
+            (253, 0x008000),
+            (254, 0x800000),
+        ] {
             colors[i] = n;
         }
     }
@@ -488,15 +639,27 @@ pub fn windows_palette(depth: i64, modern: bool) -> Result<Vec<u8>, String> {
 
 /// RGBA pixels of a bitmap; `full_alpha` yields RGBA8888, otherwise RGBA5551
 /// words. Matte-white edges clear unless the bitmap has its own alpha.
-pub fn bitmap_pixels(meta: &Meta, bitd: &[u8], palette_bytes: Option<&[u8]>, full_alpha: bool) -> Result<Vec<u8>, String> {
-    let (width, height, depth, pitch) = (meta.width as usize, meta.height as usize, meta.depth, meta.pitch as usize);
+pub fn bitmap_pixels(
+    meta: &Meta,
+    bitd: &[u8],
+    palette_bytes: Option<&[u8]>,
+    full_alpha: bool,
+) -> Result<Vec<u8>, String> {
+    let (width, height, depth, pitch) = (
+        meta.width as usize,
+        meta.height as usize,
+        meta.depth,
+        meta.pitch as usize,
+    );
     if (pitch as f64) < ((width as i64 * depth) as f64 / 8.0).ceil() {
         return Err("bitmap pitch too short".into());
     }
     let palette: Option<Vec<[u8; 3]>> = if depth == 1 {
         Some(vec![[255, 255, 255], [0, 0, 0]])
     } else if depth <= 8 {
-        Some(decode_palette(palette_bytes.ok_or("unsupported CLUT size")?)?)
+        Some(decode_palette(
+            palette_bytes.ok_or("unsupported CLUT size")?,
+        )?)
     } else {
         None
     };
@@ -511,7 +674,11 @@ pub fn bitmap_pixels(meta: &Meta, bitd: &[u8], palette_bytes: Option<&[u8]>, ful
                 let d = depth as usize;
                 let byte = pixels[y * pitch + x * d / 8];
                 let index = (byte >> (8 - d - (x * d % 8))) as usize & ((1 << d) - 1);
-                let c = palette.as_ref().unwrap().get(index).ok_or_else(|| format!("palette index {index} absent"))?;
+                let c = palette
+                    .as_ref()
+                    .unwrap()
+                    .get(index)
+                    .ok_or_else(|| format!("palette index {index} absent"))?;
                 [c[0] as f64, c[1] as f64, c[2] as f64]
             } else if depth == 16 {
                 let row = y * pitch;
@@ -528,15 +695,27 @@ pub fn bitmap_pixels(meta: &Meta, bitd: &[u8], palette_bytes: Option<&[u8]>, ful
             } else {
                 let row = y * pitch;
                 if compressed {
-                    [pixels[row + width + x] as f64, pixels[row + width * 2 + x] as f64, pixels[row + width * 3 + x] as f64]
+                    [
+                        pixels[row + width + x] as f64,
+                        pixels[row + width * 2 + x] as f64,
+                        pixels[row + width * 3 + x] as f64,
+                    ]
                 } else {
                     let p = row + x * 4;
-                    [pixels[p + 1] as f64, pixels[p + 2] as f64, pixels[p + 3] as f64]
+                    [
+                        pixels[p + 1] as f64,
+                        pixels[p + 2] as f64,
+                        pixels[p + 3] as f64,
+                    ]
                 }
             };
             let i = y * width + x;
             white[i] = u8::from(rgb[0] == 255.0 && rgb[1] == 255.0 && rgb[2] == 255.0);
-            let alpha = if meta.use_alpha { pixels[y * pitch + if compressed { x } else { x * 4 }] } else { 255 };
+            let alpha = if meta.use_alpha {
+                pixels[y * pitch + if compressed { x } else { x * 4 }]
+            } else {
+                255
+            };
             if full_alpha {
                 for c in 0..3 {
                     rgba[i * 4 + c] = js::round(rgb[c]) as u8;
@@ -544,7 +723,9 @@ pub fn bitmap_pixels(meta: &Meta, bitd: &[u8], palette_bytes: Option<&[u8]>, ful
                 rgba[i * 4 + 3] = alpha;
             } else {
                 // `>>` truncates the double to an int32 first.
-                let word = ((rgb[0] as i64 >> 3) << 11 | (rgb[1] as i64 >> 3) << 6 | (rgb[2] as i64 >> 3) << 1
+                let word = ((rgb[0] as i64 >> 3) << 11
+                    | (rgb[1] as i64 >> 3) << 6
+                    | (rgb[2] as i64 >> 3) << 1
                     | i64::from(alpha >= 128)) as u16;
                 rgba[i * 2..i * 2 + 2].copy_from_slice(&word.to_be_bytes());
             }
@@ -556,7 +737,11 @@ pub fn bitmap_pixels(meta: &Meta, bitd: &[u8], palette_bytes: Option<&[u8]>, ful
     // Matte ink removes edge-connected white, preserving enclosed white.
     let mut queue = vec![0u32; width * height];
     let (mut head, mut tail) = (0usize, 0usize);
-    let visit = |i: usize, white: &mut Vec<u8>, rgba: &mut Vec<u8>, queue: &mut Vec<u32>, tail: &mut usize| {
+    let visit = |i: usize,
+                 white: &mut Vec<u8>,
+                 rgba: &mut Vec<u8>,
+                 queue: &mut Vec<u32>,
+                 tail: &mut usize| {
         if white[i] != 0 {
             white[i] = 0;
             queue[*tail] = i as u32;
@@ -570,11 +755,23 @@ pub fn bitmap_pixels(meta: &Meta, bitd: &[u8], palette_bytes: Option<&[u8]>, ful
     };
     for x in 0..width {
         visit(x, &mut white, &mut rgba, &mut queue, &mut tail);
-        visit((height - 1) * width + x, &mut white, &mut rgba, &mut queue, &mut tail);
+        visit(
+            (height - 1) * width + x,
+            &mut white,
+            &mut rgba,
+            &mut queue,
+            &mut tail,
+        );
     }
     for y in 0..height {
         visit(y * width, &mut white, &mut rgba, &mut queue, &mut tail);
-        visit(y * width + width - 1, &mut white, &mut rgba, &mut queue, &mut tail);
+        visit(
+            y * width + width - 1,
+            &mut white,
+            &mut rgba,
+            &mut queue,
+            &mut tail,
+        );
     }
     while head < tail {
         let i = queue[head] as usize;
@@ -602,7 +799,11 @@ fn record_bytes(record: &Value) -> Result<Vec<u8>, String> {
 
 fn labels_model(labels: Option<&Value>) -> Result<Vec<Value>, String> {
     let mut out = Vec::new();
-    for label in labels.and_then(|l| l["labels"].as_array()).into_iter().flatten() {
+    for label in labels
+        .and_then(|l| l["labels"].as_array())
+        .into_iter()
+        .flatten()
+    {
         out.push(json!({"frame": label["frame"], "name": latin1(&unhex(label["text"]["hex"].as_str().unwrap_or(""))?)}));
     }
     Ok(out)
@@ -697,7 +898,11 @@ pub fn score_model(score: &Value, labels: Option<&Value>) -> Result<Value, Strin
             } else {
                 be32(&b, 4)?
             };
-            let behaviors = if c == 0 || c >= 6 { detail(index)? } else { Vec::new() };
+            let behaviors = if c == 0 || c >= 6 {
+                detail(index)?
+            } else {
+                Vec::new()
+            };
             channels.push(json!({"channel": c, "bytes": byte_array(&b), "changed": byte_array(&mask), "behaviors": behaviors}));
         }
         frames.push(json!({"number": frame["number"], "channels": channels}));
@@ -722,7 +927,11 @@ fn score_model_d5(score: &Value, labels: Option<&Value>) -> Result<Value, String
                 return Err("invalid D5 score channel".into());
             }
             let changed = changed_mask(frame, c, 24)?;
-            let mut emit = |index: usize, mapping: &[(usize, usize, usize)], script: Option<usize>, tempo: bool| -> Result<(), String> {
+            let mut emit = |index: usize,
+                            mapping: &[(usize, usize, usize)],
+                            script: Option<usize>,
+                            tempo: bool|
+             -> Result<(), String> {
                 let mut bytes = [0u8; 24];
                 let mut mask = [0u8; 24];
                 for &(dst, src, length) in mapping {
@@ -757,7 +966,12 @@ fn score_model_d5(score: &Value, labels: Option<&Value>) -> Result<Value, String
             } else if c == 1 {
                 emit(5, &[(0, 0, 24)], None, false)?;
             } else {
-                emit(c + 4, &[(0, 0, 2), (2, 10, 2), (4, 2, 4), (8, 6, 4), (12, 12, 12)], Some(6), false)?;
+                emit(
+                    c + 4,
+                    &[(0, 0, 2), (2, 10, 2), (4, 2, 4), (8, 6, 4), (12, 12, 12)],
+                    Some(6),
+                    false,
+                )?;
             }
         }
         frames.push(json!({"number": frame["number"], "channels": channels}));

@@ -1,14 +1,131 @@
 # Director implementation audit
 
-The current runtime has rendering failures that successful conversion and
+## Repair status
+
+The findings below are the **pre-fix baseline**, not the current support
+inventory. The repair adds shared ink composition, mutable Imaging Lingo,
+live text layout, shape opacity, mask sampling, linked child runtimes,
+sound pause/resume, film stop/resume and recorded film-layer playback.
+The Rust capability check now runs during normal packaging on native, Web
+and Android paths. Rendered RPC probes invoke the compositor, and native
+checks exercise the supported Director profiles. Unsupported conversion
+losses fail with source locations instead of becoming successful packages.
+
+Original Director 8.5 measurements also corrected the baseline: partially
+blended Copy **does** preserve its rectangle when `useAlpha` is false.
+Implementing the original behavior requires retaining that rectangle, not
+applying the ScummVM-derived matte proposed in finding 6. Mask fallback,
+mask positioning, ink arithmetic and shape blend rounding now have synthetic
+original-projector observations; see [reference-capture.md](reference-capture.md).
+
+The additional conversion work recovers PICT and rich-text raster members,
+QuickTime-Xtra MPEG clips, linked movie paths, full Flash timelines and live
+named Flash depths. A named object's property writes now transform its
+rendered plane. Merely reading geometry leaves authored animation intact.
+Live Flash text retains its local layout rectangle and per-frame affine
+placement, so fractional translation, rotation, shear and independent scaling
+survive conversion and live edits.
+Linked movies retain independent score and interpreter state, but their
+movie and frame scripts are suppressed. Enabled sprite/cast handlers remain
+interactive, including while the child playhead is stopped. Host frame
+opportunities and the host palette govern the child; its tempo, palette and
+transition channels cannot replace them. Modern internal film loops likewise
+retain sprite and sound channels while leaving other main channels inert.
+These contracts follow Macromedia's
+[MX2004 Using Director, p.202](https://dit.uoi.gr/files/director_mx_2004using_director_compressed-151-350.pdf)
+and are covered by focused tests against recovered record categories. They
+are distinct from an original-projector comparison of every imported film.
+The browser has its own bounded MPEG decoder; Android continues to transcode
+video to VP9 and audio to WAV/Opus. Missing or failed audio/video decoding
+now reaches the player error UI and rendered probes.
+
+Film references now retain each archive's `ccl ` cast relocation table.
+Original-player controls showed that encoded cast zero can select a different
+logical cast, and that the table applies to visual children as well as sound.
+All 48 previously unresolved film sound references in the local corpus now
+resolve to sound members. Scripts can also replace individual film children;
+empty template children keep their authored channel and geometry.
+Modern native films retain compact channel deltas and independent nested
+playheads. Original-player experiments show why a member-reference cycle
+need not recurse forever: successive nested instances start at later poses,
+and a later pose can remove the recursive child. Reads do not advance those
+playheads; presentation and explicit seeks have separate, tested effects.
+
+Texture brushes retain palette indices, rather than baking a fixed Windows
+RGB palette. Main-score commands and `puppetPalette` update their live colors,
+and `member.pattern` selects from the owning cast's eight extracted textures.
+Original Director 7 and 8.5 probes establish the palette dependence; a complete
+RGB5 census plus independent unaligned samples establishes the brush quantizer.
+Retail texture pixels still come from the selected engine's resources.
+
+The repair validation converted fourteen recovered corpora containing 702 movie
+files and serialized all fourteen code/scene packages in format 9. Shared
+requirements passed for Web, Android and N64 after the normal D5 media
+postprocessor. Four representative Wasm runtimes compiled. Fresh Android
+exports then produced twelve complete ARM32 APKs, including converted media;
+their embedded pack hashes and build receipts were verified. The two remaining
+APK builds stop at damaged source streams, as documented in [video.md](video.md).
+The fourteen code/scene packages alone contain asset references, so their
+success does not certify those external streams or a complete playthrough.
+
+These implementations are not a full-game qualification. Arbitrary AVM1,
+unsupported SWF tags/effects and damaged source streams remain explicit
+requirements. Rich-text rasterization
+does not implement arbitrary rich-text editing. N64 syntax/build evidence,
+software pixels, Wine projector observations and hardware results must stay
+distinct. The new failure gates expose these gaps; they do not implement
+them or turn a passing startup into proof that every activity works.
+
+## Why these gaps survived
+
+Several representations discarded information needed at playback. Flattened
+film frames could not respond to changes in a child's text or geometry, and
+sentinel images could not support pixel mutations. Linked movies needed their
+own score state, event dispatch and clocks; a static picture could not supply
+those services. The repairs preserve that state and connect it to both
+renderers. These were implementation gaps in this project, rather than a limit
+imposed by what another player implements.
+
+Verification also missed visible output. Script-state journeys advanced the
+game without invoking the compositor, deferred conversions could still be
+packaged, and the main check skipped Rust tests when Cargo was absent. The
+repair makes those failures explicit, runs rendering in the default RPC probe,
+and exercises the versioned C runtimes. Asset receipts are invalidated before
+generation starts and compare their original source/compiler/ABI identity
+again before recording success, preventing mixed or failed builds from
+certifying stale outputs.
+Both Python module entrypoints now execute the command line and propagate
+argument failures; invoking `python -m director64.cli` previously returned
+success without doing any work. N64 builds also validate their runtime memory
+reservation, and emulator capture gates reject script errors and CPU exceptions.
+Pacing assertions require enough measured intervals to judge their sustained
+budget: an empty, partial or historical log without guest timing cannot pass.
+Historical logs remain readable for diagnostics. Android conversion caches
+verify their tools, policy and asset hashes, and installation rejects APKs
+whose build receipts no longer match the current source inputs.
+Fresh APK export also exposed valid WebAssembly addresses above 2 GiB being
+interpreted as negative JavaScript offsets. The shared importer now treats
+memory addresses and lengths as unsigned wasm32 values, checks their ranges,
+and refreshes views after memory growth. Synthetic tests cover both the high
+address bit and actual memory growth.
+
+Ambiguous behavior still needs evidence. The original-projector experiments
+already overturned one matte assumption derived from ScummVM and exposed a
+movie-context error in a sound probe. Contemporary documentation, reproducible
+synthetic inputs and recovered game requirements are complementary evidence;
+agreement with any one reimplementation cannot establish complete support.
+
+## Baseline at revision 675811f
+
+The audited runtime had rendering failures that successful conversion and
 script-state replay do not detect. The highest-priority fixes are unsupported
 bitmap inks, missing Imaging Lingo operations, text scrolling, and opaque
 overlays. Add capability checks before packaging and make journeys render
 frames before treating their success as visual evidence.
 
-This audit covers revision `675811f` on 2026-10-18, fourteen existing local
+This baseline covers revision `675811f` on 2026-10-18, fourteen existing local
 recovered corpora, both renderer implementations, and fresh host diagnostic
-executions. Runtime behavior was not changed. Original-projector comparisons,
+executions. Runtime behavior was not changed by that audit. Original-projector comparisons,
 N64 emulator captures and hardware validation remain separate work; the game
 locations below identify authored requirements, not verified player routes.
 
@@ -29,7 +146,7 @@ Run the synthetic pixel and service diagnostics without game media:
 bash tools/audit/visual-probe.sh
 ```
 
-The current result is 40 mismatches across 41 checks: 11/11 for D8, 15/15
+The baseline result was 40 mismatches across 41 checks: 11/11 for D8, 15/15
 for D10, and 14/15 for D8.5. These are repeated checks of the defect categories
 below, not forty separate bugs. The D8.5 shape-opacity check passes. Exit 1 is
 intentional while mismatches remain. The probe uses the software compositor
@@ -49,7 +166,7 @@ resolves external casts and reports movie, frame and sprite for failures.
 Records unresolved statically can be dynamic members or script placeholders,
 so they are counted for review rather than automatically called defects.
 
-This command is opt-in, not yet wired into normal builds. It scans authored
+At the baseline this command was opt-in and not wired into normal builds. It scans authored
 score records; scripts can change their visibility and ink before rendering.
 Conversely, script-created requirements can be absent from the score. Passing
 this narrow preflight does not certify a game. Generated reports belong under

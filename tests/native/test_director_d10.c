@@ -52,7 +52,7 @@ static const lv_handler_t handlers[]={
  {.name="mouseup",.member=2,.cast="Internal",.kind="MovieScript",.step=global},
 };
 static const lv_movie_t code={"D10.DXR",4,handlers,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t casts[]={{"Internal",1,1},{"Extra",1,2}};
+static const dg_cast_t casts[]={{.name="Internal",.file=1,.cast=1},{.name="Extra",.file=1,.cast=2}};
 // The recorded dynamic surface of a converted Flash card: feedback-state
 // frame labels and one named edit-text field with measured advances.
 static const dg_label_t card_labels[]={{"normal",1},{"red",2},{"green",3}};
@@ -102,7 +102,7 @@ static const dg_movie_t check={.code=&check_code,.id=3,.tempo=1,
 static const dg_member_t extra2_members[]={
  {.id=0x81000a,.number=10,.cast=1,.type=1,.width=8,.height=8,.name="alt"},
 };
-static const dg_cast_t extra2_casts[]={{"External",4,1}};
+static const dg_cast_t extra2_casts[]={{.name="External",.file=4,.cast=1}};
 static const lv_movie_t extra2_code={"EXTRA2.CXT",0,NULL,NULL, NULL, NULL, NULL, 0};
 static const dg_movie_t extra2={.code=&extra2_code,.id=4,.tempo=1,.cast_count=1,
  .casts=extra2_casts,.members=extra2_members,.member_count=1,

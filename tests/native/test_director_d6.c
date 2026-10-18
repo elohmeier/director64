@@ -38,7 +38,7 @@ static const lv_handler_t handlers[]={
   {.name="owncounter",.member=2,.cast="Internal",.kind="BehaviorScript",.arguments=1,.locals=1,.step=inherited_counter},
 };
 static const lv_movie_t code={"DATA.CXT",4,handlers,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t casts[]={{"Internal",1,1}};
+static const dg_cast_t casts[]={{.name="Internal",.file=1,.cast=1}};
 static const dg_member_t members[]={
   {.id=0x210003,.number=3,.cast=1,.type=3,.name="UsersDB",.text="[]",.editable=true},
   {.id=0x210004,.number=4,.cast=1,.type=1,.name="Dummy",.text="",.asset=""},

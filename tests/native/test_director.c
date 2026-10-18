@@ -36,7 +36,7 @@ static const lv_handler_t external_handler = {.name = "mouseup",
                                               .kind = "BehaviorScript",
                                               .step = external};
 static const lv_movie_t external_code = {"EXTERNAL.CXT", 1, &external_handler,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t external_cast = {"External", 2, 1};
+static const dg_cast_t external_cast = {.name="External",.file=2,.cast=1};
 static const dg_movie_t external_movie = {
     .code = &external_code, .id = 2, .cast_count = 1, .casts = &external_cast};
 static lv_flow_t jumping(lv_runtime_t *r, lv_frame_t *f) {
@@ -67,7 +67,7 @@ static const lv_handler_t handlers[] = {
      .step = clicked},
     {.name = "callback", .kind = "MovieScript", .step = callback}};
 static const lv_movie_t code = {"SYNTHETIC.DXR", 5, handlers,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t casts[] = {{"Internal", 1, 1}, {"Other", 1, 2}};
+static const dg_cast_t casts[] = {{.name="Internal",.file=1,.cast=1}, {.name="Other",.file=1,.cast=2}};
 static const dg_member_t members[] = {{.id = 0x210001,
                                        .number = 1,
                                        .cast = 1,

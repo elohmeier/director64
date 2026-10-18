@@ -91,11 +91,13 @@ static char save_path[512];
 static jobject asset_manager;
 static float volume = 1.0f;
 // The game thread's own.
-static pack_t images, sounds, streams, data, videos;
+static pack_t images={.fd=-1}, sounds={.fd=-1}, streams={.fd=-1},
+              data={.fd=-1}, videos={.fd=-1};
 static bool using_pads;
 static unsigned entry_sprite;
 // The open entry types into a key field (Mucklas' name) as keys.
 static bool key_entry;
+static bool was_taking;
 static char diagnostics[256];
 
 static double now(void) {
@@ -183,11 +185,24 @@ static int host_layout(void *ctx, const char *utf8, int width, int height,
   return count;
 }
 
+static void host_sound_pause(void *ctx, unsigned channel, bool paused) {
+  (void)ctx;
+  audio_pause(channel, paused);
+}
+static void host_sound_break_loop(void *ctx, unsigned channel) {
+  (void)ctx;
+  audio_break_loop(channel);
+}
 static void host_sound(void *ctx, unsigned channel, const char *asset, bool looping,
                        uint32_t loop_start, uint32_t loop_end) {
   (void)ctx;
   audio_play(channel, asset, looping, loop_start, loop_end);
 }
+#if DG_D10
+static void host_flash_sound(void *ctx,uint32_t id,const dg_flash_audio_t *sound) {
+  (void)ctx;audio_flash_update(id,sound);
+}
+#endif
 
 static void host_gain(void *ctx, unsigned channel, float gain) {
   (void)ctx;
@@ -339,7 +354,6 @@ static bool open_entry(int x, int y) {
 // it. The game runs meanwhile: each character the keyboard types reaches its
 // key handlers at once (Native.typeKey), as on the console.
 static void serve_key_field(bool clicked, int x, int y) {
-  static bool was_taking;
   unsigned taking = d64_key_field(0, 0, 1);
   if (key_entry && !taking) {
     JNIEnv *env = env_of_thread();
@@ -364,11 +378,16 @@ static void *game(void *arg) {
     goto done;
   }
   web_runtime_host((web_host_t){.asset = host_asset, .text = host_text, .layout = host_layout,
-                                .sound = host_sound,
+                                .sound = host_sound, .sound_pause = host_sound_pause,
+                                .sound_break_loop = host_sound_break_loop,
                                 .gain = host_gain, .save_commit = host_save_commit,
                                 .trace = host_trace, .stream = host_stream, .data = host_data,
                                 .video = host_video, .video_frame = host_video_frame,
-                                .video_revision = host_video_revision});
+                                .video_revision = host_video_revision,
+#if DG_D10
+                                .flash_sound = host_flash_sound,
+#endif
+                                });
   audio_init(&sounds, &streams);
   audio_volume(volume);
   video_init(&videos);
@@ -513,9 +532,19 @@ static void *game(void *arg) {
     }
     if (!status && *d64_error())
       status = 1;
+    char audio_failure[512];
+    if (!status && audio_error(audio_failure, sizeof(audio_failure)))
+      status = 1;
+    else
+      audio_failure[0] = 0;
+    if (!status && *video_error()) {
+      status = 1;
+      snprintf(audio_failure, sizeof(audio_failure), "%s", video_error());
+    }
     if (status) {
       char message[512];
-      snprintf(message, sizeof(message), "%s", status == 2 ? "" : d64_error());
+      snprintf(message, sizeof(message), "%s", status == 2 ? "" :
+               *audio_failure ? audio_failure : d64_error());
       pthread_mutex_unlock(&engine);
       stopped(status, message);
       break;
@@ -551,6 +580,11 @@ static void *game(void *arg) {
     }
   }
 done:
+  // Dispose runtime objects before their host services and mapped asset packs.
+  // A non-finishing Activity recreation reuses this native library/process.
+  pthread_mutex_lock(&engine);
+  d64_shutdown();
+  pthread_mutex_unlock(&engine);
   video_close_all();
   audio_shutdown();
   pack_t *packs[] = {&images, &sounds, &streams, &data, &videos};
@@ -595,6 +629,9 @@ JNIEXPORT void NATIVE(start)(JNIEnv *env, jclass cls, jobject owner, jobject ass
   packs_use(AAssetManager_fromJava(env, asset_manager));
   copy_string(env, save, save_path, sizeof(save_path));
   volume = level;
+  using_pads = key_entry = was_taking = false;
+  entry_sprite = 0;
+  diagnostics[0] = 0;
   quitting = false;
   thread_running = pthread_create(&thread, NULL, game, NULL) == 0;
 }
@@ -613,6 +650,12 @@ JNIEXPORT void NATIVE(stop)(JNIEnv *env, jclass cls) {
   if (window)
     ANativeWindow_release(window);
   window = NULL;
+  fresh_surface = false;
+  holds = HOLD_SURFACE;
+  memset(pads, 0, sizeof(pads));
+  mouse.x = WIDTH / 2; mouse.y = HEIGHT / 2;
+  mouse.buttons = mouse.pressed = 0;
+  mouse.inside = mouse.moved = false;
   pthread_mutex_unlock(&state);
   (*env)->DeleteGlobalRef(env, activity);
   activity = NULL;

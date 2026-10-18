@@ -1,7 +1,39 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {createHash} from "node:crypto";
 import {Vfs} from "../../platforms/web/import/vfs.mjs";
 import {PackageCache} from "../../platforms/web/site/cache.js";
+import {sourcePolicy, installSystemFonts} from "../../platforms/web/import/pipeline.mjs";
+
+test("original font installers enter the shared conversion namespace only after hash verification", () => {
+  const raw = new TextEncoder().encode("MZ synthetic installer, never executed");
+  const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const hash = sha256(raw), vfs = new Vfs();
+  const path = "director64-system-fonts/example32.exe";
+  const policy = {system_font_resources: [{path, sha256: hash}]};
+  installSystemFonts(vfs, "/work/extracted/DATA", policy, {[hash]: raw}, sha256);
+  assert.deepEqual(vfs.read(`/work/extracted/DATA/${path}`), raw);
+  installSystemFonts(vfs, "/work/extracted/DATA", policy, {}, sha256);
+  assert.throws(() => installSystemFonts(new Vfs(), "/media", policy, {}, sha256), /Missing original/);
+  assert.throws(() => installSystemFonts(new Vfs(), "/media", policy, {[hash]: raw.subarray(1)}, sha256), /hash mismatch/);
+  for (const unsafe of ["../font.exe", "/font.exe", "C:/font.exe", "a\\font.exe", ""])
+    assert.throws(() => installSystemFonts(vfs, "/media", {system_font_resources: [{path: unsafe}]}, {}, sha256), /media-relative/);
+});
+
+test("disc aliases enter every conversion stage relative to the selected media root", () => {
+  const policy = {director_version: 850, source_path_aliases: {stale: "old"}};
+  const aliases = {
+    "Long Root/Data/Levelwaage.dir": "LONGROOT/DATA/LEVELWAA.DIR",
+    "Long Root/Data/Tamagotchi/00_a_Begruessung.dcr": "LONGROOT/DATA/TAMAGOTC/00ABEGRU.DCR",
+    "Other/Outside.dir": "OTHER/OUTSIDE.DIR",
+  };
+  assert.deepEqual(sourcePolicy({port: {media_root: "/LONGROOT/DATA/"}, policy}, aliases), {
+    director_version: 850,
+    source_path_aliases: {"Levelwaage.dir": "LEVELWAA.DIR", "Tamagotchi/00_a_Begruessung.dcr": "TAMAGOTC/00ABEGRU.DCR"},
+  });
+  assert.deepEqual(sourcePolicy({port: {media_root: ""}, policy}, aliases).source_path_aliases, aliases);
+  assert.deepEqual(policy.source_path_aliases, {stale: "old"});
+});
 
 // What the Rust converter's host files (compiler/wasm HostFiles) ask of the
 // import's file system: a disk's semantics under POSIX paths.

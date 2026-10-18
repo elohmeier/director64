@@ -40,6 +40,7 @@ pub struct Cast {
     pub name: String,
     pub file: u16,
     pub cast: u16,
+    pub pattern_assets: Vec<String>,
 }
 
 /// dg_text_style_t.
@@ -62,7 +63,11 @@ pub struct TextStyle {
 }
 
 /// dg_flash_field_t.
+#[path = "scene_flash.rs"]
+pub mod flash;
+
 pub struct FlashField {
+    pub id: u16,
     pub name: String,
     pub variable: String,
     pub text: String,
@@ -78,9 +83,12 @@ pub struct FlashField {
     pub multiline: u8,
     pub leading: i8,
     pub style: Option<u16>,
+    pub local_bounds: [i32; 4],
+    pub embed_fonts: bool,
 }
 
 pub struct Member {
+    pub palette: Vec<u32>,
     pub id: u32,
     pub number: u16,
     pub cast: u16,
@@ -116,17 +124,86 @@ pub struct Member {
     // DG_D5, and DG_D10's DirectMedia video
     pub video_audio: String,
     pub video_flags: u32,
-    // DG_D5
+    // DG_D5 or DG_D10
     pub film_sounds: Vec<u32>,
     // DG_D10
     pub source_xtra: u8,
     pub flash_labels: Vec<(String, u16)>,
     pub flash_fields: Vec<FlashField>,
+    pub flash_fonts: Vec<u16>,
     /// A text member's colour runs as (first character, 0xRRGGBB), where
     /// its words differ in colour (Optik's lexicon marks links in green).
     pub text_runs: Vec<(u32, u32)>,
     /// Its hyperlinks: first and last character (1-based) and the data.
     pub links: Vec<(u32, u32, String)>,
+    pub linked_movie: u16,
+    pub linked_flags: u32,
+    pub linked_left: i16,
+    pub linked_top: i16,
+    pub film_frames: Vec<Vec<FilmLayer>>,
+    pub film_tracks: Vec<FilmTrack>,
+    pub film_flags: u32,
+    pub film_left: i16,
+    pub film_top: i16,
+    pub flash_stops: Vec<u16>,
+    pub flash_helpers: Vec<FlashHelper>,
+    pub flash_variant_count: u8,
+    pub flash_rate: u32,
+    pub flash_audio_positions: Vec<u32>,
+    pub flash_playback_mode: u8,
+    pub flash_fixed_rate: u32,
+    pub flash_direct_to_stage: u8,
+    pub flash_version: u8,
+    pub flash_runtime: flash::Runtime,
+}
+
+pub struct FlashHelper {
+    pub name: String,
+    pub target: String,
+    pub property: String,
+    pub operation: u8,
+    pub argument: u8,
+    pub method: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct FilmKey {
+    pub frame: u16,
+    pub value: Spec,
+}
+#[derive(Clone, Debug)]
+pub struct FilmTrack {
+    pub channel: u16,
+    pub keys: Vec<FilmKey>,
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct FilmLayer {
+    pub channel: u16,
+    pub film_frame: u16,
+    pub value: Spec,
+    pub asset: String,
+    pub mask_asset: String,
+    pub name: String,
+    pub origin_x: i32,
+    pub origin_y: i32,
+    pub affine: bool,
+    pub matrix: [i32; 6],
+    pub clip_id: u16,
+    pub button_id: u16,
+    pub field_id: u16,
+    pub clip_depth: u16,
+    pub placement_generation: u32,
+    pub cxform: Option<[i16; 8]>,
+    pub actions: Vec<flash::Action>,
+}
+
+fn fixed16(value: Option<&Value>) -> Result<i32, String> {
+    let n = value.and_then(Value::as_f64).unwrap_or(0.0) * 65536.0;
+    if !n.is_finite() || n.round() < i32::MIN as f64 || n.round() > i32::MAX as f64 {
+        return Err("Flash fixed-point geometry exceeds runtime bounds".into());
+    }
+    Ok(n.round() as i32)
 }
 
 /// dg_spec_t, in field order.
@@ -183,10 +260,18 @@ pub struct Scene {
 }
 
 fn int(value: Option<&Value>) -> i64 {
-    value.and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)).or_else(|| v.as_bool().map(i64::from))).unwrap_or(0)
+    value
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_f64().map(|f| f as i64))
+                .or_else(|| v.as_bool().map(i64::from))
+        })
+        .unwrap_or(0)
 }
 fn float(value: Option<&Value>) -> f64 {
-    value.and_then(|v| v.as_f64().or_else(|| v.as_bool().map(|b| b as i64 as f64))).unwrap_or(0.0)
+    value
+        .and_then(|v| v.as_f64().or_else(|| v.as_bool().map(|b| b as i64 as f64)))
+        .unwrap_or(0.0)
 }
 /// Python truthiness of a JSON value.
 fn truthy(value: Option<&Value>) -> bool {
@@ -238,7 +323,9 @@ pub fn score_tempo(record: &[u8], version: u32, extended: bool) -> Result<u16, S
         return Ok(0);
     }
     if opcode != 246 {
-        return Err(format!("unsupported Director {version} tempo opcode {opcode}"));
+        return Err(format!(
+            "unsupported Director {version} tempo opcode {opcode}"
+        ));
     }
     let rate = u16::from_be_bytes([record[4], record[5]]);
     if !(1..=if version >= 7 { 999 } else { 120 }).contains(&rate) {
@@ -249,7 +336,7 @@ pub fn score_tempo(record: &[u8], version: u32, extended: bool) -> Result<u16, S
 
 /// Director version the movie's tables are laid out for, as director.py
 /// derives it from the declared version and the score record size.
-fn movie_version(movie: &Value) -> u32 {
+pub(crate) fn movie_version(movie: &Value) -> u32 {
     let score = movie.get("score").cloned().unwrap_or(Value::Null);
     let mut declared = int(movie.get("directorVersion")).max(0) as u32;
     if movie.get("directorVersion").is_none() {
@@ -262,7 +349,11 @@ fn movie_version(movie: &Value) -> u32 {
     if declared >= 100 {
         declared /= 100;
     }
-    let record = score.get("recordSize").or_else(|| score.get("record_size")).map(|v| int(Some(v))).unwrap_or(24);
+    let record = score
+        .get("recordSize")
+        .or_else(|| score.get("record_size"))
+        .map(|v| int(Some(v)))
+        .unwrap_or(24);
     if declared == 5 {
         5
     } else if record == 48 || int(score.get("version")) >= 13 || declared >= 7 {
@@ -281,14 +372,21 @@ fn movie_version(movie: &Value) -> u32 {
 /// Rejects split identities between recovered code and resource bindings.
 pub fn validate_script_casts(model: &Value, program: &Value) -> Result<(), String> {
     let movies = model["movies"].as_array().ok_or("model without movies")?;
-    for handler in program["handlers"].as_array().ok_or("program without handlers")? {
+    for handler in program["handlers"]
+        .as_array()
+        .ok_or("program without handlers")?
+    {
         let movie_name = casefold(&text(handler.get("movie")));
         let movie = movies
             .iter()
             .rfind(|m| casefold(&text(m.get("name"))) == movie_name)
             .ok_or_else(|| format!("{movie_name}: script movie has no scene"))?;
         let cast_name = casefold(&text(handler.get("cast")));
-        let cast = movie["casts"].as_array().into_iter().flatten().rfind(|c| casefold(&text(c.get("name"))) == cast_name);
+        let cast = movie["casts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .rfind(|c| casefold(&text(c.get("name"))) == cast_name);
         if !cast.is_some_and(|c| casefold(&text(c.get("file"))) == movie_name) {
             return Err(format!(
                 "{}:{}:{}: script cast does not match local resource namespace",
@@ -307,7 +405,8 @@ fn style_key(style: &Value) -> String {
     fn sorted(v: &Value) -> Value {
         match v {
             Value::Object(m) => {
-                let ordered: BTreeMap<&String, Value> = m.iter().map(|(k, v)| (k, sorted(v))).collect();
+                let ordered: BTreeMap<&String, Value> =
+                    m.iter().map(|(k, v)| (k, sorted(v))).collect();
                 Value::Object(ordered.into_iter().map(|(k, v)| (k.clone(), v)).collect())
             }
             Value::Array(a) => Value::Array(a.iter().map(sorted).collect()),
@@ -368,9 +467,18 @@ impl Styles<'_> {
             if !self.profile.extended {
                 return Err("measured text metrics need the extended runtime".into());
             }
-            let advances = metrics["advances"].as_array().ok_or("text metrics without advances")?;
-            s.advances = Some(advances.iter().map(|v| narrow(int(Some(v)), "advance")).collect::<Result<_, _>>()?);
-            let pairs = metrics["kerning"].as_array().ok_or("text metrics without kerning")?;
+            let advances = metrics["advances"]
+                .as_array()
+                .ok_or("text metrics without advances")?;
+            s.advances = Some(
+                advances
+                    .iter()
+                    .map(|v| narrow(int(Some(v)), "advance"))
+                    .collect::<Result<_, _>>()?,
+            );
+            let pairs = metrics["kerning"]
+                .as_array()
+                .ok_or("text metrics without kerning")?;
             s.kerning_count = pairs.len() as u32;
             for pair in pairs {
                 for v in pair.as_array().ok_or("kerning pair")? {
@@ -396,14 +504,34 @@ impl Styles<'_> {
 
 /// A converted Flash edit field's style: its recorded descriptor plus the
 /// embedded font's measured metrics.
-fn flash_field_style(field: &Value, aliases: &HashMap<String, i64>, metrics: &serde_json::Map<String, Value>) -> Value {
+fn flash_field_style(
+    field: &Value,
+    aliases: &HashMap<String, i64>,
+    metrics: &serde_json::Map<String, Value>,
+) -> Value {
     let height = float(field.get("fontHeight"));
-    let size = if truthy(field.get("fontHeight")) { round(height).max(1) } else { 12 };
-    let leading = if truthy(field.get("leading")) { round(float(field.get("leading"))) } else { 0 };
+    let size = if truthy(field.get("fontHeight")) {
+        round(height).max(1)
+    } else {
+        12
+    };
+    let leading = if truthy(field.get("leading")) {
+        round(float(field.get("leading")))
+    } else {
+        0
+    };
     let font_name = text(field.get("fontName"));
-    let font_id = aliases.get(&casefold(&font_name)).copied().unwrap_or(0);
-    let measured = if font_id != 0 { metrics.get(&format!("{font_id}:{size}")) } else { None };
-    let color: Vec<i64> = match field.get("color").and_then(Value::as_array).filter(|c| !c.is_empty()) {
+    let font_id = aliases.get(&casefold(&font_name)).copied().unwrap_or(255);
+    let measured = if font_id != 255 {
+        metrics.get(&format!("{font_id}:{size}"))
+    } else {
+        None
+    };
+    let color: Vec<i64> = match field
+        .get("color")
+        .and_then(Value::as_array)
+        .filter(|c| !c.is_empty())
+    {
         Some(c) => c.iter().map(|v| int(Some(v))).collect(),
         None => vec![0, 0, 0, 255],
     };
@@ -459,6 +587,128 @@ fn strip_field_html(initial: &str) -> String {
     stripped.trim_end_matches('\r').to_string()
 }
 
+fn runtime_film_frames(
+    movie: &Value,
+    member: &Value,
+    movies: &[Value],
+    palette: &[u32],
+    reference: &dyn Fn(&Value, i64, i64) -> Result<u32, String>,
+) -> Result<Vec<Vec<FilmLayer>>, String> {
+    if let Some(frames) = member["filmLayers"].as_array() {
+        if frames.len() != member["filmAssets"].as_array().map_or(0, Vec::len) {
+            return Err("Flash layer frame count differs from poses".into());
+        }
+        return frames.iter().map(flash::layers).collect();
+    }
+    let _ = (movie, movies, palette, reference);
+    Ok(Vec::new())
+}
+
+/// Native films retain one key only when that channel's normalized state
+/// changes. This keeps every authored channel editable without expanding
+/// the entire score into a large array of layers for every rendered pose.
+fn native_film_tracks(
+    movie: &Value,
+    member: &Value,
+    movies: &[Value],
+    palette: &[u32],
+    reference: &dyn Fn(&Value, i64, i64) -> Result<u32, String>,
+) -> Result<Vec<FilmTrack>, String> {
+    if movie_version(movie) < 10 || member["filmScore"].is_null() {
+        return Ok(Vec::new());
+    }
+    let frames = member["filmScore"]["frames"]
+        .as_array()
+        .ok_or("native film without frames")?;
+    if frames.len() != member["filmAssets"].as_array().map_or(0, Vec::len)
+        || frames.len() > u16::MAX as usize
+    {
+        return Err("native film frame count differs from poses or exceeds capacity".into());
+    }
+    let mut tracks = BTreeMap::<u16, Vec<FilmKey>>::new();
+    for (frame_index, frame) in frames.iter().enumerate() {
+        let mut channels = HashSet::new();
+        for record in frame["channels"].as_array().into_iter().flatten() {
+            let channel = int(record.get("channel"));
+            if channel < 6 {
+                continue;
+            }
+            if channel >= 1006 || !channels.insert(channel) {
+                return Err("invalid native film channel".into());
+            }
+            let channel = (channel - 5) as u16;
+            let bytes = record["bytes"]
+                .as_array()
+                .ok_or("native film without sprite bytes")?;
+            if bytes.len() != 48 || bytes.iter().any(|v| v.as_u64().is_none_or(|n| n > 255)) {
+                return Err("invalid native film sprite record".into());
+            }
+            let b: Vec<u8> = bytes.iter().map(|v| v.as_u64().unwrap() as u8).collect();
+            let word = |at| u16::from_be_bytes([b[at], b[at + 1]]) as i64;
+            let signed = |at| i16::from_be_bytes([b[at], b[at + 1]]);
+            let mut spec = Spec::default();
+            if b[0] != 0 && word(6) != 0 {
+                let (source, cast) =
+                    crate::convert::film::reference(movie, member, word(4), movies)?;
+                let child = crate::convert::film::child_member(source, cast, word(6), movies)
+                    .map(|(_, child)| child)
+                    .unwrap_or(&Value::Null);
+                let colors = |index, g, blue, flag| {
+                    if b[20] & flag != 0 {
+                        (b[index] as u32) << 16 | (b[g] as u32) << 8 | b[blue] as u32
+                    } else {
+                        palette[b[index] as usize]
+                    }
+                };
+                spec = Spec {
+                    member: reference(source, cast, word(6))?,
+                    x: signed(14),
+                    y: signed(12),
+                    width: signed(18),
+                    height: signed(16),
+                    ink: b[1] & 63,
+                    blend: ((255 - b[21] as u32) * 100 / 255) as u8,
+                    kind: if crate::convert::film::nonvisual(child) {
+                        0
+                    } else {
+                        b[0]
+                    },
+                    flags: b[20],
+                    fore: b[2],
+                    back: b[3],
+                    thickness: b[22],
+                    stretch: u8::from(b[1] & 128 != 0),
+                    trails: u8::from(b[1] & 64 != 0),
+                    loc_z: channel as i16,
+                    fore_rgb: colors(2, 24, 26, 0x10),
+                    back_rgb: colors(3, 25, 27, 0x20),
+                    rotation: i32::from_be_bytes(b[28..32].try_into().unwrap()),
+                    skew: i32::from_be_bytes(b[32..36].try_into().unwrap()),
+                    ..Spec::default()
+                };
+            }
+            let keys = tracks.entry(channel).or_default();
+            if keys.last().is_some_and(|key| key.value == spec) {
+                continue;
+            }
+            // A leading blank does not create a channel; later blank keys
+            // must remain so a previously visible channel disappears.
+            if keys.is_empty() && spec.member == 0 {
+                continue;
+            }
+            keys.push(FilmKey {
+                frame: frame_index as u16,
+                value: spec,
+            });
+        }
+    }
+    Ok(tracks
+        .into_iter()
+        .filter(|(_, keys)| !keys.is_empty())
+        .map(|(channel, keys)| FilmTrack { channel, keys })
+        .collect())
+}
+
 pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
     if model["problems"].as_array().is_none_or(|p| !p.is_empty()) {
         return Err("resource conversion is incomplete".into());
@@ -476,11 +726,27 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
             .ok_or_else(|| format!("unknown cast file {name}"))
     };
     let empty_metrics = serde_json::Map::new();
-    let metrics = model.get("fontMetrics").and_then(Value::as_object).unwrap_or(&empty_metrics);
+    let metrics = model
+        .get("fontMetrics")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty_metrics);
     let mut aliases = HashMap::new();
-    for font in model.get("fonts").and_then(Value::as_array).into_iter().flatten() {
-        for alias in font.get("aliases").and_then(Value::as_array).into_iter().flatten() {
-            aliases.insert(casefold(alias.as_str().unwrap_or("")), int(font.get("number")));
+    for font in model
+        .get("fonts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for alias in font
+            .get("aliases")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            aliases.insert(
+                casefold(alias.as_str().unwrap_or("")),
+                int(font.get("number")),
+            );
         }
     }
     let mut result = Vec::new();
@@ -497,23 +763,35 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
             || (version == 5 && !profile.d5())
             || (version >= 10 && !profile.d10())
         {
-            return Err(format!("{name}: Director {version} tables need a different runtime profile"));
+            return Err(format!(
+                "{name}: Director {version} tables need a different runtime profile"
+            ));
         }
-        let mut styles = Styles { profile, metrics, table: Vec::new(), known: HashMap::new() };
+        let mut styles = Styles {
+            profile,
+            metrics,
+            table: Vec::new(),
+            known: HashMap::new(),
+        };
         let casts_json = movie["casts"].as_array().cloned().unwrap_or_default();
-        let reference = |cast: i64, member: i64| -> Result<u32, String> {
+        let film_reference = |source: &Value, cast: i64, member: i64| -> Result<u32, String> {
             if member == 0 {
                 return Ok(0);
             }
-            if cast < 1 || cast as usize > casts_json.len() {
-                return Err(format!("{name}: invalid cast {cast}:{member}"));
-            }
-            let library = &casts_json[cast as usize - 1];
+            let source_name = text(source.get("name"));
+            let casts = source["casts"]
+                .as_array()
+                .ok_or("film source without cast libraries")?;
+            let library = casts
+                .iter()
+                .find(|library| int(library.get("number")) == cast)
+                .ok_or_else(|| format!("{source_name}: invalid cast {cast}:{member}"))?;
             let file = text(library.get("file"));
             let target = id_of(&file)?;
-            let target_cast = if file == name { cast } else { 1 };
+            let target_cast = if file == source_name { cast } else { 1 };
             Ok(target << 21 | (target_cast as u32) << 16 | member as u32)
         };
+        let reference = |cast: i64, member: i64| film_reference(movie, cast, member);
         let palette: Vec<u32> = match movie.get("palette").and_then(Value::as_array) {
             Some(p) => p.iter().map(|v| int(Some(v)) as u32).collect(),
             None => {
@@ -525,48 +803,123 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
         if palette.len() != 256 {
             return Err("scene palette must have 256 colors".into());
         }
-        let mut sorted: Vec<&Value> = movie["members"].as_array().map(|m| m.iter().collect()).unwrap_or_default();
+        let mut sorted: Vec<&Value> = movie["members"]
+            .as_array()
+            .map(|m| m.iter().collect())
+            .unwrap_or_default();
         sorted.sort_by_key(|m| (int(m.get("cast")), int(m.get("number"))));
         let mut members = Vec::new();
         for m in sorted {
             let film_assets: Vec<String> = m
                 .get("filmAssets")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect())
+                .map(|a| {
+                    a.iter()
+                        .map(|v| v.as_str().unwrap_or("").to_string())
+                        .collect()
+                })
                 .unwrap_or_default();
             if film_assets.len() > 65535 {
-                return Err(format!("{name}: film loop with {} poses", film_assets.len()));
+                return Err(format!(
+                    "{name}: film loop with {} poses",
+                    film_assets.len()
+                ));
             }
-            let what = |field: &str| format!("{name} member {}:{} {field}", int(m.get("cast")), int(m.get("number")));
+            let what = |field: &str| {
+                format!(
+                    "{name} member {}:{} {field}",
+                    int(m.get("cast")),
+                    int(m.get("number"))
+                )
+            };
+            let flash_variant_count: u8 = narrow(
+                m.get("flashVariantCount").map_or(1, |v| int(Some(v))),
+                &what("Flash variant count"),
+            )?;
+            if flash_variant_count == 0
+                || (flash_variant_count > 1
+                    && (version < 10
+                        || int(m.get("type")) != 2
+                        || m["xtra"]["symbol"] != "flash"
+                        || film_assets.is_empty()
+                        || film_assets.len() % flash_variant_count as usize != 0
+                        || m["filmSounds"].as_array().is_some_and(|v| !v.is_empty())))
+            {
+                return Err(what("invalid Flash variant storage"));
+            }
+            let film_count = film_assets.len() / flash_variant_count as usize;
             let member_text = text(m.get("text"));
             let binary = extended && member_text.contains('\0');
             let text_bytes = if binary {
                 let hex = text(m.get("textHex"));
-                Some((0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16)).collect::<Result<Vec<u8>, _>>()
-                    .map_err(|_| what("textHex"))?)
+                Some(
+                    (0..hex.len())
+                        .step_by(2)
+                        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+                        .collect::<Result<Vec<u8>, _>>()
+                        .map_err(|_| what("textHex"))?,
+                )
             } else {
                 None
             };
-            let cue_points = m.get("cuePoints").and_then(Value::as_array).cloned().unwrap_or_default();
+            let cue_points = m
+                .get("cuePoints")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             let cues = if extended {
                 cue_points
                     .iter()
-                    .map(|c| Ok((narrow(int(c.get("milliseconds")), &what("cue"))?, text(c.get("name")))))
+                    .map(|c| {
+                        Ok((
+                            narrow(int(c.get("milliseconds")), &what("cue"))?,
+                            text(c.get("name")),
+                        ))
+                    })
                     .collect::<Result<Vec<_>, String>>()?
             } else {
                 Vec::new()
             };
             let (style, insert_style) = if modern_fields {
-                (styles.add(&m["textStyle"])?, styles.add(&m["textInsertStyle"])?)
+                (
+                    styles.add(&m["textStyle"])?,
+                    styles.add(&m["textInsertStyle"])?,
+                )
             } else {
                 (None, None)
             };
-            let film_sounds = if version == 5 {
+            let film_sounds = if (version == 5 || version >= 10) && int(m.get("filmFlags")) & 8 != 0
+            {
                 let mut values = Vec::new();
-                for frame in m.get("filmSounds").and_then(Value::as_array).into_iter().flatten() {
-                    for pair in frame.as_array().into_iter().flatten() {
-                        values.push(if truthy(Some(pair)) { reference(int(pair.get("cast")), int(pair.get("member")))? } else { 0 });
+                for frame in m
+                    .get("filmSounds")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let frame = frame
+                        .as_array()
+                        .filter(|f| f.len() == 2)
+                        .ok_or_else(|| what("film sound pair"))?;
+                    for pair in frame {
+                        values.push(if truthy(Some(pair)) {
+                            let source = match pair["file"].as_str() {
+                                Some(file) => movies
+                                    .iter()
+                                    .find(|candidate| candidate["name"] == file)
+                                    .ok_or_else(|| what("film sound source file missing"))?,
+                                None => movie,
+                            };
+                            film_reference(source, int(pair.get("cast")), int(pair.get("member")))?
+                        } else {
+                            0
+                        });
                     }
+                }
+                if !values.is_empty()
+                    && values.len() != 2 * m["filmAssets"].as_array().map_or(0, Vec::len)
+                {
+                    return Err(what("film sounds do not pair the film frames"));
                 }
                 values
             } else {
@@ -574,14 +927,32 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
             };
             let (mut flash_labels, mut flash_fields) = (Vec::new(), Vec::new());
             if version >= 10 {
-                for label in m.get("flashTimeline").and_then(|t| t.get("labels")).and_then(Value::as_array).into_iter().flatten() {
-                    flash_labels.push((text(label.get("name")), narrow(int(label.get("frame")), &what("flash label"))?));
+                for label in m
+                    .get("flashTimeline")
+                    .and_then(|t| t.get("labels"))
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    flash_labels.push((
+                        text(label.get("name")),
+                        narrow(int(label.get("frame")), &what("flash label"))?,
+                    ));
                 }
                 let mut seen = HashSet::new();
-                for field in m.get("flashFields").and_then(Value::as_array).into_iter().flatten() {
+                for field in m
+                    .get("flashFields")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
                     let field_name = text(field.get("name"));
                     let variable = text(field.get("variable"));
-                    let binding = casefold(if !field_name.is_empty() { &field_name } else { &variable });
+                    let binding = casefold(if !field_name.is_empty() {
+                        &field_name
+                    } else {
+                        &variable
+                    });
                     if binding.is_empty() || !seen.insert(binding) {
                         continue;
                     }
@@ -592,16 +963,38 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                     let bounds = &field["bounds"];
                     let rounded = |v: Option<&Value>| if truthy(v) { round(float(v)) } else { 0 };
                     let style = styles.add(&flash_field_style(field, &aliases, metrics))?;
+                    let mut local_bounds = [0; 4];
+                    if field["localBounds"].is_object() {
+                        for (out, key) in local_bounds
+                            .iter_mut()
+                            .zip(["left", "top", "width", "height"])
+                        {
+                            *out = fixed16(field["localBounds"].get(key))?;
+                        }
+                    }
                     flash_fields.push(FlashField {
-                        name: if !field_name.is_empty() { field_name } else { variable.clone() },
+                        id: narrow(int(field.get("id")), &what("Flash field id"))?,
+                        name: if !field_name.is_empty() {
+                            field_name
+                        } else {
+                            variable.clone()
+                        },
                         variable,
                         text: initial,
+                        local_bounds,
+                        embed_fonts: truthy(field.get("embedFonts")),
                         x: narrow(round(float(bounds.get("left"))), &what("field x"))?,
                         y: narrow(round(float(bounds.get("top"))), &what("field y"))?,
                         width: narrow(round(float(bounds.get("width"))), &what("field width"))?,
                         height: narrow(round(float(bounds.get("height"))), &what("field height"))?,
-                        margin_left: narrow(rounded(field.get("leftMargin")), &what("field margin"))?,
-                        margin_right: narrow(rounded(field.get("rightMargin")), &what("field margin"))?,
+                        margin_left: narrow(
+                            rounded(field.get("leftMargin")),
+                            &what("field margin"),
+                        )?,
+                        margin_right: narrow(
+                            rounded(field.get("rightMargin")),
+                            &what("field margin"),
+                        )?,
                         indent: narrow(rounded(field.get("indent")), &what("field indent"))?,
                         align: match int(field.get("align")) {
                             1 => 2,
@@ -615,15 +1008,72 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                     });
                 }
             }
-            let source_xtra = match m.get("xtra").and_then(|x| x.get("symbol")).and_then(Value::as_str) {
+            let source_xtra = match m
+                .get("xtra")
+                .and_then(|x| x.get("symbol"))
+                .and_then(Value::as_str)
+            {
                 Some("flash") => 1,
                 Some("vectorShape") => 2,
                 Some("TBDIRECTMEDIA") => 3,
+                Some("quickTimeMedia") => 4,
+                Some("cursor") => 5,
                 _ => 0,
             };
-            let video = version == 5 || (version >= 10 && source_xtra == 3);
-            let (text_runs, links) = if version >= 10 { text_runs_and_links(m, &what)? } else { (Vec::new(), Vec::new()) };
+            let video = version == 5 || (version >= 10 && matches!(source_xtra, 1 | 3 | 4));
+            let flash_audio_positions = m["flashAudioPositions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|v| narrow(int(Some(v)), &what("Flash audio position")))
+                .collect::<Result<Vec<u32>, String>>()?;
+            if !flash_audio_positions.is_empty()
+                && (version < 10
+                    || source_xtra != 1
+                    || flash_audio_positions.len() != film_count
+                    || text(m.get("videoAudio")).is_empty()
+                    || int(m.get("rate")) <= 0
+                    || flash_audio_positions
+                        .iter()
+                        .any(|&n| n != u32::MAX && n as i64 > int(m.get("frames"))))
+            {
+                return Err(what("invalid Flash stream audio metadata"));
+            }
+            let (text_runs, links) = if version >= 10 {
+                text_runs_and_links(m, &what)?
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            let flash_runtime = flash::read(&m["flashRuntime"], film_count, &flash_fields)?;
+            let film_frames = runtime_film_frames(movie, m, movies, &palette, &film_reference)?;
+            let film_tracks = native_film_tracks(movie, m, movies, &palette, &film_reference)?;
+            for layer in film_frames.iter().flatten() {
+                flash::validate_layer(layer, &flash_runtime, &flash_fields)?;
+            }
             members.push(Member {
+                palette: match m
+                    .get("palette")
+                    .filter(|v| !v.is_null() && int(m.get("type")) == 4)
+                {
+                    None => Vec::new(),
+                    Some(v) => {
+                        let colors = v.as_array().ok_or_else(|| what("invalid palette"))?;
+                        if colors.is_empty() || colors.len() > 256 || int(m.get("type")) != 4 {
+                            return Err(what(
+                                "palette must contain 1..256 colors on a palette member",
+                            ));
+                        }
+                        colors
+                            .iter()
+                            .map(|v| {
+                                v.as_u64()
+                                    .filter(|v| *v <= 0xffffff)
+                                    .map(|v| v as u32)
+                                    .ok_or_else(|| what("invalid palette color"))
+                            })
+                            .collect::<Result<Vec<_>, String>>()?
+                    }
+                },
                 id: reference(int(m.get("cast")), int(m.get("number")))?,
                 number: narrow(int(m.get("number")), &what("number"))?,
                 cast: narrow(int(m.get("cast")), &what("cast"))?,
@@ -647,20 +1097,133 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 film_loop: narrow(int(m.get("filmLoop")), &what("filmLoop"))?,
                 line_direction: narrow(int(m.get("lineDirection")), &what("lineDirection"))?,
                 film_assets,
-                editable: if extended { u8::from(truthy(m.get("editable"))) } else { 0 },
+                editable: if extended {
+                    u8::from(truthy(m.get("editable")))
+                } else {
+                    0
+                },
                 text_bytes,
-                source_bytes: if extended { narrow(int(m.get("sourceBytes")), &what("sourceBytes"))? } else { 0 },
+                source_bytes: if extended {
+                    narrow(int(m.get("sourceBytes")), &what("sourceBytes"))?
+                } else {
+                    0
+                },
                 cues,
                 style,
                 insert_style,
-                video_audio: if video { text(m.get("videoAudio")) } else { String::new() },
-                video_flags: if video { narrow(int(m.get("videoFlags")), &what("videoFlags"))? } else { 0 },
+                video_audio: if video {
+                    text(m.get("videoAudio"))
+                } else {
+                    String::new()
+                },
+                video_flags: if video {
+                    narrow(int(m.get("videoFlags")), &what("videoFlags"))?
+                } else {
+                    0
+                },
                 film_sounds,
                 source_xtra: if version >= 10 { source_xtra } else { 0 },
                 flash_labels,
                 flash_fields,
+                flash_fonts: m["flashFontUses"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|font| {
+                        styles
+                            .add(&flash_field_style(font, &aliases, metrics))?
+                            .ok_or_else(|| what("missing Flash font style"))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
                 text_runs,
                 links,
+                linked_movie: match m.get("linkedMovie").and_then(Value::as_str) {
+                    Some(name) => {
+                        u16::try_from(id_of(name)?).map_err(|_| what("linked movie id"))?
+                    }
+                    None => 0,
+                },
+                linked_flags: narrow(int(m.get("linkedFlags")), &what("linked flags"))?,
+                linked_left: narrow(int(m.get("linkedLeft")), &what("linked left"))?,
+                linked_top: narrow(int(m.get("linkedTop")), &what("linked top"))?,
+                film_frames,
+                film_tracks,
+                film_flags: u32::try_from(int(m.get("filmFlags")))
+                    .map_err(|_| what("invalid film flags"))?,
+                flash_stops: m["flashTimeline"]["stopFrames"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|v| {
+                        let n = int(Some(v));
+                        if n < 1 || n as usize > film_count.max(1) {
+                            return Err(what("invalid Flash stop frame"));
+                        }
+                        narrow(n, &what("Flash stop frame"))
+                    })
+                    .collect::<Result<Vec<u16>, String>>()?,
+                film_left: narrow(int(m.get("left")), &what("film left"))?,
+                film_top: narrow(int(m.get("top")), &what("film top"))?,
+                flash_helpers: m["flashHelpers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|h| {
+                        let name = text(h.get("name"));
+                        let target = text(h.get("target"));
+                        let property = text(h.get("property"));
+                        let operation = int(h.get("operation"));
+                        let argument = int(h.get("argument"));
+                        let valid = match operation {
+                            1 | 2 => matches!(
+                                property.as_str(),
+                                "_x" | "_y" | "_width" | "_height" | "_alpha" | "_rotation"
+                            ),
+                            3 => property == "size",
+                            4 => property == "text",
+                            _ => false,
+                        };
+                        if name.is_empty()
+                            || target.is_empty()
+                            || !valid
+                            || !(0..=255).contains(&argument)
+                        {
+                            return Err(what("invalid translated Flash helper"));
+                        }
+                        Ok(FlashHelper {
+                            name,
+                            target,
+                            property,
+                            operation: operation as u8,
+                            argument: argument as u8,
+                            method: h["method"].as_bool().unwrap_or(false),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
+                flash_variant_count,
+                flash_rate: narrow(int(m.get("flashRate")), &what("Flash frame rate"))?,
+                flash_audio_positions,
+                flash_playback_mode: {
+                    let mode = int(m.get("flashPlaybackMode"));
+                    if !(0..=2).contains(&mode) {
+                        return Err(what("invalid Flash playback mode"));
+                    }
+                    mode as u8
+                },
+                flash_fixed_rate: narrow(
+                    int(m.get("flashFixedRate")),
+                    &what("Flash fixed frame rate"),
+                )?,
+                flash_runtime,
+                flash_version: u8::try_from(int(m.get("flashVersion")))
+                    .map_err(|_| what("invalid SWF version"))?,
+                flash_direct_to_stage: {
+                    let value = int(m.get("flashDirectToStage"));
+                    if !(0..=1).contains(&value) {
+                        return Err(what("invalid Flash direct-to-stage flag"));
+                    }
+                    value as u8
+                },
             });
         }
         if members.len() > u16::MAX as usize {
@@ -668,8 +1231,11 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
         }
         // The folded-name index, stable for equal hashes (director.py sorts
         // the same way).
-        let mut member_index: Vec<(u32, u16)> =
-            members.iter().enumerate().map(|(i, m)| (text_hash(&m.name), i as u16)).collect();
+        let mut member_index: Vec<(u32, u16)> = members
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (text_hash(&m.name), i as u16))
+            .collect();
         member_index.sort_by_key(|entry| entry.0);
         let mut casts = Vec::new();
         for c in &casts_json {
@@ -677,17 +1243,53 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
             casts.push(Cast {
                 name: text(c.get("name")),
                 file: id_of(&file)? as u16,
-                cast: if file == name { narrow(int(c.get("number")), "cast number")? } else { 1 },
+                cast: if file == name {
+                    narrow(int(c.get("number")), "cast number")?
+                } else {
+                    1
+                },
+                pattern_assets: match c.get("patternAssets").filter(|v| !v.is_null()) {
+                    None => Vec::new(),
+                    Some(value) => {
+                        let assets = value.as_array().ok_or("invalid shape pattern catalog")?;
+                        if assets.len() != 8 {
+                            return Err(format!(
+                                "{name}: shape pattern catalog must have eight slots"
+                            ));
+                        }
+                        assets
+                            .iter()
+                            .map(|v| match v {
+                                Value::Null => Ok(String::new()),
+                                Value::String(s) if !s.is_empty() => Ok(s.clone()),
+                                _ => Err(format!("{name}: invalid shape pattern asset")),
+                            })
+                            .collect::<Result<Vec<_>, String>>()?
+                    }
+                },
             });
         }
         let mut frames = Vec::new();
         let mut deltas: Vec<Delta> = Vec::new();
         let empty = Vec::new();
-        let score_frames = movie.get("score").and_then(|s| s.get("frames")).and_then(Value::as_array).unwrap_or(&empty);
-        let (record_size, channel_limit) = if version >= 7 { (48, if version >= 10 { 1006 } else { 806 }) } else { (24, 126) };
+        let score_frames = movie
+            .get("score")
+            .and_then(|s| s.get("frames"))
+            .and_then(Value::as_array)
+            .unwrap_or(&empty);
+        let (record_size, channel_limit) = if version >= 7 {
+            (48, if version >= 10 { 1006 } else { 806 })
+        } else {
+            (24, 126)
+        };
         for frame in score_frames {
-            let channels = frame["channels"].as_array().ok_or("frame without channels")?;
-            frames.push((deltas.len() as u32, narrow(channels.len() as i64, "frame channels")?));
+            let channels = frame["channels"]
+                .as_array()
+                .ok_or("frame without channels")?;
+            frames.push((
+                deltas.len() as u32,
+                narrow(channels.len() as i64, "frame channels")?,
+            ));
             for channel in channels {
                 let b: Vec<u8> = channel["bytes"]
                     .as_array()
@@ -703,7 +1305,9 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                     .collect();
                 let c = int(channel.get("channel"));
                 if b.len() != record_size || changed.len() != record_size {
-                    return Err(format!("{name}: invalid Director {version} score record size"));
+                    return Err(format!(
+                        "{name}: invalid Director {version} score record size"
+                    ));
                 }
                 if !(0..channel_limit).contains(&c) {
                     return Err(format!("{name}: score channel {c} exceeds profile"));
@@ -711,7 +1315,33 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 let u16_at = |n: usize| u16::from_be_bytes([b[n], b[n + 1]]) as i64;
                 let i16_at = |n: usize| i16::from_be_bytes([b[n], b[n + 1]]);
                 let i32_at = |n: usize| i32::from_be_bytes([b[n], b[n + 1], b[n + 2], b[n + 3]]);
-                let member = if c == 1 || c == 5 {
+                let member = if c == 5 {
+                    let palette = i16_at(2);
+                    if palette == 0 {
+                        0
+                    } else {
+                        if b[5] != 0
+                            || u16_at(8) > 1
+                            || u16_at(10) > 1
+                            || b[12..15].iter().any(|v| *v != 0)
+                        {
+                            return Err(format!(
+                                "{name} frame {}: palette fade/cycle interpolation is unsupported",
+                                int(frame.get("number"))
+                            ));
+                        }
+                        if palette < 0 {
+                            if ![-1, -3, -102].contains(&palette) {
+                                return Err(format!(
+                                    "{name}: unsupported builtin palette {palette}"
+                                ));
+                            }
+                            palette as u16 as u32
+                        } else {
+                            reference(u16_at(0), palette as i64)?
+                        }
+                    }
+                } else if c == 1 {
                     0
                 } else if c >= 6 {
                     reference(u16_at(4), u16_at(6))?
@@ -753,18 +1383,31 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                     }
                 } else {
                     let kind = if c == 1 && version < 7 {
-                        if version == 5 { b[6] } else { score_tempo(&b, version, extended)? as u8 }
+                        if version == 5 {
+                            b[6]
+                        } else {
+                            score_tempo(&b, version, extended)? as u8
+                        }
                     } else if c == 1 && matches!(b[6], 248 | 254 | 255) {
                         b[6]
                     } else {
                         0
                     };
-                    Spec { member, script, kind, ..Spec::default() }
+                    Spec {
+                        member,
+                        script,
+                        kind,
+                        ..Spec::default()
+                    }
                 };
                 if modern_fields {
                     spec.loc_z = if c >= 6 { (c - 5) as i16 } else { 0 };
                     spec.tempo = if c == 1 && version == 5 {
-                        if (1..=120).contains(&b[6]) { b[6] as u16 } else { 0 }
+                        if (1..=120).contains(&b[6]) {
+                            b[6] as u16
+                        } else {
+                            0
+                        }
                     } else if c == 1 {
                         score_tempo(&b, version, extended)?
                     } else {
@@ -796,7 +1439,12 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 if extended {
                     spec.behaviors = behaviors
                         .iter()
-                        .map(|s| Ok((reference(int(s.get("cast")), int(s.get("member")))?, text(s.get("parameters")))))
+                        .map(|s| {
+                            Ok((
+                                reference(int(s.get("cast")), int(s.get("member")))?,
+                                text(s.get("parameters")),
+                            ))
+                        })
                         .collect::<Result<_, String>>()?;
                 }
                 let mut mask: u16 = 0;
@@ -819,9 +1467,12 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                     }
                 }
                 if version >= 7 {
-                    for (flag, indexes) in
-                        [(128u16, &[20usize, 24, 26][..]), (256, &[20, 25, 27]), (2048, &[28, 29, 30, 31]), (4096, &[32, 33, 34, 35])]
-                    {
+                    for (flag, indexes) in [
+                        (128u16, &[20usize, 24, 26][..]),
+                        (256, &[20, 25, 27]),
+                        (2048, &[28, 29, 30, 31]),
+                        (4096, &[32, 33, 34, 35]),
+                    ] {
                         if any(indexes) {
                             mask |= flag;
                         }
@@ -830,7 +1481,11 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 if c >= 6 && changed.iter().all(|&x| x) {
                     mask |= DG_SPAN;
                 }
-                deltas.push(Delta { channel: c as u16, mask, spec });
+                deltas.push(Delta {
+                    channel: c as u16,
+                    mask,
+                    spec,
+                });
             }
         }
         let labels = movie
@@ -838,7 +1493,14 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
             .and_then(|s| s.get("labels"))
             .and_then(Value::as_array)
             .map(|l| -> Result<Vec<(String, u16)>, String> {
-                l.iter().map(|x| Ok((text(x.get("name")), narrow(int(x.get("frame")), "label frame")?))).collect()
+                l.iter()
+                    .map(|x| {
+                        Ok((
+                            text(x.get("name")),
+                            narrow(int(x.get("frame")), "label frame")?,
+                        ))
+                    })
+                    .collect()
             })
             .transpose()?
             .unwrap_or_default();
@@ -873,14 +1535,23 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
 /// Runs are kept only where the text changes colour; a run's offset counts
 /// characters, as the hosts lay the text out.
 #[allow(clippy::type_complexity)]
-fn text_runs_and_links(m: &Value, what: &dyn Fn(&str) -> String) -> Result<(Vec<(u32, u32)>, Vec<(u32, u32, String)>), String> {
+fn text_runs_and_links(
+    m: &Value,
+    what: &dyn Fn(&str) -> String,
+) -> Result<(Vec<(u32, u32)>, Vec<(u32, u32, String)>), String> {
     let mut runs: Vec<(u32, u32)> = Vec::new();
     let typography = &m["typography"];
-    if let (Some(styles), Some(style_runs)) = (typography["styles"].as_array(), typography["styleRuns"].as_array()) {
+    if let (Some(styles), Some(style_runs)) = (
+        typography["styles"].as_array(),
+        typography["styleRuns"].as_array(),
+    ) {
         let length = text(m.get("text")).chars().count() as i64;
         for run in style_runs {
             let offset = int(run.get("offset"));
-            let Some(style) = usize::try_from(int(run.get("index"))).ok().and_then(|i| styles.get(i)) else {
+            let Some(style) = usize::try_from(int(run.get("index")))
+                .ok()
+                .and_then(|i| styles.get(i))
+            else {
                 return Err(what("style run"));
             };
             if offset >= length {
@@ -897,7 +1568,12 @@ fn text_runs_and_links(m: &Value, what: &dyn Fn(&str) -> String) -> Result<(Vec<
         }
     }
     let mut links = Vec::new();
-    for link in m.get("hyperlinks").and_then(Value::as_array).into_iter().flatten() {
+    for link in m
+        .get("hyperlinks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         links.push((
             narrow(int(link.get(0)), &what("hyperlink start"))?,
             narrow(int(link.get(1)), &what("hyperlink end"))?,
@@ -908,4 +1584,65 @@ fn text_runs_and_links(m: &Value, what: &dyn Fn(&str) -> String) -> Result<(Vec<
         return Err(what("text runs or hyperlinks over 65535"));
     }
     Ok((runs, links))
+}
+
+#[cfg(test)]
+mod film_relocation_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn missing_film_members_retain_mutable_channels() {
+        let mut bytes = vec![0u8; 48];
+        bytes[0] = 16;
+        bytes[4..6].copy_from_slice(&65535u16.to_be_bytes());
+        bytes[6..8].copy_from_slice(&122u16.to_be_bytes());
+        bytes[12..14].copy_from_slice(&(-3i16).to_be_bytes());
+        bytes[14..16].copy_from_slice(&17u16.to_be_bytes());
+        let film = json!({"cast":1,"number":115,"width":50,"height":50,
+            "filmRuntime":true,"filmAssets":["empty"],
+            "filmScore":{"version":13,"frames":[{"channels":[{"channel":6,"bytes":bytes}]}]}});
+        let movie = json!({"name":"SYNTHETIC","id":2,"directorVersion":850,
+            "casts":[{"number":1}],"members":[film.clone()]});
+        assert!(crate::convert::film::needs_runtime(&movie, &film, &[]).unwrap());
+        let encode =
+            |_: &Value, cast: i64, member: i64| Ok(2 << 21 | (cast as u32) << 16 | member as u32);
+        let tracks = native_film_tracks(&movie, &film, &[], &vec![0; 256], &encode).unwrap();
+        assert_eq!(tracks[0].keys.len(), 1);
+        assert_eq!(tracks[0].channel, 1);
+        assert_eq!(tracks[0].keys[0].value.member, 2 << 21 | 1 << 16 | 122);
+        assert_eq!(
+            (tracks[0].keys[0].value.x, tracks[0].keys[0].value.y),
+            (17, -3)
+        );
+        assert_eq!(tracks[0].keys[0].value.flags & 0x30, 0); // Indexed colors follow the live stage palette.
+    }
+
+    #[test]
+    fn runtime_film_layers_resolve_local_and_external_cast_tables() {
+        let channel = |cast: u16| {
+            let mut bytes = vec![0u8; 48];
+            bytes[0] = 1;
+            bytes[4..6].copy_from_slice(&cast.to_be_bytes());
+            bytes[6..8].copy_from_slice(&7u16.to_be_bytes());
+            json!({"channel":6,"bytes":bytes})
+        };
+        let movie = json!({"name":"M","id":2,"directorVersion":850,
+            "casts":[{"number":1,"filmCastMap":[3,{"file":"EXT","cast":1}]}],
+            "members":[{"cast":3,"number":7,"type":3,"text":"local"}]});
+        let external = json!({"name":"EXT","id":5,
+            "members":[{"cast":1,"number":7,"type":3,"text":"external"}]});
+        let film = json!({"cast":1,"number":9,"width":1,"height":1,
+            "filmRuntime":true,"filmAssets":["first","second"],
+            "filmScore":{"version":13,"frames":[
+                {"channels":[channel(0)]},{"channels":[channel(1)]}]}});
+        let movies = [external];
+        assert!(crate::convert::film::needs_runtime(&movie, &film, &movies).unwrap());
+        let encode = |source: &Value, cast: i64, member: i64| {
+            Ok((int(source.get("id")) as u32) << 21 | (cast as u32) << 16 | member as u32)
+        };
+        let tracks = native_film_tracks(&movie, &film, &movies, &vec![0; 256], &encode).unwrap();
+        assert_eq!(tracks[0].keys[0].value.member, 2 << 21 | 3 << 16 | 7);
+        assert_eq!(tracks[0].keys[1].value.member, 5 << 21 | 1 << 16 | 7);
+    }
 }

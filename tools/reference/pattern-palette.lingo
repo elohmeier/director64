@@ -1,0 +1,28 @@
+-- Requires a diagnostic engine resource whose texture58 index plane is 0..255.
+-- The engine code is unchanged; capture its patched-resource DLL hash.
+global out, pm, snapshot, row, column
+out=new(xtra("fileio"))
+out.createFile("C:\pattern-palette.txt")
+out.openFile("C:\pattern-palette.txt",2)
+pm=new(#shape)
+pm.shapeType=#rect
+pm.filled=1
+pm.lineSize=0
+pm.pattern=58
+pm.rect=rect(0,0,16,16)
+puppetSprite(149,1)
+sprite(149).member=pm
+sprite(149).rect=rect(0,0,16,16)
+sprite(149).visible=1
+sprite(149).ink=0
+sprite(149).blend=100
+sprite(149).color=rgb(0,0,0)
+sprite(149).bgColor=rgb(255,255,255)
+updateStage
+snapshot=(the stage).image
+repeat with row=0 to 15
+ repeat with column=0 to 15
+  out.writeString(string([row*16+column,snapshot.getPixel(point(column,row))])&RETURN)
+ end repeat
+end repeat
+out.closeFile()

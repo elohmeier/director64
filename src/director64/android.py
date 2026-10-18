@@ -152,14 +152,21 @@ def makefile(game: GameSpec, output: Path, abis: list[str]) -> Path:
 
 
 def converter_revision(root: Path) -> str:
-    """The importer's revision, as the browser stamps its packages; builds
-    the importer when it is missing."""
-    build = root / "build/web/site/build.json"
-    if not build.is_file() or not (root / "build/web/tools/pipeline.mjs").is_file():
-        from .toolchain import container_engine
+    """Rebuild missing, stale or modified importer tools before reusing packages."""
+    from .toolchain import container_engine
 
-        web.write_site(root, web.build_tools(root, container_engine()))
-    return json.loads(build.read_text())["import"]["revision"]
+    folder = root / "build/web/tools"
+    try:
+        tools = json.loads((folder / "manifest.json").read_text())
+        current = tools["source_sha256"] == web.import_source_digest(root) and all(
+            web.sha256(folder / name) == tools["sha256"][key]
+            for key, name in tools["files"].items()
+        )
+    except (OSError, KeyError, ValueError):
+        current = False
+    if not current:
+        tools = web.build_tools(root, container_engine())
+    return tools["revision"]
 
 
 def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
@@ -170,12 +177,23 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
         raise ValueError(f"{game.media}: place the game's disc image there first")
     revision = converter_revision(root)
     abi = web.abi_digest(root).hex()
+    profile = web.profile_entry(game, web.web_profile(game))
+    import hashlib
+
+    profile_hash = hashlib.sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()
+    export_hash = hashlib.sha256("".join(
+        web.sha256(p) for p in sorted((root / "platforms/android/export").glob("*.mjs"))
+    ).encode()).hexdigest()
     try:
         existing = json.loads((out / "manifest.json").read_text())
         current = (
             existing["converter"] == revision
             and existing["abi"] == abi
-            and all((out / n).stat().st_size == existing["bytes"][n] for n in GAME_FILES)
+            and existing["source_sha256"] == game.source["sha256"]
+            and existing["profile_sha256"] == profile_hash
+            and existing["export_sha256"] == export_hash
+            and all((out / n).stat().st_size == existing["bytes"][n]
+                    and web.sha256(out / n) == existing["sha256"][n] for n in GAME_FILES)
         )
     except OSError, KeyError, ValueError:
         current = False
@@ -184,12 +202,13 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
     gen = out.parent / "gen"
     gen.mkdir(parents=True, exist_ok=True)
     (gen / "profile.json").write_text(
-        json.dumps(web.profile_entry(game, web.web_profile(game))) + "\n"
+        json.dumps(profile) + "\n"
     )
     meta = {
         "converter": revision,
         "director_version": game.data["port"]["director_version"],
         "game": game.slug,
+        "renderer_target": "android",
         "schema_version": 1,
         "source_sha256": game.source["sha256"],
     }
@@ -202,6 +221,8 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
                 "source_sha256": game.source["sha256"],
                 "abi": abi,
                 "converter": revision,
+                "profile_sha256": profile_hash,
+                "export_sha256": export_hash,
             }
         )
         + "\n"
@@ -360,9 +381,63 @@ def version_code() -> int:
     return int(time.time() - 1767225600) // 60
 
 
+def apk_path(game: GameSpec) -> Path:
+    return game.dist / f"director64-{game.slug}.apk"
+
+
+def apk_receipt_path(game: GameSpec) -> Path:
+    return apk_path(game).with_suffix(".apk.json")
+
+
+def apk_input_digest(game: GameSpec, abis: list[str]) -> str:
+    """Inputs to this APK, separate from the reusable converted asset packs."""
+    import hashlib
+
+    root = game.root
+    paths = set()
+    for directory in (
+        "runtime", "platforms/web", "platforms/android", "platforms/native", "docker/android",
+        f"games/{game.slug}/runtime", f"games/{game.slug}/probe",
+    ):
+        paths.update(p for p in (root / directory).rglob("*") if p.is_file())
+    paths.update(game.directory.glob("cover.*"))
+    paths.update(game.directory.rglob("*.h"))
+    paths.update(root / name for name in (
+        "src/director64/android.py", "src/director64/web.py", str(web.FONT),
+    ))
+    digest = hashlib.sha256(json.dumps({
+        "source": game.source["sha256"], "abis": abis,
+        "profile": web.profile_entry(game, web.web_profile(game)),
+        "importer": web.import_source_digest(root),
+    }, sort_keys=True).encode())
+    for path in sorted(paths):
+        digest.update(path.relative_to(root).as_posix().encode() + b"\0")
+        digest.update(bytes.fromhex(web.sha256(path)))
+    return digest.hexdigest()
+
+
+def verify_apk(game: GameSpec) -> Path:
+    """Refuse a stale APK or an artifact left behind by a failed rebuild."""
+    path = apk_path(game)
+    try:
+        receipt = json.loads(apk_receipt_path(game).read_text())
+        valid = (
+            receipt["source_sha256"] == game.source["sha256"]
+            and receipt["inputs"] == apk_input_digest(game, receipt["abis"])
+            and receipt["apk_sha256"] == web.sha256(path)
+        )
+    except (OSError, KeyError, ValueError, TypeError):
+        valid = False
+    if not valid:
+        raise ValueError(f"{path}: missing or stale build receipt; rebuild this game's APK")
+    return path
+
+
 def build(game: GameSpec, jobs: int, abis: list[str], reconvert: bool) -> Path:
     root = game.root
     game.require_port()
+    apk_receipt_path(game).unlink(missing_ok=True)
+    identity = apk_input_digest(game, abis)
     work = root / "build/android" / game.slug / game.source["id"]
     data = convert(game, work / "game", reconvert)
     make = makefile(game, work, abis)
@@ -443,8 +518,8 @@ fi
             name = f"lib{library(game)}.so"
             apk.write(work / "lib" / abi / name, f"lib/{abi}/{name}", zipfile.ZIP_STORED)
     game.dist.mkdir(parents=True, exist_ok=True)
-    apk_path = game.dist / f"director64-{game.slug}.apk"
-    out = apk_path.relative_to(root).as_posix()
+    apk = apk_path(game)
+    out = apk.relative_to(root).as_posix()
     run_container(
         root,
         f"""
@@ -455,7 +530,15 @@ $BUILD_TOOLS/apksigner sign --ks /keystore/android.keystore --ks-pass pass:{KEYS
 rm -f {w}/out/aligned.apk {out}.idsig
 """,
     )
-    return apk_path
+    if apk_input_digest(game, abis) != identity:
+        raise ValueError("APK inputs changed during build; rebuild before installing")
+    receipt = {
+        "source_sha256": game.source["sha256"], "abis": abis, "inputs": identity,
+        "apk_sha256": web.sha256(apk), "bytes": apk.stat().st_size,
+        "conversion": json.loads((data / "manifest.json").read_text()),
+    }
+    apk_receipt_path(game).write_text(json.dumps(receipt, indent=2) + "\n")
+    return apk
 
 
 def main(argv: list[str]) -> int:
@@ -483,9 +566,7 @@ def main(argv: list[str]) -> int:
     if args.action == "build":
         print(build(game, args.jobs, args.abi or list(ABIS), args.reconvert))
     elif args.action == "install":
-        apk = game.dist / f"director64-{game.slug}.apk"
-        if not apk.is_file():
-            raise ValueError(f"{apk} is not built; run director64 android build --game {game.slug}")
+        apk = verify_apk(game)
         serial = ["-s", args.serial] if args.serial else []
         subprocess.run(["adb", *serial, "install", "-r", apk], check=True)
     return 0

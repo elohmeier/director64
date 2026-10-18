@@ -1,3 +1,4 @@
+#include "palette.h"
 #include <time.h>
 #include "director.h"
 #include <ctype.h>
@@ -5,6 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if DG_D10
+#include "flash_runtime.h"
+#endif
 
 static void apply(dg_sprite_t *, const dg_spec_t *, unsigned);
 static const char *basename_(const char *);
@@ -15,15 +19,31 @@ static const char *d10_cast_store(dg_runtime_t *, uint32_t);
 static const dg_cast_t *d10_castlib(dg_runtime_t *, int32_t);
 static int32_t d10_castlib_id(dg_runtime_t *, const char *);
 static lv_t behavior_property(dg_runtime_t *, unsigned, const char *);
+static bool linked_update(dg_runtime_t *, unsigned);
+static void linked_reset(dg_runtime_t *);
+static bool linked_key(dg_runtime_t *, unsigned, unsigned, bool);
+static const dg_movie_t *linked_loaded(const dg_runtime_t *, unsigned, const lv_movie_t *);
+static bool linked_get(dg_runtime_t *, const char *, lv_t, lv_t *);
+static bool linked_call(dg_runtime_t *, const char *, unsigned, const lv_t *, lv_t *);
+
 #endif
 _Static_assert(DG_FIELD_COLOR_ROOT + DG_FIELDS <= LV_ROOTS,
                "field text and style must fit in the GC roots");
 
 #if DG_MODERN
 static void cancel_fade(dg_runtime_t *d, unsigned channel) {
-  if (d->fade_duration[channel])
+  if (d->fade_duration[channel] && d->fade_restore[channel])
     d->channel_volume[channel] = d->fade_volume[channel];
   d->fade_duration[channel] = 0;
+}
+static void start_fade(dg_runtime_t *d, unsigned channel, unsigned from,
+                       unsigned to, uint32_t ticks, bool restore) {
+  d->fade_start[channel] = d->ticks;
+  d->fade_duration[channel] = ticks;
+  d->fade_volume[channel] = (uint16_t)from;
+  d->fade_target[channel] = (uint16_t)to;
+  d->fade_restore[channel] = restore;
+  d->channel_volume[channel] = (uint16_t)(ticks ? from : to);
 }
 #endif
 unsigned dg_opacity(const dg_sprite_t *s) {
@@ -43,9 +63,42 @@ unsigned dg_film_pose(const dg_member_t *m, const dg_sprite_t *s) {
          : s->film_frame < m->film_count ? s->film_frame
                                          : m->film_count - 1u;
 }
+unsigned dg_film_storage_pose(const dg_member_t *m, const dg_sprite_t *s) {
+  if (!m || !m->film_count) return 0;
+  unsigned pose=dg_film_pose(m,s);
+#if DG_D10
+  unsigned variants=m->flash_variant_count;
+  if (variants > 1) {
+    unsigned initial=s->flash_variant ? s->flash_variant - 1u : 0;
+    unsigned phase=(initial + s->flash_clock + variants - pose % variants) % variants;
+    return pose * variants + phase;
+  }
+#endif
+  return pose;
+}
+const char *dg_film_asset(const dg_member_t *m, const dg_sprite_t *s) {
+  if (!m || !m->film_count || !m->film_assets) return NULL;
+  return m->film_assets[dg_film_storage_pose(m,s)];
+}
+#if DG_D10
+static bool flash_initial_paused(dg_runtime_t *,const dg_member_t *);
+static void film_stop_action(const dg_member_t *m, dg_sprite_t *s) {
+  if (!m) return;
+  for (unsigned i = 0; i < m->flash_stop_count; i++)
+    if (m->flash_stops[i] == dg_film_pose(m, s) + 1)
+      s->film_paused = true;
+}
+#endif
 static void set_member(dg_sprite_t *s, uint32_t id) {
-  if (s->value.member != id)
+  if (s->value.member != id) {
     s->film_frame = 0;
+    s->film_paused = false;
+#if DG_D10
+    s->flash_variant = s->flash_clock = 0;
+    s->flash_phase = 0;
+    s->flash_settings = 0;
+#endif
+  }
   s->value.member = id;
 }
 
@@ -216,17 +269,24 @@ void dg_key(dg_runtime_t *d, unsigned code, unsigned character, bool down) {
   uint32_t bit = UINT32_C(1) << (code & 31);
   bool held = (d->keys_down[code >> 5] & bit) != 0;
   if (held == down) return;
-  if (d->key_count == 32) {
-    error(d, "keyboard input", "event queue full");
-    return;
+  bool routed = false;
+#if DG_D10
+  routed = linked_key(d, code, character, down);
+  if(!routed)dg_flash_key(d,code,down?character:d->key_chars[code],down);
+#endif
+  if (!routed) {
+    if (d->key_count == 32) {
+      error(d, "keyboard input", "event queue full");
+      return;
+    }
+    unsigned index = (d->key_first + d->key_count++) % 32;
+    d->key_events[index].code = code;
+    d->key_events[index].character = down ? character : d->key_chars[code];
+    d->key_events[index].down = down;
   }
-  unsigned index = (d->key_first + d->key_count++) % 32;
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
   if (down) d->last_input_tick = d->ticks;
 #endif
-  d->key_events[index].code = code;
-  d->key_events[index].character = down ? character : d->key_chars[code];
-  d->key_events[index].down = down;
   if (down) {
     d->keys_down[code >> 5] |= bit;
     d->key_chars[code] = (uint8_t)character;
@@ -240,7 +300,13 @@ const dg_movie_t *dg_loaded(dg_runtime_t *d, unsigned file) {
   for (unsigned i = 0; i < d->loaded_count; i++)
     if (d->loaded[i]->id == file)
       return d->loaded[i];
+#if DG_D10
+  const dg_runtime_t *host = d;
+  while (host->linked_parent) host = host->linked_parent;
+  return linked_loaded(host, file, NULL);
+#else
   return NULL;
+#endif
 }
 const dg_member_t *dg_member(dg_runtime_t *d, uint32_t id) {
   if (!id)
@@ -270,13 +336,26 @@ static bool member_looping(dg_runtime_t *d, const dg_member_t *m) {
   for (unsigned i = 0; i < d->loop_count; i++)
     if (d->loop_members[i] == m->id)
       return d->loop_values[i];
+#if DG_D5 || DG_D10
+  if (dg_is_video(m)) return (m->video_flags & 16) != 0;
+#endif
   return m->type == 2 ? m->film_loop : m->looping;
+}
+#endif
+#if DG_D10
+static dg_runtime_t *sound_host(dg_runtime_t *d) {
+  while (d->linked_parent) d = d->linked_parent;
+  return d;
 }
 #endif
 static void play_member(dg_runtime_t *d, unsigned channel,
                         const dg_member_t *m) {
+  d->sound_paused[channel] = false;
   if (!d->platform.sound)
     return;
+#if DG_D10
+  sound_host(d)->linked_sound_owner[channel] = m ? d : NULL;
+#endif
 #if DG_MODERN
   if (m) {
     // Callbacks consume this snapshot synchronously, like the immutable member
@@ -293,6 +372,41 @@ static void play_member(dg_runtime_t *d, unsigned channel,
 #endif
   d->platform.sound(d->context, channel, m);
 }
+#if DG_D10
+static void d10_score_sounds(dg_runtime_t *d) {
+  for (unsigned ch = 0; ch < 2; ch++) {
+    dg_runtime_t *owner = sound_host(d)->linked_sound_owner[ch];
+    if (d->sound_puppet[ch] || (owner && owner != d && owner->sound_puppet[ch])) continue;
+    uint32_t id = d->score[ch ? 3 : 4].member;
+    unsigned selected = 0, pose = 0, instance = 0;
+    // Main-score audio wins; otherwise the highest sprite with an enabled
+    // film sound supplies the channel. Format/priority reference: clean
+    // ScummVM 41ac2b31847622d0662d22c03fe6979e3b43cfbc score.cpp.
+    for (unsigned i = DG_SPRITES - 1; !id && i; i--) {
+      const dg_sprite_t *s = &d->sprites[i];
+      const dg_member_t *m = d->film_loop_member[i];
+      if (s->value.type && m) {
+        id = dg_film_sound(d, i, ch, &pose, &instance);
+        if (id) selected = i;
+      }
+    }
+    bool restart = selected && selected == d->film_sound_sprite[ch] &&
+        (instance != d->film_sound_instance[ch] || pose < d->film_sound_pose[ch]);
+    d->film_sound_sprite[ch] = (uint16_t)selected;
+    d->film_sound_pose[ch] = (uint16_t)pose;
+    d->film_sound_instance[ch] = instance;
+    if (id == d->sounds[ch] && !restart) continue;
+    const dg_member_t *m = dg_member(d, id);
+    if (id && (!m || m->type != 6)) {
+      if (selected || m) { error(d, "score/film sound missing", d->movie->code->name); return; }
+      if (d->platform.trace) d->platform.trace(d->context, "SCORE_SOUND_EMPTY");
+    }
+    d->sounds[ch] = id; d->sound_serial[ch]++;
+    // A child's empty frame must not stop a later host/sibling playback.
+    if (id || !owner || owner == d) play_member(d, ch, m);
+  }
+}
+#endif
 static uint32_t reference_id(dg_runtime_t *d, unsigned cast, unsigned member) {
   if (!member)
     return 0;
@@ -324,6 +438,64 @@ static unsigned member_cast(dg_runtime_t *d, uint32_t id) {
       return c + 1;
   }
   return 0;
+}
+unsigned dg_member_pattern(const dg_runtime_t *d, const dg_member_t *m) {
+  if (!m) return 1;
+  for(unsigned i=0;i<d->field_count;i++)
+    if(d->field_members[i]==m->id && d->field_patterns[i])return d->field_patterns[i];
+  return m->pattern;
+}
+const char *dg_shape_texture(const dg_runtime_t *d, const dg_member_t *m, unsigned pattern) {
+  if(!m || pattern<57 || pattern>64)return NULL;
+#if DG_MODERN
+  const dg_movie_t *owner=dg_loaded((dg_runtime_t *)d,DG_ID_FILE(m->id));
+  if(owner) {
+    unsigned cast=DG_ID_CAST(m->id);
+    if(cast && cast<=owner->cast_count && owner->casts[cast-1].shape_patterns)
+      return owner->casts[cast-1].shape_patterns[pattern-57];
+  }
+#else
+  (void)d;
+#endif
+  return pattern==m->pattern ? m->asset : NULL;
+}
+static bool palette_command(dg_runtime_t *d, uint32_t id, bool score_command) {
+  if(!id)return true;
+  int number=(int16_t)(id&65535u);
+  if(number==-3) {
+    for(unsigned i=0;i<256;i++)d->active_palette[i]=(255u-i)*0x010101u;
+    d->palette_active=true;
+    d->visual_revision++;
+    return true;
+  }
+  if(number==-1 || number==-102) {
+    dg_system_palette(d->active_palette,number==-102);
+    d->palette_active=true;
+    d->visual_revision++;
+    return true;
+  }
+  const dg_member_t *member=dg_member(d,id);
+  if(member && member->type==4 && member->palette_count==256 && member->palette) {
+    memcpy(d->active_palette,member->palette,sizeof(d->active_palette));
+    d->palette_active=true;
+    d->visual_revision++;
+    return true;
+  }
+  // Recovered scores can retain references to deleted/non-palette cast
+  // slots. ScummVM41ac score.cpp renderPrePaletteCycle likewise leaves the
+  // active palette intact when its lookup is absent; this is distinct from
+  // a real palette whose color format is unsupported.
+  if(score_command && number>0 && (!member || member->type!=4)) {
+    if(d->platform.trace) {
+      char message[256];
+      snprintf(message,sizeof(message),"SCORE_PALETTE_UNAVAILABLE movie=%s frame=%u member=%u reason=%s",
+               d->movie->code->name,d->frame,(unsigned)id,member?"not-palette":"missing");
+      d->platform.trace(d->context,message);
+    }
+    return true;
+  }
+  error(d,"unsupported score palette",d->movie->code->name);
+  return false;
 }
 #if DG_MODERN
 static bool format_reference(lv_runtime_t *r, lv_t value, char *out,
@@ -369,14 +541,20 @@ static const lv_handler_t *resolve_script(lv_runtime_t *r, lv_t script,
 static lv_t script_identity(lv_runtime_t *r, const lv_movie_t *code,
                             const lv_handler_t *handler) {
   dg_runtime_t *d = r->context;
-  for (unsigned i = 0; i < d->loaded_count; i++) {
-    const dg_movie_t *movie = d->loaded[i];
-    if (movie->code != code)
-      continue;
+  const dg_movie_t *movie = NULL;
+  for (unsigned i = 0; i < d->loaded_count; i++)
+    if (d->loaded[i]->code == code) { movie = d->loaded[i]; break; }
+#if DG_D10
+  if (!movie) {
+    const dg_runtime_t *host = d;
+    while (host->linked_parent) host = host->linked_parent;
+    movie = linked_loaded(host, 0, code);
+  }
+#endif
+  if (movie)
     for (unsigned cast = 0; cast < movie->cast_count; cast++)
       if (eq(movie->casts[cast].name, handler->cast))
         return lv_make(LV_SCRIPT, (int32_t)DG_ID(movie->id, cast + 1, handler->member));
-  }
   return (lv_t){0};
 }
 #endif
@@ -599,19 +777,15 @@ static void sprite_rect(dg_runtime_t *d, const dg_sprite_t *s, int *left,
                         int *top, int *right, int *bottom) {
   const dg_member_t *m = dg_member(d, s->value.member);
 #if DG_D10
-  // A bitmap whose image a script replaced takes the new image's size,
-  // registered at its centre: another member's, or the authored 800x600
-  // stage's for a stage snapshot.
+  // Script-created pixels retain their own dimensions and registration.
   dg_member_t resized;
-  uint32_t source;
-  if (m && m->type == 1 && d->image_alias_count && dg_image_source(d, m->id, &source)) {
-    const dg_member_t *from = source ? dg_member(d, source) : NULL;
-    bool blank = source == DG_IMAGE_BLANK;
+  const dg_pixel_image_t *image = m ? dg_member_image(d, m->id) : NULL;
+  if (m && m->type == 1 && image) {
     resized = *m;
-    resized.width = from ? from->width : blank ? 0 : 800;
-    resized.height = from ? from->height : blank ? 0 : 600;
-    resized.reg_x = (int16_t)(resized.width / 2);
-    resized.reg_y = (int16_t)(resized.height / 2);
+    resized.width = (uint16_t)image->width;
+    resized.height = (uint16_t)image->height;
+    resized.reg_x = (int16_t)image->reg_x;
+    resized.reg_y = (int16_t)image->reg_y;
     m = &resized;
   }
 #endif
@@ -717,6 +891,16 @@ void dg_sprite_bounds(dg_runtime_t *d, const dg_sprite_t *s, int *left,
 #endif
   sprite_rect(d, s, left, top, right, bottom);
 }
+#if DG_MODERN
+static bool draw_after(const dg_runtime_t *d,unsigned left,unsigned right) {
+#if DG_D10
+  bool a=!!(d->flash_direct_channels[left>>5]&(UINT32_C(1)<<(left&31)));
+  bool b=!!(d->flash_direct_channels[right>>5]&(UINT32_C(1)<<(right&31)));
+  if(a!=b)return a;
+#endif
+  return d->sprites[left].value.loc_z>d->sprites[right].value.loc_z;
+}
+#endif
 unsigned dg_draw_order(dg_runtime_t *d, const uint16_t **out) {
   *out = d->order_cache;
   if (d->order_valid && d->order_cached == d->order_serial)
@@ -740,8 +924,7 @@ unsigned dg_draw_order(dg_runtime_t *d, const uint16_t **out) {
         if (!(bits & (UINT32_C(1) << (i & 31))) || !d->sprites[i].value.type)
           continue;
         unsigned at = count;
-        while (at && d->sprites[order[at - 1]].value.loc_z >
-                         d->sprites[i].value.loc_z) {
+        while (at && draw_after(d,order[at - 1],i)) {
           order[at] = order[at - 1];
           at--;
         }
@@ -758,8 +941,7 @@ unsigned dg_draw_order(dg_runtime_t *d, const uint16_t **out) {
 #if DG_MODERN
     if (!d->sprites[i].value.type && !d->trail_count)
       continue;
-    while (at &&
-           d->sprites[order[at - 1]].value.loc_z > d->sprites[i].value.loc_z) {
+    while (at && draw_after(d,order[at - 1],i)) {
       order[at] = order[at - 1];
       at--;
     }
@@ -808,14 +990,34 @@ static bool overlaps(dg_runtime_t *d, const dg_sprite_t *a,
 // changes. Every member change reaches event_channel_changed, so this runs
 // there; the frame advance then reads only the film channels.
 static void film_channel_changed(dg_runtime_t *d, unsigned i) {
-  const dg_sprite_t *s = &d->sprites[i];
+  dg_sprite_t *s = &d->sprites[i];
   if (s->value.member == d->film_member[i]) return;
+#if DG_D10
+  dg_film_reset(d, i);
+  // A changed parent member starts a new set of film subchannels.
+  for (unsigned n = 0; n < d->film_child_count;) {
+    if (d->film_children[n].parent == i)
+      d->film_children[n] = d->film_children[--d->film_child_count];
+    else n++;
+  }
+  s->flash_variant = s->flash_clock = 0;
+  s->flash_phase = 0;
+#endif
   d->film_member[i] = s->value.member;
   const dg_member_t *m = dg_member(d, s->value.member);
   bool loop = m && m->type == 2 && m->film_count;
   d->film_loop_channel[i] = loop;
   d->film_loop_member[i] = loop ? m : NULL;
   uint32_t bit = UINT32_C(1) << (i & 31);
+#if DG_D10
+  if (m && m->source_xtra == 1 && m->flash_rate)
+    s->film_paused = flash_initial_paused(d,m);
+  film_stop_action(m, s);
+  if (m && m->type == 9) d->linked_channels[i >> 5] |= bit;
+  else d->linked_channels[i >> 5] &= ~bit;
+  if (m && m->source_xtra==1 && m->flash_direct_to_stage) d->flash_direct_channels[i>>5]|=bit;
+  else d->flash_direct_channels[i>>5]&=~bit;
+#endif
   if (loop)
     d->film_channels[i >> 5] |= bit;
   else
@@ -841,17 +1043,30 @@ static void event_channel_changed(dg_runtime_t *d, unsigned i) {
 void dg_sprite_changed(dg_runtime_t *d, unsigned i) {
   if (!i || i >= DG_SPRITES)
     return;
-  d->order_serial++;
-  d->active_sprites[i >> 5] |= UINT32_C(1) << (i & 31);
 #if DG_MODERN
   event_channel_changed(d, i);
 #endif
+#if DG_D10
+  dg_sprite_t *s=&d->sprites[i];
+  const dg_member_t *m=dg_member(d,s->value.member);
+  if (m && m->flash_variant_count > 1 && !s->flash_variant && d->values) {
+    uint32_t x=d->values->random_state;
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    d->values->random_state=x;
+    s->flash_variant=(uint8_t)(1 + x % m->flash_variant_count);
+  }
+#endif
+  d->order_serial++;
+  d->active_sprites[i >> 5] |= UINT32_C(1) << (i & 31);
   if (!d->stage_dirty[i]) {
     d->stage_dirty[i] = true;
     d->stage_channels[d->stage_count++] = (uint16_t)i;
   }
 }
 void dg_update_stage(dg_runtime_t *d) {
+#if DG_D10
+  if (d->movie && !d->values->failed) d10_score_sounds(d);
+#endif
   // Trails preserve each committed image of a moved/recast sprite, even when
   // several updateStage calls occur between physical display refreshes.
   // A normal sprite's dirty area erases intersecting trails, including the
@@ -995,11 +1210,31 @@ static unsigned hit_sprite(dg_runtime_t *d, int x, int y, bool active,
         u = 1 - u;
       if (s->flip_v)
         v = 1 - v;
-      tx = u * 65535;
-      ty = v * 65535;
+      tx = u * 65536;
+      ty = v * 65536;
+      if (tx > 65535) tx = 65535;
+      if (ty > 65535) ty = 65535;
       tw = th = 65536;
 #endif
-      if (m && m->type == 1 && d->platform.hit &&
+#if DG_D10
+      const dg_pixel_image_t *image = m ? dg_member_image(d, m->id) : NULL;
+      if (image) {
+        unsigned px = (unsigned)tx * image->width / (unsigned)tw;
+        unsigned py = (unsigned)ty * image->height / (unsigned)th;
+        if (s->value.ink == 8) {
+          if (px >= image->width || py >= image->height) continue;
+          size_t at = (size_t)py * image->width + px;
+          if (image->use_alpha) {
+            if (!(image->pixels[at] >> 24)) continue;
+          } else {
+            const uint8_t *matte = dg_image_matte(d, image);
+            if (!matte || !matte[at]) continue;
+          }
+        }
+        return i;
+      }
+#endif
+      if (m && (m->type == 1 || m->type == 5 || m->type == 12) && d->platform.hit &&
           !d->platform.hit(d->context, m, s->value.ink, tx * m->width / tw,
                            ty * m->height / th))
         continue;
@@ -1056,6 +1291,17 @@ const dg_text_extra_t *dg_text_extra(dg_runtime_t *d, uint32_t member) {
 static void cursor_set(dg_runtime_t *d, dg_cursor_t *target, lv_t value) {
   lv_runtime_t *r = d->values;
   dg_cursor_t next = {0};
+#if DG_D10
+  if (lv_type(value) == LV_MEMBER) {
+    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(value));
+    if (!m || m->source_xtra != 5 || m->type != 1 || !m->asset ||
+        !m->width || !m->height || m->width > 16 || m->height > 16) {
+      error(d, "cursor member", "invalid converted Cursor Xtra");
+      return;
+    }
+    next.image = m->id;
+  } else
+#endif
   if (lv_type(value) == LV_LIST) {
     unsigned count = lv_count(r, value);
     if (!count) { error(d, "cursor bitmap list", "empty"); return; }
@@ -1093,32 +1339,24 @@ static void cursor_set(dg_runtime_t *d, dg_cursor_t *target, lv_t value) {
     }
   } else {
     if (lv_type(value) != LV_NUMBER) {
-      error(d, "cursor value", "expected built-in number or bitmap list");
+      error(d, "cursor value", "expected built-in number, Cursor Xtra member or bitmap list");
       return;
     }
     next.resource = lv_integer(r, value);
     if (r->failed) return;
     if ((next.resource < -1 || next.resource > 4) && next.resource != 200) {
-#if DG_D10
-      // The corpus selects Cursor Xtra resources — a pinned deferred
-      // conversion. The pointer keeps its current shape, visibly traced.
-      if (d->platform.trace) {
-        char text[64];
-        snprintf(text, sizeof(text), "CURSOR_RESOURCE_PENDING %ld",
-                 (long)next.resource);
-        d->platform.trace(d->context, text);
-      }
+      error(d, "unsupported cursor resource", "expected built-in ID or Cursor Xtra member");
       return;
-#else
-      error(d, "unsupported cursor resource", "only built-ins and bitmap lists recovered");
-      return;
-#endif
     }
   }
   *target = next;
 }
 static lv_t cursor_get(dg_runtime_t *d, dg_cursor_t value) {
   if (!value.image) return lv_num(value.resource);
+#if DG_D10
+  const dg_member_t *m = dg_member(d, value.image);
+  if (m && m->source_xtra == 5) return lv_make(LV_MEMBER, (int32_t)m->id);
+#endif
   uint32_t ids[] = {value.image, value.mask};
   lv_t pair[2];
   for (unsigned i = 0; i < 2; i++) {
@@ -1149,15 +1387,17 @@ static int field(dg_runtime_t *d, uint32_t member) {
   }
   unsigned i = d->field_count++;
   d->field_members[i] = member;
+  d->field_patterns[i] = 0;
   const dg_member_t *m = dg_member(d, member);
   d->values->roots[DG_FIELD_COLOR_ROOT + i] = (lv_t){0};
   d->values->roots[DG_FIELD_TEXT_ROOT + i] =
-      lv_text(d->values, m ? m->text : "", false);
+      lv_text(d->values, m && m->text ? m->text : "", false);
 #if DG_MODERN
   snprintf(d->field_fonts[i], sizeof(d->field_fonts[i]), "%s",
            m && m->text_style && m->text_style->font_name
                ? m->text_style->font_name : "");
   d->field_text_changed[i] = false;
+  d->field_font_changed[i] = false;
   d->field_scroll[i] = 0;
 #if DG_EXTENDED
   d->field_editable[i] = m && m->editable;
@@ -1173,6 +1413,11 @@ static unsigned frame_number(dg_runtime_t *d, lv_t value);
 #include "d5.inc"
 #endif
 #if DG_D10
+#include "imaging.inc"
+#include "flash_playback.inc"
+#include "avm1.inc"
+#include "avm1_native.inc"
+#include "flash_runtime.inc"
 #include "d10.inc"
 #endif
 #if DG_EXTENDED
@@ -1227,81 +1472,13 @@ static __attribute__((noinline)) lv_t marker_list(lv_runtime_t *r, dg_runtime_t 
   return result;
 }
 #endif
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-static dg_film_child_t *film_child(dg_runtime_t *d, lv_t sprite, bool create) {
-  unsigned parent = ((uint32_t)lv_id(sprite) >> 8) & 0x3fff, channel = (uint32_t)lv_id(sprite) & 255;
-  for (unsigned i = 0; i < d->film_child_count; i++)
-    if (d->film_children[i].parent == parent && d->film_children[i].channel == channel)
-      return &d->film_children[i];
-  if (!create || d->film_child_count == DG_FILM_CHILDREN)
-    return NULL;
-  dg_film_child_t *c = &d->film_children[d->film_child_count++];
-  *c = (dg_film_child_t){.parent = (uint16_t)parent, .channel = (uint8_t)channel, .blend = 100};
-  return c;
-}
-static void film_child_size(const dg_runtime_t *d, const dg_film_child_t *c, int *w, int *h) {
-  const dg_member_t *m = c->member ? dg_member((dg_runtime_t *)d, c->member) : NULL;
-  *w = c->sized ? c->width : m ? m->width : 0;
-  *h = c->sized ? c->height : m ? m->height : 0;
-}
-static lv_t film_child_get(dg_runtime_t *d, unsigned ln, lv_t sprite) {
-  lv_runtime_t *r = d->values;
-  const dg_film_child_t *c = film_child(d, sprite, false);
-  dg_film_child_t none = {.blend = 100};
-  if (!c) c = &none;
-  const dg_member_t *m = c->member ? dg_member(d, c->member) : NULL;
-  int w, h;
-  film_child_size(d, c, &w, &h);
-  int left = c->x - (m && m->width ? m->reg_x * w / m->width : 0);
-  int top = c->y - (m && m->height ? m->reg_y * h / m->height : 0);
-  if (ln == LN_MEMBER) return lv_make(LV_MEMBER, (int32_t)c->member);
-  if (ln == LN_LOC) return lv_point(r, c->x, c->y);
-  if (ln == LN_LOCH) return lv_num(c->x);
-  if (ln == LN_LOCV) return lv_num(c->y);
-  if (ln == LN_INK) return lv_num(c->ink);
-  if (ln == LN_BLEND) return lv_num(c->blend);
-  if (ln == LN_WIDTH) return lv_num(w);
-  if (ln == LN_HEIGHT) return lv_num(h);
-  if (ln == LN_LEFT) return lv_num(left);
-  if (ln == LN_TOP) return lv_num(top);
-  if (ln == LN_RIGHT) return lv_num(left + w);
-  if (ln == LN_BOTTOM) return lv_num(top + h);
-  if (ln == LN_RECT) return lv_rect(r, left, top, left + w, top + h);
-  return (lv_t){0};
-}
-static void film_child_set(dg_runtime_t *d, unsigned ln, lv_t sprite, lv_t value) {
-  lv_runtime_t *r = d->values;
-  dg_film_child_t *c = film_child(d, sprite, true);
-  if (!c) {
-    error(d, "film loop channel capacity", "exceeded");
-    return;
-  }
-  if (ln == LN_MEMBER) {
-    c->member = lv_type(value) == LV_MEMBER ? (uint32_t)lv_id(value) : 0;
-    c->sized = 0;
-  } else if (ln == LN_LOC && lv_count(r, value) >= 2) {
-    c->x = (int16_t)lv_integer(r, lv_at(r, value, 1));
-    c->y = (int16_t)lv_integer(r, lv_at(r, value, 2));
-  } else if (ln == LN_LOCH) c->x = (int16_t)lv_integer(r, value);
-  else if (ln == LN_LOCV) c->y = (int16_t)lv_integer(r, value);
-  else if (ln == LN_INK) c->ink = (uint8_t)lv_integer(r, value);
-  else if (ln == LN_BLEND) {
-    int b = lv_integer(r, value);
-    c->blend = (uint8_t)(b < 0 ? 0 : b > 100 ? 100 : b);
-  } else if (ln == LN_WIDTH || ln == LN_HEIGHT) {
-    int w, h;
-    film_child_size(d, c, &w, &h);
-    c->width = (int16_t)(ln == LN_WIDTH ? lv_integer(r, value) : w);
-    c->height = (int16_t)(ln == LN_HEIGHT ? lv_integer(r, value) : h);
-    c->sized = 1;
-  }
-  d->visual_revision++;
-}
+#if DG_D10
+#include "film_children.inc"
 #endif
 static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
   unsigned ln = lv_name_id(r, name);
   dg_runtime_t *d = r->context;
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_D10
   if (lv_type(owner) == LV_SPRITE && ((uint32_t)lv_id(owner) & DG_CHILD_SPRITE))
     return film_child_get(d, ln, owner);
 #endif
@@ -1655,6 +1832,7 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
 #endif
   } else if (lv_type(owner) == LV_MEMBER || lv_type(owner) == LV_FIELD) {
     const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+    if (ln == LN_PATTERN) return lv_num(dg_member_pattern(d,m));
 #if DG_MODERN
     if (ln == LN_FONT) {
       int i = field(d, (uint32_t)lv_id(owner));
@@ -1725,6 +1903,8 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
       // #flash and #vectorShape, never on the converted native representation.
       if (m->source_xtra == 1) return lv_text(r, "flash", true);
       if (m->source_xtra == 2) return lv_text(r, "vectorShape", true);
+      if (m->source_xtra == 4) return lv_text(r, "quickTimeMedia", true);
+      if (m->source_xtra == 5) return lv_text(r, "cursor", true);
 #endif
       return lv_text(r,
                      m->type < sizeof(types) / sizeof(types[0]) ? types[m->type]
@@ -1775,6 +1955,16 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
 static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
   unsigned ln = lv_name_id(r, name);
   dg_runtime_t *d = r->context;
+  if (lv_type(owner) == LV_MEMBER || lv_type(owner) == LV_FIELD) {
+    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+    if (m && m->type == 12 &&
+        (ln == LN_TEXT || ln == LN_FONT || ln == LN_FONTSIZE ||
+         ln == LN_FONTSTYLE || ln == LN_FORECOLOR || ln == LN_COLOR ||
+         ln == LN_BGCOLOR || ln == LN_BACKCOLOR)) {
+      error(d, "rich text editing requires recovered layout styles", name);
+      return;
+    }
+  }
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
   // A chunk put already rewrote the member's text and hands the member back
   // (op_chunk_set); storing it into its own text changes nothing.
@@ -1782,7 +1972,7 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
       lv_type(value) == lv_type(owner) && lv_id(value) == lv_id(owner))
     return;
 #endif
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_D10
   if (lv_type(owner) == LV_SPRITE && ((uint32_t)lv_id(owner) & DG_CHILD_SPRITE)) {
     film_child_set(d, ln, owner, value);
     return;
@@ -1813,9 +2003,9 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
     }
     if (ln == LN_STAGECOLOR) {
       unsigned color = (unsigned)lv_integer(r, value);
-      d->stage_color = lv_type(value) == LV_COLOR || color > 255 || !d->movie->palette
+      d->stage_color = lv_type(value) == LV_COLOR || color > 255 || !dg_stage_palette(d)
                            ? color & 0xffffff
-                           : d->movie->palette[color];
+                           : dg_stage_palette(d)[color];
       return;
     }
 #endif
@@ -1862,6 +2052,14 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
       return;
     }
   } else if (lv_type(owner) == LV_SPRITE) {
+#if DG_FAMILY_D7
+    // Original7.0.2: RGB color requires a color value; legacy foreColor
+    // remains the numeric palette-index interface.
+    if(ln==LN_COLOR && lv_type(value)!=LV_COLOR) {
+      script_error(d,"Color expected",name);
+      return;
+    }
+#endif
     dg_sprite_t *s = sprite(d, owner);
     if (!s)
       return;
@@ -2142,6 +2340,15 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
   } else if (lv_type(owner) == LV_MEMBER || lv_type(owner) == LV_FIELD) {
     // Text/font/color mutations do not change the sprite record itself.
     d->visual_revision++;
+    if (ln == LN_PATTERN) {
+      const dg_member_t *m=dg_member(d,(uint32_t)lv_id(owner));
+      int pattern=lv_integer(r,value);
+      if(!m || m->type!=8 || pattern<1 || pattern>64) {error(d,"invalid shape pattern",name);return;}
+      if(pattern>56 && !dg_shape_texture(d,m,(unsigned)pattern)) {error(d,"missing shape texture pattern asset",name);return;}
+      int i=field(d,m->id);
+      if(i>=0)d->field_patterns[i]=(uint8_t)pattern;
+      return;
+    }
 #if DG_MODERN
     if (ln == LN_SCROLLTOP) {
       int i = field(d, (uint32_t)lv_id(owner)), scroll = lv_integer(r, value);
@@ -2155,14 +2362,20 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
         error(d, "font name capacity", "exceeded");
         return;
       }
-      if (i >= 0)
+      if (i >= 0) {
         snprintf(d->field_fonts[i], sizeof(d->field_fonts[i]), "%s", font);
+        d->field_font_changed[i] = true;
+      }
       return;
     }
     if (ln == LN_LOOP) {
       const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
-      if (!m || m->type != 6) {
-        error(d, "loop property requires sound member", name);
+      if (!m || (m->type != 6
+#if DG_D10
+                 && !dg_is_video(m) && m->source_xtra != 1
+#endif
+                 )) {
+        error(d, "loop property requires sound or video member", name);
         return;
       }
       unsigned i = 0;
@@ -2796,7 +3009,38 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     *out = lv_num(0);
     return true;
   }
-  if (ln == LN_SOUND_FADEOUT) {
+  // Object methods use milliseconds; the legacy sound commands use ticks.
+  if (ln == LN_BREAKLOOP && argc == 1 && lv_type(a[0]) == LV_SOUND) {
+    int channel = lv_id(a[0]);
+    if (channel < 1 || channel > DG_SOUND_CHANNELS)
+      error(d, "audio channel", name);
+    else if (!d->platform.sound_break_loop)
+      error(d, "sound loop release service unavailable", name);
+    else d->platform.sound_break_loop(d->context, (unsigned)channel - 1);
+    return true;
+  }
+  if ((ln == LN_FADEIN || ln == LN_FADEOUT || ln == LN_FADETO) &&
+      argc && lv_type(a[0]) == LV_SOUND) {
+    unsigned minimum = ln == LN_FADETO ? 2 : 1;
+    int channel = lv_id(a[0]);
+    if (argc < minimum || argc > minimum + 1 ||
+        channel < 1 || channel > DG_SOUND_CHANNELS) {
+      error(d, "audio fade arguments", name);
+      return true;
+    }
+    int ms = argc > minimum ? N(minimum) : 1000;
+    if (ms < 0) {
+      error(d, "audio fade range", name);
+      return true;
+    }
+    unsigned ch = (unsigned)channel - 1, current = d->channel_volume[ch];
+    int target = ln == LN_FADETO ? N(1) : ln == LN_FADEIN ? (int)current : 0;
+    target = target < 0 ? 0 : target > 255 ? 255 : target;
+    start_fade(d, ch, ln == LN_FADEIN ? 0 : current, (unsigned)target,
+               (uint32_t)(((uint64_t)ms * 60 + 999) / 1000), false);
+    return true;
+  }
+  if (ln == LN_SOUND_FADEOUT || ln == LN_SOUND_FADEIN) {
     if (argc < 1 || argc > 2) {
       error(d, "audio fade arguments", name);
       return true;
@@ -2809,11 +3053,10 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     }
     unsigned ch = channel - 1;
     cancel_fade(d, ch);
-    d->fade_start[ch] = d->ticks;
-    d->fade_duration[ch] = duration;
-    d->fade_volume[ch] = d->channel_volume[ch];
-    if (!duration)
-      d->channel_volume[ch] = 0;
+    unsigned volume = d->channel_volume[ch];
+    start_fade(d, ch, ln == LN_SOUND_FADEIN ? 0 : volume,
+               ln == LN_SOUND_FADEIN ? volume : 0, (uint32_t)duration,
+               ln == LN_SOUND_FADEOUT);
     return true;
   }
   if (ln == LN_SOUND) {
@@ -2838,8 +3081,7 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     // stop() keeps what is still queued for the next play().
     d->sound_chain[ch] = false;
 #endif
-    if (d->platform.sound)
-      d->platform.sound(d->context, ch, NULL);
+    play_member(d, ch, NULL);
     return true;
   }
   if (ln == LN_XTRA) {
@@ -3003,6 +3245,9 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     ARITY(0);
     // Director 6 updates the stage synchronously; it does not wait a timer
     // tick per object. The platform displays the latest stage when ready.
+#if DG_D10
+    dg_films_present(d, true);
+#endif
     dg_update_stage(d);
     return true;
   }
@@ -3164,6 +3409,12 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
   }
   if (ln == LN_PUPPETSPRITE) {
     ARITY(2);
+#if DG_D10
+    if (lv_type(a[0]) == LV_SPRITE && ((uint32_t)lv_id(a[0]) & DG_CHILD_SPRITE)) {
+      film_child_set(d, LN_PUPPET, a[0], a[1]);
+      return true;
+    }
+#endif
     int index = N(0);
     dg_sprite_t *s = sprite(d, lv_make(LV_SPRITE, index));
     if (s) {
@@ -3316,10 +3567,22 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
   }
   if (ln == LN_PUPPETPALETTE) {
     ARITY(1);
-    const char *palette = lv_cstr(r, a[0]);
-    if (!eq(palette, "System - Win") && !eq(palette, "System - Mac"))
-      error(d, "unsupported puppet palette", palette);
-    // Bitmap colors are resolved offline; the stage has no mutable CLUT.
+    if(lv_type(a[0])==LV_NUMBER && lv_integer(r,a[0])==0) {
+      d->palette_puppet=false;
+      (void)palette_command(d,d->score[5].member,true);
+      return true;
+    }
+    uint32_t id=0;
+    if(lv_type(a[0])==LV_MEMBER)id=(uint32_t)lv_id(a[0]);
+    else {
+      const char *palette=lv_cstr(r,a[0]);
+      id=eq(palette,"System - Win") ? 0xff9a : eq(palette,"System - Mac") ? 0xffff : eq(palette,"Grayscale") ? 0xfffd : 0;
+      if(!id) {
+        lv_t member=reference(r,"member",a[0],(lv_t){0});
+        id=(uint32_t)lv_id(member);
+      }
+    }
+    if(id && palette_command(d,id,false))d->palette_puppet=true;
     return true;
   }
   if (ln == LN_PUPPETTRANSITION) {
@@ -3404,6 +3667,11 @@ void dg_init(dg_runtime_t *d, lv_runtime_t *r, dg_platform_t platform,
               .reference = reference,
               .call = call,
               .trace = trace,
+#if DG_D10
+              .property_get = d10_flash_property_get,
+              .property_set = d10_avm_property_set,
+              .property_changed = d10_flash_property_changed,
+#endif
 #if DG_MODERN
               .resolve = resolve_script,
               .script = script_identity,
@@ -3471,6 +3739,13 @@ static void apply(dg_sprite_t *s, const dg_spec_t *v, unsigned mask) {
 }
 static void schedule_frame(dg_runtime_t *d, uint64_t base, bool reset) {
   unsigned tempo = d->puppet_tempo ? d->puppet_tempo : d->tempo;
+#if DG_D10
+  if (d->linked_parent) {
+    const dg_runtime_t *host = d->linked_parent;
+    tempo = host->puppet_tempo ? host->puppet_tempo : host->tempo;
+    d->tempo = tempo;
+  }
+#endif
   if (!tempo)
     tempo = 30;
   if (reset || tempo != d->clock_tempo)
@@ -3508,6 +3783,9 @@ static bool d6_queue_cleanup(dg_runtime_t *, unsigned, bool, bool, bool);
 // instance to hold them just as a sprite behavior does.
 static void attach_behaviors(dg_runtime_t *d, unsigned channel,
                              const dg_behavior_t *behaviors, unsigned count) {
+#if DG_D10
+  if (d->linked_parent && (!channel || !(d->linked_flags & 16))) return;
+#endif
   lv_runtime_t *r = d->values;
   lv_t list = lv_list(r, 0, NULL, false);
   r->roots[DG_BEHAVIOR_ROOT + channel] = list;
@@ -3538,7 +3816,7 @@ static void attach_behaviors(dg_runtime_t *d, unsigned channel,
       lv_dispatch_method(r, r->depth ? &r->frames[r->depth - 1] : NULL,
                          "new", instance, 0, NULL);
     lv_set(r, NULL, "spritenum", instance, lv_num(channel));
-    if (*behavior->parameters) {
+    if (behavior->parameters && *behavior->parameters) {
       lv_t parameters = lv_literal(r, behavior->parameters);
       r->roots[DG_SCRATCH_ROOT] = parameters;
       if (lv_type(parameters) != LV_PROPLIST) {
@@ -3607,7 +3885,13 @@ static bool seek_now(dg_runtime_t *d, unsigned frame) {
         error(d, "score channel out of range", d->movie->code->name);
         return false;
       }
+#if DG_D10
+      // Linked movies contribute their sprites and sound channels. The
+      // host supplies script-channel lifecycle, tempo, transitions and palette.
+      if (d->linked_parent && ch < 6 && ch != 3 && ch != 4) continue;
+#endif
       d->score[ch] = delta->value;
+      if(ch==5 && !d->palette_puppet && !palette_command(d,delta->value.member,true))return false;
 #if DG_MODERN
       unsigned command_tempo = delta->value.tempo;
       if (ch == 1) {
@@ -3765,11 +4049,17 @@ static bool seek_now(dg_runtime_t *d, unsigned frame) {
   d->frame = frame;
   d->frame_tick = d->ticks;
   d->frame_serial++;
+#if DG_D10
+  if (d->linked_parent) d->linked_frame_serial = d->linked_parent->frame_serial;
+  dg_flash_sync(d);
+#endif
   if (tempo_command || old_tempo != d->tempo)
     d->puppet_tempo = 0;
   schedule_frame(d, d->clock, true);
 #if DG_D5
   d5_score_sounds(d);
+#elif DG_D10
+  d10_score_sounds(d);
 #else
   for (unsigned ch = 0; ch < 2; ch++) {
     if (d->sound_puppet[ch])
@@ -3876,6 +4166,9 @@ static unsigned sprite_member_script(dg_runtime_t *d, unsigned channel) {
 }
 static bool sprite_event(dg_runtime_t *d, const char *event, unsigned channel,
                           unsigned mask) {
+#if DG_D10
+  if (d->linked_parent && !(d->linked_flags & 16)) return false;
+#endif
   if (!channel || channel >= DG_SPRITES)
     return false;
   lv_t list = d->values->roots[DG_BEHAVIOR_ROOT + channel];
@@ -3959,6 +4252,9 @@ static bool dispatch_phase(dg_runtime_t *d, const char *event, unsigned mask,
 // its member.
 static bool frame_event(dg_runtime_t *d, const char *event, unsigned member,
                         unsigned mask) {
+#if DG_D10
+  if (d->linked_parent) return false;
+#endif
 #if DG_EXTENDED
   lv_runtime_t *r = d->values;
   lv_t list = r->roots[DG_BEHAVIOR_ROOT];
@@ -4039,6 +4335,9 @@ static bool cue_dispatch(dg_runtime_t *d) {
 #endif
 static bool event_with_mask(dg_runtime_t *d, const char *event, unsigned member,
                              unsigned bit) {
+#if DG_D10
+  if (d->linked_parent && (!member || !(d->linked_flags & 16))) return false;
+#endif
   if (!member) {
     if (lv_start(d->values, d->movie->code, event, 0, 0, NULL))
       return true;
@@ -4102,6 +4401,31 @@ bool dg_event(dg_runtime_t *d, const char *event, unsigned member) {
 // Continue input events after native handlers yield, preserving their source
 // ordering. Hover runs with the current button state before mouseUp activation.
 static bool d6_input(dg_runtime_t *d) {
+#if DG_D10
+  // Preserve the keyboard hierarchy across yielding handlers, just as for
+  // text input. Linked movies can receive keys in editable sprite scripts
+  // even though their frame and movie scripts are disabled.
+  const char *key_event = d->key_dispatch_down ? "keydown" : "keyup";
+  if (d->input_stage == 20) {
+    d->input_stage = 21;
+    d->pass_event = false;
+    if (dg_text_editable(d, d->input_channel) &&
+        sprite_event(d, key_event, d->input_channel, 0)) return true;
+    d->pass_event = true;
+  }
+  if (d->input_stage == 21) {
+    d->input_stage = 22;
+    if (d->pass_event) {
+      d->pass_event = false;
+      if (frame_event(d, key_event, d->score[0].script, 0)) return true;
+      d->pass_event = true;
+    }
+  }
+  if (d->input_stage == 22) {
+    d->input_stage = 0;
+    if (d->pass_event && dg_event(d, key_event, 0)) return true;
+  }
+#endif
   if (d->input_stage == 10) {
     d->input_stage = 11;
     d->pass_event = false;
@@ -4216,8 +4540,12 @@ void dg_stop_sounds(dg_runtime_t *d) {
     cancel_fade(d, ch);
 #endif
     if (d->sounds[ch] || d->sound_puppet[ch]) {
-      if (d->platform.sound)
-        d->platform.sound(d->context, ch, NULL);
+#if DG_D10
+      dg_runtime_t *owner = sound_host(d)->linked_sound_owner[ch];
+      if (!owner || owner == d) play_member(d, ch, NULL);
+#else
+      play_member(d, ch, NULL);
+#endif
       d->sound_serial[ch]++;
     }
     d->sounds[ch] = 0;
@@ -4247,8 +4575,13 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
     d->values->roots[DG_BEHAVIOR_ROOT+DG_SPRITES]=lv_list(d->values,0,NULL,false);
   }
 #endif
+#if DG_D10
+  linked_reset(d);
+  dg_flash_dispose(d);
+#endif
   dg_stop_sounds(d);
   d->movie = movie;
+  d->palette_active = d->palette_puppet = false;
   d->cursor = (dg_cursor_t){0}; // A new Score starts with its default arrow.
 #if DG_MODERN
   if(*d->next_movie_label) {
@@ -4280,7 +4613,12 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
   memset(d->event_channels, 0, sizeof(d->event_channels));
   memset(d->event_quiet, 0, sizeof(d->event_quiet));
   memset(d->film_member, 0, sizeof(d->film_member));
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_D10
+  memset(d->linked_channels, 0, sizeof(d->linked_channels));
+  memset(d->flash_direct_channels, 0, sizeof(d->flash_direct_channels));
+#endif
+#if DG_D10
+  dg_films_dispose(d);
   d->film_child_count = 0;
 #endif
   memset(d->film_loop_channel, 0, sizeof(d->film_loop_channel));
@@ -4339,6 +4677,12 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
   d->values->roots[DG_BEHAVIOR_ROOT] = (lv_t){0};
 #endif
 #endif
+#if DG_D10
+  d->linked_focus = 0;
+  memset(d->film_sound_sprite, 0, sizeof(d->film_sound_sprite));
+  memset(d->film_sound_pose, 0, sizeof(d->film_sound_pose));
+  memset(d->film_sound_instance, 0, sizeof(d->film_sound_instance));
+#endif
   d->frame = 0;
   d->next_frame = 0;
   d->phase = 0;
@@ -4352,6 +4696,10 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
   d->mouse_down_dispatch = false;
   d->text_pending = false;
   d->input_stage = d->text_sprite = 0;
+#if DG_D10
+  d->keyboard_focus = 0;
+  d->key_dispatch_down = false;
+#endif
   d->sel_start = d->sel_end = 0;
   d->idle_tick = UINT32_MAX;
   memset(d->sprite_editable, 0, sizeof(d->sprite_editable));
@@ -4367,6 +4715,7 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
 #if DG_MODERN
   memset(d->field_fonts, 0, sizeof(d->field_fonts));
   memset(d->field_text_changed, 0, sizeof(d->field_text_changed));
+  memset(d->field_font_changed, 0, sizeof(d->field_font_changed));
 #endif
 #endif
   d->click_on = 0;
@@ -4434,7 +4783,7 @@ bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
 #if DG_D5
   d5_media_tick(d);
 #endif
-#if DG_D10 && defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_D10
   d10_video_tick(d);
 #endif
 #if DG_MODERN
@@ -4444,8 +4793,10 @@ bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
                duration = d->fade_duration[ch];
       d->channel_volume[ch] =
           elapsed >= duration
-              ? 0
-              : (uint64_t)d->fade_volume[ch] * (duration - elapsed) / duration;
+              ? d->fade_target[ch]
+              : ((uint64_t)d->fade_volume[ch] * (duration - elapsed) +
+                 (uint64_t)d->fade_target[ch] * elapsed) / duration;
+      if (elapsed >= duration && !d->fade_restore[ch]) d->fade_duration[ch] = 0;
     }
 #endif
   d->clock += 1000000;
@@ -4465,6 +4816,14 @@ bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
   }
 #endif
   bool pressed = down && !d->mouse_down;
+#if DG_D10
+  dg_flash_pointer(d,x,y,down);
+  if (pressed) {
+    unsigned hit = dg_hit(d, x, y);
+    const dg_member_t *m = hit ? dg_member(d, d->sprites[hit].value.member) : NULL;
+    d->linked_focus = m && m->type == 9 ? hit : 0;
+  }
+#endif
 #if DG_D5
   // Queue the release target before a yielding drag handler changes the stage.
   // Re-hitting after HAM's drag completes would send this release to the new
@@ -4538,9 +4897,24 @@ static bool advance_frame(dg_runtime_t *d, unsigned next, bool timed) {
       if (!s->value.type)
         continue;
       const dg_member_t *m = d->film_loop_member[i];
+#if DG_D10
+      if (m->source_xtra == 1) {
+        if (m->flash_direct_to_stage && flash_rate(d,m,s,NULL)) continue;
+        if (flash_advance(d,s,m)) dg_sprite_changed(d,i);
+        continue;
+      }
+      if (m->flash_variant_count > 1) {
+        s->flash_clock=(uint8_t)((s->flash_clock + 1u) % m->flash_variant_count);
+        dg_sprite_changed(d,i);
+      }
+#endif
+      if (s->film_paused) continue;
       unsigned old = dg_film_pose(m, s);
       s->film_frame = m->film_loop ? (old + 1) % m->film_count
                                    : old + (old + 1 < m->film_count);
+#if DG_D10
+      if (s->film_frame != old) film_stop_action(m, s);
+#endif
       if (s->film_frame != old)
         dg_sprite_changed(d, i);
     }
@@ -4548,7 +4922,7 @@ static bool advance_frame(dg_runtime_t *d, unsigned next, bool timed) {
 #else
   for (unsigned i = 1; i < DG_SPRITES; i++) {
     dg_sprite_t *s = &d->sprites[i];
-    if (!s->value.type)
+    if (!s->value.type || s->film_paused)
       continue;
     const dg_member_t *m = dg_member(d, s->value.member);
     if (!m || m->type != 2 || !m->film_count)
@@ -4559,6 +4933,9 @@ static bool advance_frame(dg_runtime_t *d, unsigned next, bool timed) {
     if (s->film_frame != old)
       dg_sprite_changed(d, i);
   }
+#endif
+#if DG_D10
+  dg_films_present(d, false);
 #endif
   // Advance existing loops first, so a score-assigned member starts at pose 0.
   if (!seek_now(d, next))
@@ -4584,6 +4961,9 @@ bool dg_transition_ready(const dg_runtime_t *d) {
 
 bool dg_service(dg_runtime_t *d, unsigned budget) {
   lv_runtime_t *r = d->values;
+#if DG_D10
+  if(!r->failed && !dg_flash_service(d,budget?budget:DG_SERVICE_BUDGET))return false;
+#endif
   // Dispatch itself is bounded as well as the total native handler work.
   for (unsigned guard = 0; guard < 4096 && !d->quit; guard++) {
     // A script-class failure matches an original alert: discard the call
@@ -4761,14 +5141,14 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
       d->key_first = (index + 1) % 32;
       d->key_count--;
       d->key_event_tick = d->ticks;
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-      // Director offers a key to the frame script before the movie: Circus's
-      // name entry takes it in a frame behavior.
-      if (d->score[0].script &&
-          frame_event(d, down ? "keydown" : "keyup", d->score[0].script, 0))
-        continue;
-#endif
+#if DG_D10
+      d->key_dispatch_down = down;
+      d->input_channel = d->keyboard_focus;
+      d->input_stage = 20;
+      continue;
+#else
       if (dg_event(d, down ? "keydown" : "keyup", 0)) continue;
+#endif
     }
 #endif
 #if DG_D5
@@ -4842,9 +5222,20 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
       const dg_member_t *linked = hit ? dg_member(d, d->sprites[hit].value.member) : NULL;
       const dg_text_extra_t *extra = linked ? dg_text_extra(d, linked->id) : NULL;
       if (extra && extra->link_count && d->platform.text_char_at) {
-        int l, t, rr, b;
-        dg_sprite_bounds(d, &d->sprites[hit], &l, &t, &rr, &b);
-        int at = d->platform.text_char_at(d->context, linked->id, hit, d->mouse_x - l, d->mouse_y - t) + 1;
+        const dg_sprite_t *sprite = &d->sprites[hit];
+        int l, t, rr, b, at = 0;
+        sprite_rect(d, sprite, &l, &t, &rr, &b);
+        float quad[8], u, v;
+        dg_sprite_quad(d, sprite, quad);
+        if (rr > l && b > t && dg_quad_uv(quad, d->mouse_x + 0.5f,
+                                         d->mouse_y + 0.5f, &u, &v)) {
+          if (sprite->flip_h) u = 1 - u;
+          if (sprite->flip_v) v = 1 - v;
+          int x = (int)(u * (rr - l)), y = (int)(v * (b - t));
+          if (x >= rr - l) x = rr - l - 1;
+          if (y >= b - t) y = b - t - 1;
+          at = d->platform.text_char_at(d->context, linked->id, hit, x, y) + 1;
+        }
         lv_t list = r->roots[DG_BEHAVIOR_ROOT + hit];
         bool started = false;
         for (unsigned k = 0; at > 0 && !started && k < extra->link_count; k++) {
@@ -4922,7 +5313,13 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
 #if DG_D5
       if(d->phase==2 && !d->event_cursor && d5_waiting(d))break;
 #endif
-      if (d->phase == 2 && !d->event_cursor && d->clock < d->frame_deadline)
+      if (d->phase == 2 && !d->event_cursor &&
+#if DG_D10
+          (d->linked_parent ? d->linked_frame_serial == d->linked_parent->frame_serial :
+           d->clock < d->frame_deadline))
+#else
+          d->clock < d->frame_deadline)
+#endif
         break;
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
       // The tempo channel's waits: for sound channel 1 or 2 to finish (a
@@ -4988,6 +5385,12 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
       }
 #endif
     } else {
+#if DG_D10
+      if (d->linked_parent && (d->linked_flags & 32) && d->frame >= d->movie->frame_count) {
+        d->linked_paused = true;
+        break;
+      }
+#endif
       unsigned next = d->frame < d->movie->frame_count ? d->frame + 1 : 1;
       if (!advance_frame(d, next, true)) {
         if (r->failed && r->script_error)
@@ -4998,5 +5401,14 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
   }
   if (r->failed)
     recover_script_error(d);
+#if DG_D10
+  if (!r->failed) {
+    dg_flash_service(d,budget?budget:DG_SERVICE_BUDGET);
+    if(!r->failed)linked_update(d, budget ? budget : DG_SERVICE_BUDGET);
+  }
+#endif
   return !r->failed;
 }
+#if DG_D10
+#include "linked.inc"
+#endif

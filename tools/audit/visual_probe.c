@@ -12,7 +12,7 @@ static wc_t compositor;
 static unsigned failures, checks, text_size;
 static uint8_t image[40], mask[40];
 static const lv_movie_t code = {.name = "AUDIT.DXR"};
-static const dg_cast_t casts[] = {{"Internal", 1, 1}};
+static const dg_cast_t casts[] = {{.name="Internal", .file=1, .cast=1}};
 static const dg_frame_t frames[] = {{0, 0}};
 static uint32_t palette[256];
 static const dg_text_style_t initial = {
@@ -67,10 +67,29 @@ static bool text(void *ctx, const char *utf8, int w, int h,
   if (w > 1 && h > 2) coverage[2 * w + 1] = 255;
   return true;
 }
+#if DG_D10
+static bool flash_field_hit(void *ctx, dg_runtime_t *owner,
+                            struct dg_flash_instance *field, float x, float y) {
+  (void)ctx;
+  return wc_flash_field_hit(&compositor, owner, field, x, y);
+}
+static bool read_pixels(void *ctx, uint32_t member, dg_pixel_image_t *out) {
+  (void)ctx;
+  return wc_read_image(&compositor, (dg_runtime_t *)values.context, member, out);
+}
+#endif
 static void reset(void) {
+#if DG_D10
+  dg_linked_dispose(&director);
+  dg_images_dispose(&director);
+#endif
   wc_release(&compositor);
   wc_init(&compositor, (wc_host_t){.read = read_asset, .text = text}, 4096);
-  dg_init(&director, &values, (dg_platform_t){0}, NULL, NULL, 0, 1);
+  dg_init(&director, &values, (dg_platform_t){
+#if DG_D10
+      .read_image = read_pixels, .flash_field_hit = flash_field_hit,
+#endif
+      .trace = NULL}, NULL, NULL, 0, 1);
   assert(dg_enter(&director, &movie, 1, NULL, 0));
   palette[0] = 0xffffff;
   palette[1] = 0xff0000;
@@ -127,8 +146,15 @@ int main(void) {
   reset();
   place(1, 1, 0, 50);
   render();
-  check("blended_copy_preserves_matte", pixel(21, 20) == 0xff0000,
-        pixel(21, 20), 0xff0000);
+  // Original 8.5 Copy ignores the matte when useAlpha is false. The white
+  // source rectangle contributes 127/256 over red at blend50.
+#ifdef DIRECTOR64_D85
+  unsigned expected_copy = 0xff7e7e;
+#else
+  unsigned expected_copy = 0xff0000;
+#endif
+  check("blended_copy_profile_coverage", pixel(21, 20) == expected_copy,
+        pixel(21, 20), expected_copy);
 
   reset();
   s = place(1, 1, 36, 100);

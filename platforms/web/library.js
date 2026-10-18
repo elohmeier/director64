@@ -31,6 +31,8 @@ addToLibrary({
     Module.director64Host.sound?.(channel, asset ? UTF8ToString(asset) : null,
       !!looping, loopStart >>> 0, loopEnd >>> 0);
   },
+  d64_host_sound_pause: (channel, paused) => Module.director64Host.soundPause?.(channel, !!paused),
+  d64_host_sound_break_loop: (channel) => Module.director64Host.soundBreakLoop(channel),
   d64_host_gain: (channel, gain) => Module.director64Host.gain?.(channel, gain),
   d64_host_save_commit: (ok) => Module.director64Host.saveCommit?.(!!ok),
   d64_host_trace__deps: ['$UTF8ToString'],
@@ -51,6 +53,18 @@ addToLibrary({
     return 1;
   },
   d64_host_video_revision: () => (Module.director64Host.videoRevision?.() ?? 0) >>> 0,
+  d64_host_flash_sound__deps: ['$UTF8ToString'],
+  d64_host_flash_sound: (id, asset, rate, frames, start, end, loops, position, gain, paused, envelopes, count) => {
+    const points = [];
+    for (let n = 0; n < count; n++) {
+      const at = envelopes + n * 8;
+      points.push([HEAPU32[at >> 2], HEAPU16[(at + 4) >> 1], HEAPU16[(at + 6) >> 1]]);
+    }
+    if (!Module.director64Host.flashSound) throw new Error("host Flash event audio service unavailable");
+    Module.director64Host.flashSound(id >>> 0, asset ? {name: UTF8ToString(asset),
+      rate: rate >>> 0, frames: frames >>> 0, start: start >>> 0, end: end >>> 0,
+      loops, position, gain, paused: !!paused, envelopes: points} : null);
+  },
   d64_host_data__deps: ['$UTF8ToString'],
   d64_host_data: (name, out, cap) => {
     const bytes = Module.director64Host.data?.(UTF8ToString(name));

@@ -19,7 +19,8 @@ from .full_validation import validate_rom
 
 FAILURE = re.compile(
     r"\b(?:NATIVE_\w*(?:FAIL|ERROR|UNSUPPORTED)\w*|REQUIREMENT_FAIL|RSP ?CRASH|"
-    r"ASSERTION FAILED|EXCEPTION|REPLAY_ERROR|SCRIPT_ERROR)\b|\bpanick?ed\b|^Error:",
+    r"ASSERTION FAILED|EXCEPTION|REPLAY_ERROR|SCRIPT_ERROR|"
+    r"INVALID MEMORY ADDRESS)\b|\bpanick?ed\b|^Error:",
     re.I | re.M,
 )
 

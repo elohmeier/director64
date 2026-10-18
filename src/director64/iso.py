@@ -78,6 +78,13 @@ def inventory(handle: BinaryIO) -> list[Entry]:
 
 def layout_inventory(handle: BinaryIO) -> tuple[Layout, list[Entry]]:
     """The image's sector layout and its files at logical offsets."""
+    result = inventory_report(handle)
+    entries = [Entry(p, offset, length) for p, offset, length in result["files"]]
+    return Layout(*result["layout"]), entries
+
+
+def inventory_report(handle: BinaryIO) -> dict:
+    """Primary entries plus verified Joliet aliases, without duplicating files."""
     from .aot import generator_command, repository_root
 
     name = getattr(handle, "name", None)
@@ -96,9 +103,7 @@ def layout_inventory(handle: BinaryIO) -> tuple[Layout, list[Entry]]:
         )
     if completed.returncode:
         raise IsoError(completed.stderr.strip().removeprefix("director64-aot: "))
-    result = json.loads(completed.stdout)
-    entries = [Entry(p, offset, length) for p, offset, length in result["files"]]
-    return Layout(*result["layout"]), entries
+    return json.loads(completed.stdout)
 
 
 def extract(iso: Path, output: Path, *, expected_sha256: str) -> list[Entry]:

@@ -59,7 +59,7 @@ function deflated(pack) {
 // (11 px, 13 px lines). A styled member (D7+ and extended D6) sets in the
 // game's own font, recovered from the disc or the port's substitute, at its
 // authored point size, alignment, ascent and line height.
-async function textRasterizer(fonts) {
+export async function textRasterizer(fonts) {
   const face = new FontFace("monogram", "url(monogram.ttf)");
   await face.load();
   document.fonts.add(face);
@@ -72,7 +72,7 @@ async function textRasterizer(fonts) {
       document.fonts.add(loaded);
       families.set(Number(name), family);
     } catch (error) {
-      console.warn(`font ${name} could not be loaded`, error);
+      throw new Error(`font ${name} could not be loaded: ${error?.message ?? error}`, {cause: error});
     }
   }
   const scratch = document.createElement("canvas").getContext("2d", {willReadFrequently: true});
@@ -118,14 +118,15 @@ async function textRasterizer(fonts) {
     }
   }
   const rasterize = (text, width, height, style) => {
+    const family = style && families.get(style.font);
+    if (style && !family) throw new Error(`missing authored font ${style.font} at size ${style.size}`);
     const surface = scratch.canvas;
     surface.width = width;
     surface.height = height;
     scratch.clearRect(0, 0, width, height);
     scratch.fillStyle = "#fff";
     scratch.textBaseline = "alphabetic";
-    const family = style && families.get(style.font);
-    if (!style || !family) {
+    if (!style) {
       scratch.font = monogram;
       text.split(/\r\n|\r|\n/).forEach((line, i) => scratch.fillText(line, 0, 12 + i * 13));
     } else {
@@ -139,7 +140,7 @@ async function textRasterizer(fonts) {
     }
     const pixels = scratch.getImageData(0, 0, width, height).data;
     const coverage = new Uint8Array(width * height);
-    if (!style || !family) {
+    if (!style) {
       // A pixel font: coverage is on or off, as the console's 1-bit atlas is.
       for (let i = 0; i < coverage.length; i++) coverage[i] = pixels[i * 4 + 3] >= 128 ? 255 : 0;
     } else {
@@ -151,6 +152,7 @@ async function textRasterizer(fonts) {
   rasterize.layout = (text, width, height, style) => {
     const boxes = new Int16Array(text.length * 4);
     const family = style && families.get(style.font);
+    if (style && !family) throw new Error(`missing authored font ${style.font} at size ${style.size}`);
     const place = (rows, x0, ascentTop, step) => rows.forEach(({line, start}, row) => {
       const shown = line.trimEnd();
       const offset = x0(scratch.measureText(shown).width);
@@ -161,7 +163,7 @@ async function textRasterizer(fonts) {
                    Math.round(step)], (start + k) * 4);
       }
     });
-    if (!style || !family) {
+    if (!style) {
       scratch.font = monogram;
       const rows = [];
       let at = 0;
@@ -245,6 +247,9 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
       text,
       layout: text.layout,
       sound: (channel, name, looping, start, end) => audio.play(channel, name, looping, start, end),
+      soundPause: (channel, paused) => audio.pauseChannel(channel, paused),
+      soundBreakLoop: (channel) => audio.breakLoop(channel),
+      flashSound: (id, sound) => audio.flashSound(id, sound),
       gain: (channel, gain) => audio.gain(channel, gain),
       // playFile: plays the stream and answers its length in milliseconds.
       stream: (channel, name) => {
@@ -578,7 +583,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     presenter.present(module.HEAPU8.subarray(pointer, pointer + WIDTH * HEIGHT * 4));
     renders++;
   }
-  function stop(status) {
+  function stop(status, error = module.UTF8ToString(module._d64_error())) {
     running = false;
     wake.want(false);
     videos.closeAll();
@@ -586,12 +591,22 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     if (status === 2) {
       overlay({heading: t("game.ended"), buttons: ["library"]});
     } else {
-      overlay({heading: t("game.stopped"), text: module.UTF8ToString(module._d64_error()),
+      overlay({heading: t("game.stopped"), text: error,
         detail: profile.save_files.length ? t("game.savesKept") : "", buttons: ["library"], error: true});
     }
   }
   function tick(now) {
+    try {
+      serviceFrame(now);
+    } catch (error) {
+      console.error(error);
+      stop(1, String(error?.message ?? error));
+    }
+  }
+  function serviceFrame(now) {
     if (!running) return;
+    if (audio.errors.length) return stop(1, audio.errors[0]);
+    if (videos.errors.length) return stop(1, videos.errors[0]);
     const state = pads.poll(now);
     if (state.actions.length) unlockAudio();
     if (!capturesPads() && !holds.size && !entry.sprite) {

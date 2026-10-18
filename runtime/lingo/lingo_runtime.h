@@ -35,9 +35,13 @@
 #endif
 #ifndef LV_HEAP_BYTES
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-// The Director 8.5 ports run in the browser and on Android only; Circus
-// parses its 148 KB lip-sync table into one value.
+#if defined(DIRECTOR64_N64) && DIRECTOR64_N64
+// Keep room for the stage, overlays and media in 8 MiB RDRAM. Hosted ports
+// retain the larger pool needed by Circus's 148 KB parsed lip-sync table.
+#define LV_HEAP_BYTES (1024u * 1024u)
+#else
 #define LV_HEAP_BYTES (4096u * 1024u)
+#endif
 #elif DG_D10
 // The D10 main screen peaks past 320 KiB; overruns fail visibly, never
 // silently, and the console budget covers this after the plane-pool removal.
@@ -47,14 +51,24 @@
 #endif
 #endif
 #if DG_D5
+#ifndef LV_OBJECTS
 #define LV_OBJECTS 4096
+#endif
 #define LV_ROOTS 256
 #define LV_SHARED 4
 #elif DG_D10
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-#define LV_OBJECTS 32768
-#else
+#ifndef LV_OBJECTS
+#if defined(DIRECTOR64_N64) && DIRECTOR64_N64
 #define LV_OBJECTS 8192
+#else
+#define LV_OBJECTS 32768
+#endif
+#endif
+#else
+#ifndef LV_OBJECTS
+#define LV_OBJECTS 8192
+#endif
 #endif
 // A thousand sprite behavior roots follow the widened field roots (192
 // mutable fields for the exercise stamp sets), then the timeout and Flash
@@ -64,15 +78,21 @@
 // controller window keeps its own code and casts resident beside it.
 #define LV_SHARED 24
 #elif DG_CAP_WIDE
+#ifndef LV_OBJECTS
 #define LV_OBJECTS 8192
+#endif
 #define LV_ROOTS 1024
 #define LV_SHARED 12
 #elif DG_EXTENDED
+#ifndef LV_OBJECTS
 #define LV_OBJECTS 8192
+#endif
 #define LV_ROOTS 256
 #define LV_SHARED 5
 #else
+#ifndef LV_OBJECTS
 #define LV_OBJECTS 2048
+#endif
 #define LV_ROOTS 136
 #define LV_SHARED 4
 #endif
@@ -115,11 +135,15 @@ typedef enum {
   // resolve straight to the named global slots.
   ,
   LV_GLOBALS_VIEW,
-  // Handle to a member's pixel surface (imaging Lingo). Mutation operations
-  // stay traced approximations until a native compositor exists.
+  // Runtime-owned pixel surface (Imaging Lingo), traced through live values
+  // by lv_has_reference before its independent pixel storage is reclaimed.
   LV_IMAGE,
   // Authored timeout object; id is the registry slot plus one.
-  LV_TIMEOUT
+  LV_TIMEOUT,
+  // AVM1 distinguishes booleans and null from numbers and undefined.
+  // These scalar tags are converted at the Director/Flash API boundary.
+  LV_AVM_BOOLEAN,
+  LV_AVM_NULL
 #endif
 } lv_type_t;
 // A value is one 64-bit word, returned in a register: the o64 ABI returns
@@ -248,6 +272,11 @@ typedef struct {
                                  const lv_movie_t **);
   lv_t (*script)(lv_runtime_t *, const lv_movie_t *, const lv_handler_t *);
   bool (*format)(lv_runtime_t *, lv_t, char *, size_t);
+  // Native objects represented by property lists may supply live values and
+  // observe writes. Ordinary lists keep the interpreter's own semantics.
+  bool (*property_get)(lv_runtime_t *, lv_t, const char *, lv_t *);
+  bool (*property_set)(lv_runtime_t *, lv_t, const char *, lv_t);
+  void (*property_changed)(lv_runtime_t *, lv_t, const char *);
 } lv_services_t;
 typedef struct {
   uint32_t offset, count, capacity;
@@ -280,6 +309,13 @@ typedef struct {
 } lv_call_cache_t;
 // The old table's bytes on the console, where the runtime's offsets are tuned.
 enum { LV_CALL_BYTES = 4864, LV_CALL_SLOTS = LV_CALL_BYTES / sizeof(lv_call_cache_t) };
+// Inactive embedded-movie interpreters share this heap. Their suspended
+// roots and stacks remain visible to both garbage collection and resources.
+typedef struct lv_root_span {
+  struct lv_root_span *next;
+  const lv_t *values;
+  unsigned count;
+} lv_root_span_t;
 struct lv_runtime {
   // The scalars every interpreter step reads or writes, in the structure's
   // first cache lines. They used to sit a megabyte apart at the end of it,
@@ -291,7 +327,7 @@ struct lv_runtime {
   // Occupied handles, live or not yet collected. Only a collection frees a
   // handle, so LV_OBJECTS minus this is exactly what remains allocatable
   // before the next pass.
-  unsigned object_count;
+  unsigned object_count, object_high_water;
   uint32_t heap_used;
   // Monotonic allocation serial and its value at the current step boundary;
   // see lv_object_t.birth. Only Director 7 and later move step_serial.
@@ -354,6 +390,7 @@ struct lv_runtime {
   uint64_t (*clock_us)(void);
   uint64_t collect_us;
   unsigned object_hint, object_limit;
+  lv_root_span_t *external_roots;
   uint32_t script_error_count;
   char error[160];
   char last_script_error[160];

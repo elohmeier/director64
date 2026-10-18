@@ -50,7 +50,7 @@ static const lv_handler_t handlers[] = {
      .step = event},
 };
 static const lv_movie_t code = {"D5.DXR", 3, handlers,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t casts[] = {{"Internal", 1, 1}, {"Shared", 2, 1}};
+static const dg_cast_t casts[] = {{.name="Internal",.file=1,.cast=1}, {.name="Shared",.file=2,.cast=1}};
 static const uint32_t film_sounds[] = {0x210007, 0, 0x210007, 0, 0, 0};
 static const dg_member_t members[] = {
     {.id = 0x210003,
@@ -126,7 +126,7 @@ static const dg_movie_t movie = {.code = &code,
                                  .label_count = 2,
                                  .labels = labels};
 static const lv_movie_t shared_code = {"SHARED.CXT", 0, NULL,NULL, NULL, NULL, NULL, 0};
-static const dg_cast_t shared_cast = {"Shared", 2, 1};
+static const dg_cast_t shared_cast = {.name="Shared",.file=2,.cast=1};
 static const dg_member_t shared_member = {
     .id = 0x410005, .number = 5, .cast = 1, .type = 1, .name = "shared"};
 static const dg_movie_t shared_movie = {.code = &shared_code,
