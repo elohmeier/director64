@@ -64,7 +64,11 @@ requirements passed for Web, Android and N64 after the normal D5 media
 postprocessor. Four representative Wasm runtimes compiled. Fresh Android
 exports then produced twelve complete ARM32 APKs, including converted media;
 their embedded pack hashes and build receipts were verified. The two remaining
-APK builds stop at damaged source streams, as documented in [video.md](video.md).
+APK builds initially stopped at damaged source streams. A subsequent
+[media repair](video.md#preparing-separate-repaired-images) enables both remaining
+builds through separately pinned images, with missing content explicitly
+reconstructed. All fourteen signed ARM32 APKs now pass source, package and
+6,000-tick startup verification from clean commit `152f450`.
 The fourteen code/scene packages alone contain asset references, so their
 success does not certify those external streams or a complete playthrough.
 

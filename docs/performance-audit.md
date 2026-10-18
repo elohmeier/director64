@@ -354,5 +354,14 @@ Each game's production runtime and adapter completes a local 6,000-tick startup
 smoke: 72,000 ticks total, with zero failures or runtime alerts. These erased-save,
 no-input runs render every 300 ticks, use blank font coverage and nominal audio
 lifetimes, and omit video decoding. They establish startup/package compatibility,
-not full gameplay coverage. Löwenzahn 7 and Optik retain their source-media
-blockers. No follow-up APK was installed or launched on the projector.
+not full gameplay coverage. At this stage, Löwenzahn 7 and Optik retained their
+source-media blockers. No follow-up APK was installed or launched on the projector.
+
+The subsequent [media repair](video.md#preparing-separate-repaired-images) enables
+both remaining exports while retaining strict source/decoder gates. All fourteen
+signed ARM32 APKs from clean source commit `152f450` pass package, receipt,
+version and signing verification, plus the same startup smoke: 84,000 ticks
+without failures or script alerts. The full check now passes 869 Python tests,
+72 Node tests, 237 Rust tests and the native/Android host contracts. These results
+retain the startup limitations above and add no physical performance evidence;
+the projector movie hold remains in force.

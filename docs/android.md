@@ -23,9 +23,9 @@ never commit, publish or redistribute it.
 | Löwenzahn 1 | D5 | 323 MB | intro video plays |
 | Lernerfolg Deutsch 1/2 | D10 | 343 MB | login, MP3 and WAV streams |
 | Löwenzahn 6 | D8.5 | 325 MB | login |
-| Löwenzahn 7 | D8.5 | blocked by damaged source | login on an earlier build |
+| Löwenzahn 7 | D8.5 | 345 MB | login on an earlier build |
 | Löwenzahn 8 | D8.5 | 371 MB | login, intro video |
-| 25 Jahre Löwenzahn: Optik + Mechanik | D8.5 | blocked by damaged source | Bauwagen on an earlier build |
+| 25 Jahre Löwenzahn: Optik + Mechanik | D8.5 | 507 MB | Bauwagen on an earlier build |
 | Löwenzahn Adventskalender | D8.5 | 165 MB | December countdown |
 
 Sizes describe the current single-ABI `armeabi-v7a` packages. The emulator
@@ -54,10 +54,12 @@ cannot prove visual correctness, input responsiveness or absence of Android
 ANRs; check those during the device run as well. Device performance is a
 separate qualification step from compiling or installing an APK.
 
-Strict fresh export currently rejects Löwenzahn 7's damaged MP2 stream and
-Optik's damaged MPEG program stream; see [video.md](video.md). Existing installed
-copies are retained when a rebuild fails. A successful install and matching APK
-hash establish deployment, not a startup check or a complete playthrough.
+Strict fresh export rejects Löwenzahn 7's and Optik's original damaged streams.
+The separate [media repair workflow](video.md#preparing-separate-repaired-images)
+now produces verified derivative images that pass the ordinary importer and
+decoders. Original images remain unchanged. Existing installed copies are
+retained when a rebuild fails. A successful install and matching APK hash
+establish deployment, not a startup check or a complete playthrough.
 
 On 2026-10-18, all twelve buildable ARM32 APKs were installed on the EF-62N
 with in-place updates. Their original installation identities were retained;
@@ -79,9 +81,9 @@ Birthday replay matches all 300 frames byte-for-byte against the original
 renderer while reducing redraws to 28. Host, sanitizer and browser evidence
 passes. A later EF-62N reconnection allowed an in-place Birthday update and a
 short physical run of repair `be06bbd`.
-All twelve buildable ARM32 APKs have fresh exports and verified current-source
-receipts for repair `be06bbd`; Löwenzahn 7 and Optik retain the source blockers
-above. Birthday was the only repair APK installed during that reconnection.
+At that stage, twelve ARM32 APKs had fresh exports and verified current-source
+receipts for repair `be06bbd`; Löwenzahn 7 and Optik still had source blockers.
+Birthday was the only repair APK installed during that reconnection.
 
 That run delivered 1,039 service ticks in 17.913 active seconds, about 58 Hz.
 Animated windows generally reached 11–12 redraws/second, with costly frames
@@ -98,13 +100,22 @@ The follow-up also adds standard tool cursors and a bounded background cache.
 Projector interaction stopped at the user's request while it was being used
 for a movie. Further installation and physical checks remain pending.
 
-All twelve buildable ARM32 APKs are rebuilt from clean runtime commit
-`9c78b32`, with fresh conversions, matching source receipts and a common verified
-signing certificate. Each passes a local 6,000-tick startup smoke without a
-runtime failure or alert. These checks use blank font coverage, nominal audio
-lifetimes and no video decoding; they do not qualify full gameplay or device
-performance. None of these follow-up APKs has been installed or launched on the
-projector. Löwenzahn 7 and Optik retain their source-media blockers.
+All fourteen ARM32 APKs are now built from clean source commit `152f450`, with
+matching source/conversion receipts, embedded version names and a common
+verified signing certificate. Löwenzahn 7 and Optik have fresh exports from
+their separately pinned repaired images; the other twelve verified exports
+remain reusable. Each passes a local 6,000-tick startup smoke: 84,000 ticks total
+without a runtime failure or script alert. These checks use blank font coverage,
+nominal audio lifetimes and no video decoding; they do not qualify full gameplay
+or device performance. The repaired streams separately pass strict FFmpeg and
+production decoder checks. None of these follow-up APKs has been installed or
+launched on the projector.
+
+Löwenzahn 7's long clip comes from an independently recovered copy; each of its
+five short clips contains one explicit 40 ms picture hold. Optik's affected clip
+contains 3.32 seconds of picture holds and 1.2 seconds of silence across the
+damaged intervals. Healthy pictures and compressed audio remain intact. These
+reconstructions enable the builds but do not restore missing original content.
 
 ## Building
 
@@ -147,8 +158,8 @@ A build:
    Löwenzahn 6 went from 1.9 GB to under 0.6 GB.
 
    A conversion is reused only when the importer, runtime ABI, selected source,
-   profile/policy and Android exporter match, and every packed asset has its
-   recorded size and SHA-256. `--reconvert` forces a new one. Importer tools are
+   repaired-image selection, profile/policy and Android exporter match, and every
+   packed asset has its recorded size and SHA-256. `--reconvert` forces a new one. Importer tools are
    rebuilt when their source fingerprint or any generated tool hash changes;
    an old browser-site manifest cannot authorize stale conversion tools.
    Both fresh and reused packages must also load successfully with the actual
