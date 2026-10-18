@@ -68,9 +68,20 @@ A subsequent startup test of that Birthday APK exposed sustained bedroom
 rendering at about 2–3 presentations/second and a 10-second input-dispatch
 timeout with diagnostics enabled. The matching host replay attributes nearly
 all measured work to rendering and reveals many identical redraws. See the
-[performance follow-up](performance-audit.md) for measurements, remaining bugs
+[performance follow-up](performance-audit.md) for measurements, baseline findings
 and the preprocessing design; successful installation does not qualify this
 scene for practical play.
+
+The subsequent [repair](performance-audit.md#repair-and-regression-evidence)
+adds conversion-time source coverage, retained film/mask planes and equivalent
+picture detection, together with input, UI, audio and video fixes. The fresh
+Birthday replay matches all 300 frames byte-for-byte against the original
+renderer while reducing redraws to 28. Host, sanitizer and browser evidence
+passes; the paired EF-62N is currently unreachable, so updated installation,
+physical pacing, input and lifecycle checks remain pending.
+All twelve buildable ARM32 APKs have fresh exports and verified current-source
+receipts for repair `be06bbd`; Löwenzahn 7 and Optik retain the source blockers
+above. These repair APKs have not yet been installed on the projector.
 
 ## Building
 

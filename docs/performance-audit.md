@@ -239,3 +239,11 @@ The Android worker emits active-time pacing windows and the
 [qualification command](android.md) rejects missing measurements, alerts and
 sustained service loss. These checks complement visual and input checks on
 the device; an APK build alone cannot perform them.
+
+The full `check` task passes: 805 Python tests, 72 Node tests, 237 Rust tests,
+portable native contracts and Android Java/JNI/threading contracts. Additional
+focused D10/D8.5 sanitizer runs and all 41 opt-in visual probes pass. A real
+headless-browser WebCodecs test uses synthetic VP9 with output delayed by
+50 ms: the baseline presents zero frames, while the repair presents 34 over
+1.2 seconds and successfully rewinds, without decoder errors. This tests real
+decoding with controlled delivery latency, not projector codec performance.
