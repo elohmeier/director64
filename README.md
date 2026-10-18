@@ -235,6 +235,7 @@ This is a host recovery step; it does not build or qualify a ROM.
 - [Source catalog](docs/games.md) and [source schema](docs/source-schema.md)
 - [Browser player](docs/web.md) and its [roadmap](docs/web-roadmap.md)
 - [Fuzzing and performance tooling](docs/fuzzing.md)
+- [Implementation gaps and diagnostic checks](docs/implementation-audit.md)
 - [Package format](docs/package-format.md) and [ROM metadata](docs/rom-metadata.md)
 - Per-game ports, controls, validation and limits: see the table above.
 
