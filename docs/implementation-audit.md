@@ -76,6 +76,12 @@ software pixels, Wine projector observations and hardware results must stay
 distinct. The new failure gates expose these gaps; they do not implement
 them or turn a passing startup into proof that every activity works.
 
+The subsequent [performance and correctness follow-up](performance-audit.md)
+records a physical EF-62N Birthday slowdown and input timeout, excessive film
+redrawing, Flash invalidation/lifetime defects, and Android media/input bugs.
+It also maps recovered animation catalogs to a preprocessing and caching
+design. Those findings remain open after the repair described here.
+
 ## Why these gaps survived
 
 Several representations discarded information needed at playback. Flattened

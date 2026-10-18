@@ -47,6 +47,14 @@ with in-place updates. Their original installation identities were retained;
 Löwenzahn 7 and Optik kept their earlier versions. The running foreground app
 was left in place, so this deployment did not repeat the gameplay checks above.
 
+A subsequent startup test of that Birthday APK exposed sustained bedroom
+rendering at about 2–3 presentations/second and a 10-second input-dispatch
+timeout with diagnostics enabled. The matching host replay attributes nearly
+all measured work to rendering and reveals many identical redraws. See the
+[performance follow-up](performance-audit.md) for measurements, remaining bugs
+and the preprocessing design; successful installation does not qualify this
+scene for practical play.
+
 ## Building
 
 Requirements are the browser player's (Node with the locked dev
