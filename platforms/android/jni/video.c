@@ -8,9 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define LOG(...) __android_log_print(ANDROID_LOG_INFO, "director64", __VA_ARGS__)
+#define LOG(...)                                                               \
+  __android_log_print(ANDROID_LOG_INFO, "director64", __VA_ARGS__)
 
-enum { PLAYERS = 8, IMAGES = 4 };
+enum { PLAYERS = 8, IMAGES = 4, PUMP_BUFFERS = 8 };
 
 typedef struct {
   int64_t microseconds;
@@ -27,8 +28,8 @@ typedef struct {
   AImageReader *reader;
   const char *mime;
   int fed, wanted; // the last chunk given to the decoder; the frame wanted
-  int64_t shown_at; // the wanted frame's time, once the decoder has it
-  bool awaiting; // the wanted frame went to the reader; not yet acquired
+  int64_t shown_at,
+      floor_at; // Presented timestamp and the current seek boundary.
   uint32_t *pixels;
 } player_t;
 
@@ -51,7 +52,8 @@ const char *video_error(void) { return failure; }
 static bool parse(player_t *p, const uint8_t *bytes, uint32_t length) {
   if (length < 4)
     return false;
-  uint32_t header = bytes[0] | bytes[1] << 8 | bytes[2] << 16 | (uint32_t)bytes[3] << 24;
+  uint32_t header =
+      bytes[0] | bytes[1] << 8 | bytes[2] << 16 | (uint32_t)bytes[3] << 24;
   if (header > length - 4)
     return false;
   json_t json;
@@ -59,10 +61,10 @@ static bool parse(player_t *p, const uint8_t *bytes, uint32_t length) {
     return false;
   char codec[32];
   json_string(&json, json_get(&json, 0, "codec"), codec, sizeof(codec));
-  p->mime = !strcmp(codec, "vp8")              ? "video/x-vnd.on2.vp8"
-            : !strncmp(codec, "avc1", 4)       ? "video/avc"
-            : !strncmp(codec, "vp09", 4)       ? "video/x-vnd.on2.vp9"
-                                               : NULL;
+  p->mime = !strcmp(codec, "vp8")        ? "video/x-vnd.on2.vp8"
+            : !strncmp(codec, "avc1", 4) ? "video/avc"
+            : !strncmp(codec, "vp09", 4) ? "video/x-vnd.on2.vp9"
+                                         : NULL;
   p->width = (unsigned)json_number(&json, json_get(&json, 0, "width"));
   p->height = (unsigned)json_number(&json, json_get(&json, 0, "height"));
   unsigned frames = json_get(&json, 0, "frames");
@@ -71,13 +73,16 @@ static bool parse(player_t *p, const uint8_t *bytes, uint32_t length) {
   p->data = bytes + 4 + header;
   uint32_t data_length = length - 4 - header;
   bool ok = p->mime && p->frames && p->count;
-  for (unsigned i = 0, at = frames + 1; ok && i < p->count; i++, at = json_next(&json, at)) {
+  for (unsigned i = 0, at = frames + 1; ok && i < p->count;
+       i++, at = json_next(&json, at)) {
     video_chunk_t *c = &p->frames[i];
     c->microseconds = (int64_t)json_number(&json, json_item(&json, at, 0));
     c->key = json_number(&json, json_item(&json, at, 1)) != 0;
     c->offset = (uint32_t)json_number(&json, json_item(&json, at, 2));
     c->size = (uint32_t)json_number(&json, json_item(&json, at, 3));
-    ok = c->offset <= data_length && c->size <= data_length - c->offset;
+    ok = c->size && c->offset <= data_length &&
+         c->size <= data_length - c->offset && c->microseconds >= 0 &&
+         (!i || c->microseconds > p->frames[i - 1].microseconds);
   }
   json_free(&json);
   return ok;
@@ -85,21 +90,26 @@ static bool parse(player_t *p, const uint8_t *bytes, uint32_t length) {
 
 static bool configure(player_t *p) {
   // A console stream's header leaves the size to its first frame.
-  int32_t width = p->width ? (int32_t)p->width : 320, height = p->height ? (int32_t)p->height : 240;
-  if (AImageReader_new(width, height, AIMAGE_FORMAT_YUV_420_888, IMAGES, &p->reader) !=
-      AMEDIA_OK)
+  int32_t width = p->width ? (int32_t)p->width : 320,
+          height = p->height ? (int32_t)p->height : 240;
+  if (AImageReader_new(width, height, AIMAGE_FORMAT_YUV_420_888, IMAGES,
+                       &p->reader) != AMEDIA_OK)
     return false;
   ANativeWindow *window = NULL;
-  AImageReader_getWindow(p->reader, &window);
+  if (AImageReader_getWindow(p->reader, &window) != AMEDIA_OK || !window)
+    return false;
   p->codec = AMediaCodec_createDecoderByType(p->mime);
   if (!p->codec)
     return false;
   AMediaFormat *format = AMediaFormat_new();
+  if (!format)
+    return false;
   AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, p->mime);
   AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, width);
   AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_HEIGHT, height);
-  bool ok = AMediaCodec_configure(p->codec, format, window, NULL, 0) == AMEDIA_OK &&
-            AMediaCodec_start(p->codec) == AMEDIA_OK;
+  bool ok =
+      AMediaCodec_configure(p->codec, format, window, NULL, 0) == AMEDIA_OK &&
+      AMediaCodec_start(p->codec) == AMEDIA_OK;
   AMediaFormat_delete(format);
   return ok;
 }
@@ -132,35 +142,51 @@ static player_t *create(const uint8_t *bytes, uint32_t length) {
 }
 
 // BT.601 limited range, as browsers convert VP8 and H.264.
-static inline uint8_t clamp8(int v) { return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v); }
+static inline uint8_t clamp8(int v) {
+  return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+}
 
-static void convert(player_t *p, AImage *image) {
+static bool convert(player_t *p, AImage *image) {
   int32_t width = 0, height = 0;
-  AImage_getWidth(image, &width);
-  AImage_getHeight(image, &height);
+  if (AImage_getWidth(image, &width) != AMEDIA_OK ||
+      AImage_getHeight(image, &height) != AMEDIA_OK)
+    return false;
   AImageCropRect crop = {0, 0, width, height};
-  AImage_getCropRect(image, &crop);
+  if (AImage_getCropRect(image, &crop) != AMEDIA_OK || crop.left < 0 ||
+      crop.top < 0 || crop.right > width || crop.bottom > height)
+    return false;
   width = crop.right - crop.left;
   height = crop.bottom - crop.top;
-  if (width <= 0 || height <= 0)
-    return;
-  if ((unsigned)width != p->width || (unsigned)height != p->height || !p->pixels) {
+  if (width <= 0 || height <= 0 ||
+      (size_t)width > SIZE_MAX / 4 / (size_t)height)
+    return false;
+  if ((unsigned)width != p->width || (unsigned)height != p->height ||
+      !p->pixels) {
     free(p->pixels);
     p->width = (unsigned)width;
     p->height = (unsigned)height;
     p->pixels = malloc((size_t)width * (size_t)height * 4);
     if (!p->pixels)
-      return;
+      return false;
   }
   uint8_t *planes[3];
   int lengths[3], rows[3], pixels[3];
   for (int i = 0; i < 3; i++) {
-    AImage_getPlaneData(image, i, &planes[i], &lengths[i]);
-    AImage_getPlaneRowStride(image, i, &rows[i]);
-    AImage_getPlanePixelStride(image, i, &pixels[i]);
+    if (AImage_getPlaneData(image, i, &planes[i], &lengths[i]) != AMEDIA_OK ||
+        AImage_getPlaneRowStride(image, i, &rows[i]) != AMEDIA_OK ||
+        AImage_getPlanePixelStride(image, i, &pixels[i]) != AMEDIA_OK ||
+        !planes[i] || lengths[i] <= 0 || rows[i] <= 0 || pixels[i] <= 0)
+      return false;
+    unsigned divisor = i ? 2 : 1;
+    uint64_t last =
+        (uint64_t)((unsigned)(crop.bottom - 1) / divisor) * (unsigned)rows[i] +
+        (uint64_t)((unsigned)(crop.right - 1) / divisor) * (unsigned)pixels[i];
+    if (last >= (unsigned)lengths[i])
+      return false;
   }
   for (int y = 0; y < height; y++) {
-    const uint8_t *yrow = planes[0] + (crop.top + y) * rows[0] + crop.left * pixels[0];
+    const uint8_t *yrow =
+        planes[0] + (crop.top + y) * rows[0] + crop.left * pixels[0];
     int cy = (crop.top + y) / 2;
     const uint8_t *urow = planes[1] + cy * rows[1];
     const uint8_t *vrow = planes[2] + cy * rows[2];
@@ -175,53 +201,105 @@ static void convert(player_t *p, AImage *image) {
       out[x] = r | g << 8 | b << 16 | 0xffu << 24;
     }
   }
+  return true;
 }
 
-// Feeds the decoder up to the wanted frame and keeps what it has decoded.
+// Decode bounded work per service opportunity. A slow decoder still presents
+// its newest completed frame; requiring an exact moving target starves video.
 static void pump(player_t *p) {
-  if (!p || !p->codec)
+  if (!p || !p->codec || p->wanted < 0 || *failure)
     return;
-  while (p->fed < p->wanted) {
+  for (unsigned n = 0; n < PUMP_BUFFERS && p->fed < p->wanted; n++) {
     ssize_t in = AMediaCodec_dequeueInputBuffer(p->codec, 0);
-    if (in < 0)
+    if (in == AMEDIACODEC_INFO_TRY_AGAIN_LATER)
       break;
+    if (in < 0) {
+      snprintf(failure, sizeof(failure), "Video decoder input failed (%zd)",
+               in);
+      return;
+    }
     size_t cap = 0;
     uint8_t *buffer = AMediaCodec_getInputBuffer(p->codec, (size_t)in, &cap);
-    const video_chunk_t *c = &p->frames[++p->fed];
+    const video_chunk_t *c = &p->frames[p->fed + 1];
     if (!buffer || c->size > cap) {
-      snprintf(failure, sizeof(failure), "Video frame exceeds decoder input capacity");
+      snprintf(failure, sizeof(failure),
+               "Video frame exceeds decoder input capacity");
       return;
     }
     memcpy(buffer, p->data + c->offset, c->size);
     if (AMediaCodec_queueInputBuffer(p->codec, (size_t)in, 0, c->size,
-                                    (uint64_t)c->microseconds, 0) != AMEDIA_OK) {
-      snprintf(failure, sizeof(failure), "Video decoder rejected an encoded frame");
+                                     (uint64_t)c->microseconds,
+                                     0) != AMEDIA_OK) {
+      snprintf(failure, sizeof(failure),
+               "Video decoder rejected an encoded frame");
       return;
     }
+    p->fed++;
   }
-  for (;;) {
+  ssize_t newest = -1;
+  int64_t newest_at = p->shown_at;
+  for (unsigned n = 0; n < PUMP_BUFFERS; n++) {
     AMediaCodecBufferInfo info;
     ssize_t out = AMediaCodec_dequeueOutputBuffer(p->codec, &info, 0);
-    if (out == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED || out == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED)
+    if (out == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED ||
+        out == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED)
       continue;
-    if (out < 0)
+    if (out == AMEDIACODEC_INFO_TRY_AGAIN_LATER)
       break;
-    // Only the frame the runtime wants is shown; frames decoded on the way
-    // there are dropped unread.
-    bool wanted = p->wanted >= 0 && info.presentationTimeUs == p->frames[p->wanted].microseconds;
-    AMediaCodec_releaseOutputBuffer(p->codec, (size_t)out, wanted);
-    if (wanted)
-      p->awaiting = true;
+    if (out < 0) {
+      snprintf(failure, sizeof(failure), "Video decoder output failed (%zd)",
+               out);
+      break;
+    }
+    bool eligible =
+        info.presentationTimeUs >= p->floor_at &&
+        info.presentationTimeUs <= p->frames[p->wanted].microseconds &&
+        info.presentationTimeUs > newest_at;
+    ssize_t discard = out;
+    if (eligible) {
+      discard = newest;
+      newest = out;
+      newest_at = info.presentationTimeUs;
+    }
+    if (discard >= 0 && AMediaCodec_releaseOutputBuffer(
+                            p->codec, (size_t)discard, false) != AMEDIA_OK)
+      snprintf(failure, sizeof(failure),
+               "Video decoder could not release an output frame");
   }
-  if (p->awaiting) {
-    AImage *image = NULL;
-    if (AImageReader_acquireLatestImage(p->reader, &image) == AMEDIA_OK && image) {
-      convert(p, image);
-      AImage_delete(image);
-      p->awaiting = false;
-      revision++;
+  if (newest >= 0 && AMediaCodec_releaseOutputBuffer(p->codec, (size_t)newest,
+                                                     !*failure) != AMEDIA_OK)
+    snprintf(failure, sizeof(failure),
+             "Video decoder could not present an output frame");
+  if (*failure)
+    return;
+  AImage *image = NULL;
+  media_status_t acquired = AImageReader_acquireLatestImage(p->reader, &image);
+  if (acquired == AMEDIA_IMGREADER_NO_BUFFER_AVAILABLE)
+    return;
+  if (acquired != AMEDIA_OK || !image) {
+    snprintf(failure, sizeof(failure), "Video image reader failed (%d)",
+             acquired);
+    return;
+  }
+  int64_t timestamp = -1;
+  if (AImage_getTimestamp(image, &timestamp) != AMEDIA_OK) {
+    snprintf(failure, sizeof(failure),
+             "Video image has no presentation timestamp");
+  } else {
+    // Surface images can arrive after a flush. Their timestamps must belong
+    // to this seek, and must never move the displayed picture backwards.
+    int64_t at = timestamp / 1000;
+    if (at >= p->floor_at && at <= p->frames[p->wanted].microseconds &&
+        at > p->shown_at) {
+      if (convert(p, image)) {
+        p->shown_at = at;
+        revision++;
+      } else
+        snprintf(failure, sizeof(failure),
+                 "Invalid video image planes or allocation failure");
     }
   }
+  AImage_delete(image);
 }
 
 // The last frame at or before `microseconds`.
@@ -239,19 +317,27 @@ static int frame_at(const player_t *p, int64_t microseconds) {
   return found;
 }
 
-static void seek(player_t *p, double time600) {
+static void seek(player_t *p, double time600, bool discontinuity) {
   int target = frame_at(p, (int64_t)(time600 * 1e6 / 600 + 0.5));
-  if (target >= 0 && target != p->wanted) {
+  if (target >= 0 && (target != p->wanted || discontinuity)) {
+    int previous = p->wanted;
     p->wanted = target;
     // Far jumps and rewinds restart from the keyframe before the target;
     // near ones decode forward from where the decoder is.
-    if (target < p->fed || target > p->fed + 30) {
+    if (discontinuity || target < previous || target > previous + 30) {
       int key = target;
       while (key > 0 && !p->frames[key].key)
         key--;
-      AMediaCodec_flush(p->codec);
+      if (AMediaCodec_flush(p->codec) != AMEDIA_OK) {
+        snprintf(failure, sizeof(failure), "Video decoder seek failed");
+        return;
+      }
       p->fed = key - 1;
-      p->awaiting = false;
+      p->floor_at = p->frames[target].microseconds;
+      p->shown_at = -1;
+      free(p->pixels);
+      p->pixels = NULL;
+      revision++;
     }
   }
   pump(p);
@@ -272,10 +358,13 @@ static void close_entry(entry_t *e) {
   revision++;
 }
 
-void video_init(const pack_t *videos) { pack = videos; failure[0] = 0; }
+void video_init(const pack_t *videos) {
+  pack = videos;
+  failure[0] = 0;
+}
 
-void video_update(unsigned sprite, const char *asset, const char *sound, double time600,
-                  double rate, unsigned serial, float gain) {
+void video_update(unsigned sprite, const char *asset, const char *sound,
+                  double time600, double rate, unsigned serial, float gain) {
   entry_t *e = find(sprite);
   if (!asset) {
     if (e)
@@ -287,7 +376,8 @@ void video_update(unsigned sprite, const char *asset, const char *sound, double 
       if (!entries[i].open)
         e = &entries[i];
     if (!e) {
-      snprintf(failure, sizeof(failure), "Concurrent video player capacity exceeded (%u)", PLAYERS);
+      snprintf(failure, sizeof(failure),
+               "Concurrent video player capacity exceeded (%u)", PLAYERS);
       return;
     }
     memset(e, 0, sizeof(*e));
@@ -300,7 +390,8 @@ void video_update(unsigned sprite, const char *asset, const char *sound, double 
       e->player = create(pack_data(pack, entry), entry->length);
       if (!e->player) {
         LOG("video %s could not be played", asset);
-        snprintf(failure, sizeof(failure), "Video %s could not be decoded", asset);
+        snprintf(failure, sizeof(failure), "Video %s could not be decoded",
+                 asset);
       }
     } else if (*asset) {
       LOG("missing video %s", asset);
@@ -308,7 +399,7 @@ void video_update(unsigned sprite, const char *asset, const char *sound, double 
     }
   }
   if (e->player)
-    seek(e->player, time600);
+    seek(e->player, time600, e->serial != serial);
   // The movie's sound: started (or re-seeked) when it plays and the time
   // jumped, stopped when it stops, pitched by the rate, as the console's.
   if (e->sound[0]) {

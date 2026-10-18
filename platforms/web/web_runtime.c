@@ -709,14 +709,6 @@ __attribute__((weak)) bool game_key_field(void *runtime, unsigned sprite) {
   (void)sprite;
   return false;
 }
-// The Macintosh virtual key code a typed character arrives with.
-static unsigned typed_key_code(unsigned c) {
-  static const uint8_t letters[] = {0,  11, 8,  2,  14, 3,  5,  4,  34, 38, 40, 37, 46,
-                                    45, 31, 35, 12, 15, 1,  17, 32, 9,  13, 7,  16, 6};
-  if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
-  if (c >= 'A' && c <= 'Z') return letters[c - 'A'];
-  return c == 8 ? 51 : c == 13 ? 36 : c == ' ' ? 49 : c == '-' ? 27 : 18;
-}
 #endif
 EMSCRIPTEN_KEEPALIVE unsigned d64_key_field(int x, int y, int anywhere) {
 #if defined(DIRECTOR64_MUCKLAS) || DG_D10
@@ -750,20 +742,6 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_key_field(int x, int y, int anywhere) {
 #endif
   return 0;
 }
-// One character typed into a key field, as the console's keyboard presses
-// and releases it; 8 deletes.
-EMSCRIPTEN_KEEPALIVE void d64_type_key(unsigned character, int down) {
-#ifdef DIRECTOR64_MUCKLAS
-  if (booted && !values.failed && character <= 255 && director.key_count < 32)
-    dg_key(&director, mucklas_key_code(character), character, down != 0);
-#elif DG_D10
-  if (booted && !values.failed && character <= 255 && director.key_count < 32)
-    dg_key(&director, typed_key_code(character), character, down != 0);
-#else
-  (void)character;
-  (void)down;
-#endif
-}
 // The field's text as the keyboard starts from: a lone space is empty.
 EMSCRIPTEN_KEEPALIVE const char *d64_text_value(unsigned sprite) {
 #if DG_EXTENDED || defined(DIRECTOR64_MUCKLAS)
@@ -791,20 +769,7 @@ EMSCRIPTEN_KEEPALIVE int d64_edit_text(unsigned sprite, const char *text) {
   return 0;
 #endif
 }
-// A key of the page's keyboard, as a desktop projector receives it: the
-// Macintosh virtual key code and the character it types (dg_key).
-EMSCRIPTEN_KEEPALIVE void d64_key(unsigned code, unsigned character, int down) {
-#if DG_CAP_KEYBOARD
-  // The page may outrun the score (a held key repeats, typing is fast);
-  // what the queue cannot take is dropped rather than failing the game.
-  if (booted && !values.failed && code < 128 && character <= 255 && director.key_count < 32)
-    dg_key(&director, code, character, down != 0);
-#else
-  (void)code;
-  (void)character;
-  (void)down;
-#endif
-}
+#include "keyboard.inc"
 // The composited stage with the page's pointer, or NULL when nothing changed.
 EMSCRIPTEN_KEEPALIVE uint32_t *d64_render(int x, int y, int pointer_shown) {
   if (!booted || values.failed)

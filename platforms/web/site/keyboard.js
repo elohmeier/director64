@@ -4,6 +4,56 @@
 // keyboard keeps working while it shows.
 import {t} from "./strings.js";
 
+// Browser event bursts can exceed the engine's 32-event queue between ticks.
+// Retain their order and admit only what the next service tick can consume.
+export class KeyEvents {
+  constructor(module, limit = 256) {
+    this.module = module;
+    this.limit = limit;
+    this.held = new Map();
+    this.pending = [];
+    this.error = "";
+  }
+  enqueue(code, character, down) {
+    if (this.pending.length >= this.limit) {
+      this.error = `Keyboard input queue overflow (${this.limit} events)`;
+      return;
+    }
+    this.pending.push([code, character, down ? 1 : 0]);
+    this.drain();
+  }
+  forward(code, character, down, allowed = true) {
+    // Releases belong to the original press even after a modifier, focus or
+    // menu change. Filtering them first can leave a key permanently held.
+    if (!down) {
+      if (!this.held.has(code)) return false;
+      this.enqueue(code, this.held.get(code), false);
+      this.held.delete(code);
+      return true;
+    }
+    if (!allowed) return false;
+    if (!this.held.has(code)) {
+      this.held.set(code, character);
+      this.enqueue(code, character, true);
+    }
+    return true;
+  }
+  releaseAll() {
+    for (const [code, character] of this.held) this.enqueue(code, character, false);
+    this.held.clear();
+  }
+  drain() {
+    if (this.error || !this.pending.length) return;
+    if (typeof this.module._d64_key_capacity !== "function") {
+      this.error = "Keyboard runtime lacks input backpressure; rebuild the player";
+      return;
+    }
+    const available = this.module._d64_key_capacity();
+    for (let i = 0; i < available && this.pending.length; i++)
+      this.module._d64_key(...this.pending.shift());
+  }
+}
+
 const COLUMNS = 10;
 
 // Rows of keys; each key spans columns [col, col + span).

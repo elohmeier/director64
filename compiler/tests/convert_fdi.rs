@@ -16,6 +16,47 @@ fn alpha_meta(width: usize, height: usize) -> FdiMeta {
         ..Default::default()
     }
 }
+
+fn coverage_hint(data: &[u8]) -> (usize, usize, usize, usize) {
+    assert_eq!(data[27] & 0xf0, 0xa0);
+    let shift = data[27] & 15;
+    (
+        (data[28] as usize) << shift,
+        (data[29] as usize) << shift,
+        ((data[30] as usize) << shift).min(read_be16(data, 8) as usize),
+        ((data[31] as usize) << shift).min(read_be16(data, 10) as usize),
+    )
+}
+
+#[test]
+fn conversion_prepares_conservative_coverage_without_changing_virtual_geometry() {
+    for (width, height) in [(7, 5), (800, 600), (1057, 35)] {
+        let mut rgba = vec![0u8; width * height * 4];
+        let (left, top, right, bottom) = (3, 2, width - 1, height - 1);
+        for (x, y) in [(left, top), (right - 1, bottom - 1)] {
+            rgba[(y * width + x) * 4..(y * width + x) * 4 + 4].copy_from_slice(&[16, 32, 64, 1]);
+        }
+        let meta = FdiMeta {
+            reg_x: -11,
+            reg_y: 19,
+            ..alpha_meta(width, height)
+        };
+        let data = fdi_image(&meta, &rgba).unwrap();
+        let (l, t, r, b) = coverage_hint(&data);
+        assert!(l <= left && t <= top && r >= right && b >= bottom);
+        assert_eq!(
+            (read_be16(&data, 8) as usize, read_be16(&data, 10) as usize),
+            (width, height)
+        );
+        assert_eq!(i16::from_be_bytes(data[12..14].try_into().unwrap()), -11);
+        assert_eq!(i16::from_be_bytes(data[14..16].try_into().unwrap()), 19);
+        for i in 0..width * height {
+            assert_eq!(fdi_pixel(&data, i, 8)[3], rgba[i * 4 + 3]);
+        }
+        let empty = fdi_image(&meta, &vec![0; width * height * 4]).unwrap();
+        assert_eq!(coverage_hint(&empty), (0, 0, 0, 0));
+    }
+}
 fn tinted(alpha: &[u8]) -> Vec<u8> {
     alpha.iter().flat_map(|&a| [37, 118, 209, a]).collect()
 }

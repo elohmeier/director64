@@ -55,6 +55,10 @@ typedef struct {
   char name[40];
   unsigned ink, width, height, depth;
   unsigned stride; // pixels per row, zero for tightly packed images
+  // A cropped plane keeps the original sampling space. Offsets locate the
+  // stored pixels inside it; zero source dimensions mean an uncropped image.
+  unsigned source_width, source_height;
+  int source_x, source_y;
   bool follow_alpha, force_opaque, rgb555, rich_text, palette_brush;
 #if DG_D10
   const dg_member_t *linked_member; // crop/center mapping for a nested scene
@@ -107,7 +111,9 @@ typedef struct {
 typedef struct {
   wc_host_t host;
   uint32_t pixels[WC_WIDTH * WC_HEIGHT];
+  uint32_t *target; // temporary film target; NULL selects the stage
   wc_image_t images[WC_IMAGE_SLOTS];
+  struct wc_cached_plane *planes;
   size_t image_bytes, image_budget;
   wc_text_t texts[WC_TEXT_SLOTS];
   wc_cursor_t cursors[WC_CURSOR_SLOTS];
@@ -115,6 +121,7 @@ typedef struct {
   // What the last composite showed; an unchanged stage is not redrawn.
   bool drawn;
   const dg_runtime_t *owner;
+  const dg_movie_t *movie;
   unsigned revision;
   dg_cursor_t cursor;
   wc_pointer_t pointers[WC_POINTERS];
@@ -124,11 +131,13 @@ typedef struct {
   // the host's decoded video frames, a D5 alert or source dialog.
   unsigned externals;
   // Counters for the page's diagnostics.
-  unsigned loads, evictions, renders;
-#if DG_D10
+  unsigned loads, evictions, renders, scene_renders, plane_hits, plane_builds;
   // The last composited scene without its cursors, and the snapshot of it a
   // script kept as a member's image (`member.image = (the stage).image`).
   uint32_t scene[WC_WIDTH * WC_HEIGHT];
+#if DG_D10
+  uint32_t *film_scratch[8];
+  unsigned film_depth;
   wc_image_t stage_snapshot;
   uint32_t snapshot_member;
 #endif

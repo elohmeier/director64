@@ -278,6 +278,14 @@ Lernerfolg needed the most, and all of it holds for any later port:
   loads a pose at its own size and places it by the loop's and the pose's
   registration points. In Ghosts the poses covered 7% of their full-stage
   area.
+- **Live film planes.** Native films retain independently timed children.
+  The software compositor resolves their effective visual state, renders the
+  affected local bounds and retains the latest plane per instance. Palette,
+  paired-mask, text, pattern and mutable-image changes participate in reuse;
+  unsupported dynamic sources use the live path. Derived planes share the
+  image-cache budget. Conversion supplies conservative source coverage without
+  changing source extent or registration. Pointer-only updates draw over the
+  retained cursor-free scene.
 - **Masks and Flash.** Mask ink takes the `_mask` partner, by the
   console's luminance rule. Flash prompt text is drawn over its card.
 - **Speech streams.** `sound playFile` speech arrives as a streams pack.

@@ -87,6 +87,11 @@ pub fn fdi_image(meta: &FdiMeta, rgba: &[u8]) -> Result<Vec<u8>, String> {
         data[16] |= 2;
         data[24..27].copy_from_slice(&background);
     }
+    // A conservative coverage box prepared once during conversion. Four
+    // quantized coordinates fit the otherwise reserved bytes of every FDI
+    // header, including FDIA and FDIC. Pixels, dimensions and registration
+    // remain unchanged; older readers safely ignore the optional hint.
+    write_coverage_hint(&mut data, meta.width, meta.height, rgba);
     for i in 0..count {
         let p = i * 4;
         let slot = if is_tiled {
@@ -111,6 +116,34 @@ pub fn fdi_image(meta: &FdiMeta, rgba: &[u8]) -> Result<Vec<u8>, String> {
         data[20..24].copy_from_slice(&(alpha_offset as u32).to_be_bytes());
     }
     Ok(data)
+}
+
+fn write_coverage_hint(data: &mut [u8], width: usize, height: usize, rgba: &[u8]) {
+    if width == 0 || height == 0 || width > u16::MAX as usize || height > u16::MAX as usize {
+        return;
+    }
+    let mut shift = 0;
+    while width.max(height).div_ceil(1 << shift) > 255 {
+        shift += 1;
+    }
+    let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+    for (i, pixel) in rgba.chunks_exact(4).enumerate() {
+        if pixel[3] != 0 {
+            left = left.min(i % width);
+            top = top.min(i / width);
+            right = right.max(i % width + 1);
+            bottom = bottom.max(i / width + 1);
+        }
+    }
+    data[27] = 0xa0 | shift as u8;
+    if right == 0 {
+        data[28..32].fill(0);
+    } else {
+        data[28] = (left >> shift) as u8;
+        data[29] = (top >> shift) as u8;
+        data[30] = right.div_ceil(1 << shift) as u8;
+        data[31] = bottom.div_ceil(1 << shift) as u8;
+    }
 }
 
 fn be16(d: &[u8], at: usize) -> usize {

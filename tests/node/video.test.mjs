@@ -105,6 +105,69 @@ test("audio-only QuickTime plays, pauses, seeks and finishes without a video dec
   assert.deepEqual(players.errors, []);
 });
 
+test("late video outputs remain visible, queues stay bounded and rewinds reject old generations", () => {
+  const saved = {VideoDecoder: globalThis.VideoDecoder, OffscreenCanvas: globalThis.OffscreenCanvas,
+    EncodedVideoChunk: globalThis.EncodedVideoChunk};
+  const decoders = [];
+  let drawn = -1, closedFrames = 0, peakQueue = 0;
+  try {
+    globalThis.OffscreenCanvas = class {
+      getContext() { return {drawImage(frame) { drawn = frame.timestamp; },
+        getImageData() { return {data: new Uint8Array([drawn / 100000 + 1])}; }}; }
+    };
+    globalThis.EncodedVideoChunk = class { constructor(chunk) { Object.assign(this, chunk); } };
+    globalThis.VideoDecoder = class {
+      state = "configured"; queue = [];
+      constructor(callbacks) { this.callbacks = callbacks; decoders.push(this); }
+      get decodeQueueSize() { return this.queue.length; }
+      configure() {} close() { this.state = "closed"; }
+      decode(chunk) { this.queue.push(chunk.timestamp); peakQueue = Math.max(peakQueue, this.queue.length); }
+      deliver(timestamp = this.queue.shift()) {
+        this.callbacks.output({timestamp, close() { closedFrames++; }});
+        this.ondequeue?.();
+      }
+    };
+    const frames = Array.from({length: 60}, (_, i) => [i * 100000, i === 0 ? 1 : 0, i, 1]);
+    const bytes = pack({...minimal, frames}, Buffer.alloc(60));
+    const players = new VideoPlayers(() => bytes, audio());
+    for (let i = 0; i < 12; i++) {
+      players.update(1, "clip", "", i * 60, 1, 0, 1);
+      if (i) decoders[0].deliver(); // every output is one requested frame late
+    }
+    assert.equal(players.revision, 11);
+    assert.equal(players.frame(1).pixels[0], 11);
+    decoders[0].deliver();
+    assert.equal(players.frame(1).pixels[0], 12);
+    players.update(1, "clip", "", 19 * 60, 1, 0, 1);
+    assert(peakQueue <= 8);
+    while (decoders[0].queue.length) decoders[0].deliver();
+    assert.equal(players.frame(1).pixels[0], 20);
+    players.update(1, "clip", "", 50 * 60, 1, 1, 1);
+    assert.equal(decoders.length, 2);
+    assert.equal(decoders[1].queue.length, 8);
+    players.update(1, "clip", "", 51 * 60, 1, 1, 1);
+    assert.equal(decoders.length, 2); // clock progress must not restart a bounded catch-up queue
+    while (decoders[1].queue.length) decoders[1].deliver();
+    assert.equal(players.frame(1).pixels[0], 52);
+    assert(peakQueue <= 8);
+    players.update(1, "clip", "", 0, 0, 1, 1);
+    assert.equal(decoders.length, 3);
+    assert.equal(players.frame(1), null);
+    const revision = players.revision;
+    decoders[0].deliver(1900000); // late callback from the closed decoder
+    decoders[0].callbacks.error(new Error("obsolete decoder"));
+    assert.equal(players.revision, revision);
+    assert.equal(players.frame(1), null);
+    decoders[2].deliver();
+    assert.equal(players.frame(1).pixels[0], 1);
+    assert.deepEqual(players.errors, []);
+    players.update(1, "clip", "", -1, 0, 2, 1);
+    assert.equal(players.frame(1), null);
+    assert(closedFrames > 20);
+    players.closeAll();
+  } finally { Object.assign(globalThis, saved); }
+});
+
 function run(binary, args, input) {
   const result = spawnSync(binary, args, {input, maxBuffer: 4 * 1024 * 1024, timeout: 30000});
   assert.ifError(result.error);

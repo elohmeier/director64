@@ -151,7 +151,7 @@ static dg_image_entry_t *imaging_read(dg_runtime_t *d, uint32_t member) {
       if (stage->owner == d && stage->stage && stage->revision == d->visual_revision) { stage->step = d->values->steps; return stage; }
   }
   const dg_member_t *m = member ? dg_member(d, member) : NULL;
-  if (p && (p->changed || !m || m->type != 3 || p->revision == d->visual_revision)) {
+  if (p && (p->changed || !m || (m->type != 3 && m->type != 7) || p->revision == d->visual_revision)) {
     p->step = d->values->steps; return p;
   }
   dg_pixel_image_t image = {0};

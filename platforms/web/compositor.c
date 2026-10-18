@@ -3,6 +3,8 @@
 #include "bitmap_tiles.h"
 #include "ink.h"
 #include "film_render.h"
+#include "film_bounds.h"
+#include "image_plan.h"
 #include "flash_render.h"
 #include "shape.h"
 #include <stdio.h>
@@ -11,6 +13,10 @@
 #endif
 #include <stdlib.h>
 #include <string.h>
+#include "compositor_cache.h"
+#include "compositor_film.h"
+
+static uint32_t *target(wc_t *c) { return c->target ? c->target : c->pixels; }
 
 static inline uint32_t rgba(unsigned r, unsigned g, unsigned b, unsigned a) {
   return (uint32_t)r | (uint32_t)g << 8 | (uint32_t)b << 16 | (uint32_t)a << 24;
@@ -106,6 +112,11 @@ static void evict(wc_t *c, wc_image_t *image) {
 }
 void wc_release(wc_t *c) {
 #if DG_D10
+  for (unsigned i=0;i<8;i++) { free(c->film_scratch[i]); c->film_scratch[i]=NULL; }
+  c->target=NULL; c->film_depth=0;
+#endif
+  while (c->planes) plane_evict(c, c->planes);
+#if DG_D10
   free(c->stage_snapshot.pixels);
   memset(&c->stage_snapshot, 0, sizeof(c->stage_snapshot));
   c->snapshot_member = 0;
@@ -122,15 +133,24 @@ void wc_release(wc_t *c) {
 // Least recently used, never an image the composite in progress has drawn.
 static bool evict_oldest(wc_t *c) {
   wc_image_t *oldest = NULL;
+  wc_cached_plane_t *derived = NULL;
+  for (wc_cached_plane_t *p = c->planes; p; p = p->next)
+    // Derived planes are consumed immediately by draw_bitmap, which cannot
+    // load another asset. They need no frame-long pin after that CPU draw.
+    if (!oldest || p->image.last < oldest->last) {
+      oldest = &p->image; derived = p;
+    }
   for (unsigned i = 0; i < WC_IMAGE_SLOTS; i++) {
     wc_image_t *image = &c->images[i];
     if (image->pixels && image->last != c->serial &&
-        (!oldest || image->last < oldest->last))
-      oldest = image;
+        (!oldest || image->last < oldest->last)) {
+      oldest = image; derived = NULL;
+    }
   }
   if (!oldest)
     return false;
-  evict(c, oldest);
+  if (derived) plane_evict(c, derived);
+  else evict(c, oldest);
   return true;
 }
 
@@ -216,6 +236,9 @@ const wc_image_t *wc_image(wc_t *c, lv_runtime_t *values, const char *asset,
     lv_fail(values, "image cache handles exhausted");
     return NULL;
   }
+  // The base-image budget is a soft target: assets used by this render stay
+  // pinned until it completes. Preserve that working-set policy when every
+  // remaining image is pinned; optional derived planes never over-admit.
   if (!data) {
     data = read_image(c, asset, &length);
     if (!data) {
@@ -231,6 +254,8 @@ const wc_image_t *wc_image(wc_t *c, lv_runtime_t *values, const char *asset,
   bool rgb555 = ok && memcmp(data, "FDI2", 4);
   bool rich_text = ok && dg_fdi_rich_text(data);
   bool palette_brush = ok && dg_fdi_palette_brush(data);
+  unsigned cover_l=0, cover_t=0, cover_r=0, cover_b=0;
+  bool planned = ok && dg_image_coverage_hint(data, length, ink, follow, &cover_l, &cover_t, &cover_r, &cover_b);
   free(data);
   if (!ok) {
 #ifdef DIRECTOR64_DEV_LENIENT
@@ -256,7 +281,8 @@ const wc_image_t *wc_image(wc_t *c, lv_runtime_t *values, const char *asset,
   image->last = c->serial;
   image->reg_x = reg_x;
   image->reg_y = reg_y;
-  image_coverage(image);
+  if (planned) { image->cover_l=cover_l; image->cover_t=cover_t; image->cover_r=cover_r; image->cover_b=cover_b; }
+  else image_coverage(image);
   c->image_bytes += bytes;
   c->loads++;
   return image;
@@ -334,25 +360,32 @@ static void apply_mask(wc_t *c, dg_runtime_t *d, const dg_member_t *member, cons
 #endif
   // Authored masks can differ by a pixel from their image; sampling clamps
   // over the overlap, like the original.
+  unsigned full_width = image->source_width ? image->source_width : image->width;
+  unsigned full_height = image->source_height ? image->source_height : image->height;
   for (unsigned y = 0; y < image->height; y++) {
-    unsigned my = y < height ? y : height - 1;
-    int ay = trimmed ? (int)(y * member->height / image->height) - offset_y : 0;
-    if (trimmed && (ay < 0 || ay >= (int)mask->height)) {
+    int64_t py = (int64_t)y + (image->source_height ? image->source_y : 0);
+    unsigned my = py >= 0 && py < height ? (unsigned)py : height - 1;
+    // Preserve both original integer sampling stages: full-plane pixel to
+    // authored member coordinate, then authored mask coordinate to texel.
+    // Combining the divisions changes phase for nonintegral prescaling.
+    int64_t ay = py * member->height / full_height - offset_y;
+    if (trimmed && (ay < 0 || ay >= mask->height)) {
       for (unsigned x = 0; x < image->width; x++)
         image->pixels[(size_t)y * image->width + x] &= 0x00ffffffu;
       continue;
     }
     if (trimmed)
-      my = (unsigned)ay * height / mask->height;
+      my = (unsigned)(ay * height / mask->height);
     for (unsigned x = 0; x < image->width; x++) {
-      unsigned mx = x < width ? x : width - 1;
+      int64_t px = (int64_t)x + (image->source_width ? image->source_x : 0);
+      unsigned mx = px >= 0 && px < width ? (unsigned)px : width - 1;
       if (trimmed) {
-        int ax = (int)(x * member->width / image->width) - offset_x;
-        if (ax < 0 || ax >= (int)mask->width) {
+        int64_t ax = px * member->width / full_width - offset_x;
+        if (ax < 0 || ax >= mask->width) {
           image->pixels[(size_t)y * image->width + x] &= 0x00ffffffu;
           continue;
         }
-        mx = (unsigned)ax * width / mask->width;
+        mx = (unsigned)(ax * width / mask->width);
       }
       uint32_t mask_pixel = mask_pixels[(size_t)my * width + mx];
       uint32_t *pixel = &image->pixels[(size_t)y * image->width + x];
@@ -361,6 +394,48 @@ static void apply_mask(wc_t *c, dg_runtime_t *d, const dg_member_t *member, cons
     }
   }
   image_coverage(image);
+}
+
+typedef struct {
+  char source[40], mask[40];
+  unsigned width, height, source_width, source_height;
+  int source_x, source_y;
+  uint16_t member_width, member_height, mask_width, mask_height;
+  int16_t member_x, member_y, mask_x, mask_y;
+  bool follow_alpha;
+} wc_mask_key_t;
+
+static const wc_image_t *masked_image(wc_t *c, dg_runtime_t *d, const dg_member_t *member,
+    const dg_member_t *mask, const wc_image_t *source, wc_image_t *temporary) {
+  wc_mask_key_t key = {0};
+  bool cacheable = source->name[0] && !source->palette_brush && mask->asset &&
+      strlen(mask->asset) < sizeof(key.mask) && !dg_member_image(d, mask->id);
+  if (cacheable) {
+    memcpy(key.source, source->name, sizeof(key.source));
+    memcpy(key.mask, mask->asset, strlen(mask->asset) + 1);
+    key.width=source->width; key.height=source->height;
+    key.source_width=source->source_width; key.source_height=source->source_height;
+    key.source_x=source->source_x; key.source_y=source->source_y;
+    key.member_width=member->width; key.member_height=member->height;
+    key.mask_width=mask->width; key.mask_height=mask->height;
+    key.member_x=member->reg_x; key.member_y=member->reg_y;
+    key.mask_x=mask->reg_x; key.mask_y=mask->reg_y;
+    key.follow_alpha=source->follow_alpha;
+    const wc_image_t *cached = plane_find(c, 1, &key, sizeof(key));
+    if (cached) return cached;
+  }
+  *temporary = *source;
+  temporary->pixels = malloc((size_t)source->width * source->height * sizeof(*source->pixels));
+  if (!temporary->pixels) { lv_fail(d->values, "mask image allocation"); return NULL; }
+  memcpy(temporary->pixels, source->pixels,
+         (size_t)source->width * source->height * sizeof(*source->pixels));
+  apply_mask(c, d, member, mask, temporary);
+  if (d->values->failed) return temporary;
+  if (cacheable) {
+    const wc_image_t *cached = plane_keep(c, 1, &key, sizeof(key), 0, temporary);
+    if (cached) { temporary->pixels = NULL; return cached; }
+  }
+  return temporary;
 }
 #endif
 
@@ -376,7 +451,7 @@ static void fill(wc_t *c, int l, int t, int r, int b, uint32_t color) {
   if (b > WC_HEIGHT) b = WC_HEIGHT;
   for (int y = t; y < b; y++)
     for (int x = l; x < r; x++)
-      c->pixels[y * WC_WIDTH + x] = color;
+      target(c)[y * WC_WIDTH + x] = color;
 }
 #if DG_MODERN
 // Director's inks that combine the source with the stage per pixel, as
@@ -427,8 +502,11 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
 #endif
   int cl = l < 0 ? 0 : l, ct = t < 0 ? 0 : t;
   int cr = r > WC_WIDTH ? WC_WIDTH : r, cb = b > WC_HEIGHT ? WC_HEIGHT : b;
-  unsigned w = image->width, h = image->height;
-  unsigned stride = image->stride ? image->stride : w;
+  unsigned w = image->source_width ? image->source_width : image->width;
+  unsigned h = image->source_height ? image->source_height : image->height;
+  unsigned stride = image->stride ? image->stride : image->width;
+  int source_x = image->source_width ? image->source_x : 0;
+  int source_y = image->source_height ? image->source_y : 0;
   int64_t span_x = (int64_t)r - l, span_y = (int64_t)b - t;
 #if DG_MODERN
   bool plain = !transformed && !arithmetic_ink(ink) && ink != 36;
@@ -453,8 +531,9 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
       unsigned sx = (unsigned)(((int64_t)(x - l) * 2 + 1) * w / (span_x * 2));
       if (sx >= w)
         sx = w - 1;
-      columns[x] = sx;
-      if (sx >= image->cover_l && sx < image->cover_r) {
+      columns[x] = sx - (unsigned)source_x;
+      if ((int64_t)sx >= (int64_t)source_x + image->cover_l &&
+          (int64_t)sx < (int64_t)source_x + image->cover_r) {
         if (x < first)
           first = x;
         last = x + 1;
@@ -464,9 +543,11 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
       unsigned sy = (unsigned)(((int64_t)(y - t) * 2 + 1) * h / (span_y * 2));
       if (sy >= h)
         sy = h - 1;
-      if (sy < image->cover_t || sy >= image->cover_b)
+      if ((int64_t)sy < (int64_t)source_y + image->cover_t ||
+          (int64_t)sy >= (int64_t)source_y + image->cover_b)
         continue;
-      uint32_t *row = &c->pixels[y * WC_WIDTH];
+      sy -= (unsigned)source_y;
+      uint32_t *row = &target(c)[y * WC_WIDTH];
       const uint32_t *source = &image->pixels[(size_t)sy * stride];
       for (int x = first; x < last; x++) {
         uint32_t pixel = source[columns[x]];
@@ -482,10 +563,46 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
     }
     return;
   }
-  for (int y = ct; y < cb; y++) {
-    uint32_t *row = &c->pixels[y * WC_WIDTH];
+  // Keep the original float expression and sampling phase, but evaluate it
+  // once per column/row for ordinary axis-aligned sprites (including masks
+  // and partially blended films). Transparent cropped margins need no work.
+  unsigned columns[WC_WIDTH];
+  bool mapped = !transformed;
+#if DG_D10
+  if (image->linked_member) mapped = false;
+#endif
+  if (mapped) {
+    int first = cr, last = cl;
     for (int x = cl; x < cr; x++) {
-      float u = (float)(x - l + 0.5f) / span_x, v = (float)(y - t + 0.5f) / span_y;
+      float u = (float)(x - l + 0.5f) / span_x;
+      unsigned sx = (unsigned)(u * w);
+      if (sx >= w) sx = w - 1;
+      columns[x] = sx;
+      if ((int64_t)sx >= (int64_t)source_x + image->cover_l &&
+          (int64_t)sx < (int64_t)source_x + image->cover_r) {
+        if (x < first) first = x;
+        last = x + 1;
+      }
+    }
+    cl = first; cr = last;
+  }
+#if DG_MODERN
+  uint32_t fore = opaque_rgb(s->value.flags & 16 ? s->value.fore_rgb : dg_stage_palette(d)[s->value.fore & 255]);
+  uint32_t back = opaque_rgb(s->value.flags & 32 ? s->value.back_rgb : dg_stage_palette(d)[s->value.back & 255]);
+#endif
+  for (int y = ct; y < cb; y++) {
+    unsigned row_source = 0;
+    if (mapped) {
+      float v = (float)(y - t + 0.5f) / span_y;
+      row_source = (unsigned)(v * h);
+      if (row_source >= h) row_source = h - 1;
+      if ((int64_t)row_source < (int64_t)source_y + image->cover_t ||
+          (int64_t)row_source >= (int64_t)source_y + image->cover_b) continue;
+    }
+    uint32_t *row = &target(c)[y * WC_WIDTH];
+    for (int x = cl; x < cr; x++) {
+      unsigned sx = mapped ? columns[x] : 0, sy = row_source;
+      float u = 0, v = 0;
       if (transformed) {
         if (!dg_quad_uv(q, x + 0.5f, y + 0.5f, &u, &v))
           continue;
@@ -493,16 +610,25 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
         if (s->flip_h) u = 1 - u;
         if (s->flip_v) v = 1 - v;
 #endif
+        sx = (unsigned)(u * w); sy = (unsigned)(v * h);
       }
 #if DG_D10
-      if (image->linked_member && !dg_linked_uv(image->linked_member, s, &u, &v)) continue;
+      if (image->linked_member) {
+        if (!transformed) { u = (float)(x - l + 0.5f) / span_x; v = (float)(y - t + 0.5f) / span_y; }
+        if (!dg_linked_uv(image->linked_member, s, &u, &v)) continue;
+        sx = (unsigned)(u * w); sy = (unsigned)(v * h);
+      }
 #endif
-      unsigned sx = (unsigned)(u * w), sy = (unsigned)(v * h);
       if (sx >= w) sx = w - 1;
       if (sy >= h) sy = h - 1;
+      if ((int64_t)sx < source_x || (int64_t)sy < source_y ||
+          (int64_t)sx >= (int64_t)source_x + image->width ||
+          (int64_t)sy >= (int64_t)source_y + image->height) continue;
+      sx -= (unsigned)source_x; sy -= (unsigned)source_y;
       uint32_t pixel = image->pixels[(size_t)sy * stride + sx];
       unsigned coverage = image->coverage ? image->coverage[(size_t)sy * stride + sx]
                           : image->force_opaque ? 255 : pixel >> 24;
+      if (!coverage) continue;
 #if DG_MODERN
       if (ink == 36 && !image->rich_text) {
         uint32_t key = s->value.flags & 32 ? s->value.back_rgb
@@ -522,9 +648,7 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
           || controlled || ink == 9
 #endif
       ) {
-        uint32_t fore = s->value.flags & 16 ? s->value.fore_rgb : dg_stage_palette(d)[s->value.fore & 255];
-        uint32_t back = s->value.flags & 32 ? s->value.back_rgb : dg_stage_palette(d)[s->value.back & 255];
-        arithmetic(&row[x], pixel, ink, coverage, opacity, opaque_rgb(fore), opaque_rgb(back));
+        arithmetic(&row[x], pixel, ink, coverage, opacity, fore, back);
         continue;
       }
 #endif
@@ -664,7 +788,7 @@ static bool draw_text(wc_t *c, const char *text, const wc_text_style_t *style,
       unsigned coverage = slot->coverage[(y + scroll) * width + x];
       unsigned run = slot->runs ? slot->runs[(y + scroll) * width + x] : 0;
       if (coverage)
-        blend(&c->pixels[(t + y) * WC_WIDTH + l + x],
+        blend(&target(c)[(t + y) * WC_WIDTH + l + x],
               run && run <= run_count ? runs[run - 1].rgb : color, coverage * alpha / 255);
     }
   }
@@ -934,7 +1058,7 @@ static void draw_flash_field(wc_t *c, dg_runtime_t *d, unsigned parent,
   uint32_t *plane = malloc((size_t)width * height * sizeof(*plane));
   uint32_t *saved = malloc(sizeof(c->pixels));
   if (!plane || !saved) { free(plane); free(saved); lv_fail(d->values, "Flash field framebuffer allocation"); return; }
-  memcpy(saved, c->pixels, sizeof(c->pixels));
+  memcpy(saved, target(c), sizeof(c->pixels));
   dg_member_t local_member = *member;
   local_member.width = (uint16_t)layout.width; local_member.height = (uint16_t)layout.height;
   dg_sprite_t local_sprite = {.value = {.width = layout.width, .height = layout.height,
@@ -942,16 +1066,16 @@ static void draw_flash_field(wc_t *c, dg_runtime_t *d, unsigned parent,
       .quad = {0, 0, (float)layout.width, 0, (float)layout.width, (float)layout.height, 0, (float)layout.height}};
   for (unsigned top = 0; top < height && !d->values->failed; top += WC_HEIGHT)
     for (unsigned left = 0; left < width && !d->values->failed; left += WC_WIDTH) {
-      memset(c->pixels, 0, sizeof(c->pixels));
+      memset(target(c), 0, sizeof(c->pixels));
       draw_flash_overlays(c, d, parent, &local_sprite, &local_member,
           -dg_stage_coord((int)left), -dg_stage_coord((int)top), layer->name, true);
       unsigned rows = height - top < WC_HEIGHT ? height - top : WC_HEIGHT;
       unsigned columns = width - left < WC_WIDTH ? width - left : WC_WIDTH;
       for (unsigned y = 0; y < rows; y++)
         memcpy(plane + (size_t)(top + y) * width + left,
-               c->pixels + (size_t)y * WC_WIDTH, columns * sizeof(*plane));
+               target(c) + (size_t)y * WC_WIDTH, columns * sizeof(*plane));
     }
-  memcpy(c->pixels, saved, sizeof(c->pixels)); free(saved);
+  memcpy(target(c), saved, sizeof(c->pixels)); free(saved);
   if (!d->values->failed) {
     wc_image_t image = {.width = width, .height = height, .pixels = plane, .follow_alpha = true};
     image_coverage(&image);
@@ -985,7 +1109,7 @@ static bool wc_flash_text(void *context,dg_flash_instance_t *instance,const dg_f
   if(!dg_flash_raster_allocate(d,out,left,top,left+(int)width,top+(int)height))return false;
   uint32_t *saved=malloc(sizeof(c->pixels));
   if(!saved){free(out->pixels);out->pixels=NULL;lv_fail(d->values,"Flash text stage preservation allocation");return false;}
-  memcpy(saved,c->pixels,sizeof(c->pixels));
+  memcpy(saved,target(c),sizeof(c->pixels));
   dg_member_t member=*view.member;member.width=effective.width;member.height=effective.height;
   member.flash_fields=&effective;member.flash_field_count=1;
   dg_sprite_t sprite={.value={.type=16,.width=effective.width,.height=effective.height,.blend=100},
@@ -993,12 +1117,12 @@ static bool wc_flash_text(void *context,dg_flash_instance_t *instance,const dg_f
     .quad={0,0,effective.width,0,effective.width,effective.height,0,effective.height}};
   for(unsigned y=0;y<height&&!d->values->failed;y+=WC_HEIGHT)
     for(unsigned x=0;x<width&&!d->values->failed;x+=WC_WIDTH) {
-      memset(c->pixels,0,sizeof(c->pixels));
+      memset(target(c),0,sizeof(c->pixels));
       draw_flash_overlays(c,d,DG_SPRITES,&sprite,&member,-dg_stage_coord((int)x),-dg_stage_coord((int)y),NULL,true);
       unsigned rows=height-y<WC_HEIGHT?height-y:WC_HEIGHT,cols=width-x<WC_WIDTH?width-x:WC_WIDTH;
-      for(unsigned row=0;row<rows;row++)memcpy(out->pixels+(size_t)(y+row)*width+x,c->pixels+(size_t)row*WC_WIDTH,cols*4);
+      for(unsigned row=0;row<rows;row++)memcpy(out->pixels+(size_t)(y+row)*width+x,target(c)+(size_t)row*WC_WIDTH,cols*4);
     }
-  memcpy(c->pixels,saved,sizeof(c->pixels));free(saved);return !d->values->failed;
+  memcpy(target(c),saved,sizeof(c->pixels));free(saved);return !d->values->failed;
 }
 bool wc_flash_field_hit(wc_t *c, dg_runtime_t *d, struct dg_flash_instance *instance,
                         float x, float y) {
@@ -1046,7 +1170,7 @@ static void draw_video(wc_t *c, dg_runtime_t *owner, unsigned sprite, const dg_s
       unsigned sx = (unsigned)(u*w), sy = (unsigned)(v*h);
       if (sx >= w) sx = w-1;
       if (sy >= h) sy = h-1;
-      blend(&c->pixels[y * WC_WIDTH + x], frame[(size_t)sy * w + sx] & 0xffffffu,
+      blend(&target(c)[y * WC_WIDTH + x], frame[(size_t)sy * w + sx] & 0xffffffu,
             255 * opacity / 100);
     }
   }
@@ -1079,11 +1203,11 @@ static void draw_transformed_text(wc_t *c, dg_runtime_t *d, unsigned channel,
   if (!plane || !saved) {
     free(plane); free(saved); lv_fail(d->values, "transformed text allocation"); return;
   }
-  memcpy(saved, c->pixels, sizeof(c->pixels));
+  memcpy(saved, target(c), sizeof(c->pixels));
   flat.value.x -= left; flat.value.y -= top;
   for (unsigned y = 0; y < height && !d->values->failed; y += WC_HEIGHT)
     for (unsigned x = 0; x < width && !d->values->failed; x += WC_WIDTH) {
-      memset(c->pixels, 0, sizeof(c->pixels));
+      memset(target(c), 0, sizeof(c->pixels));
 #if DG_D10
       draw_sprite(c,d,channel,&flat,-dg_stage_coord((int)x),-dg_stage_coord((int)y));
 #else
@@ -1092,10 +1216,10 @@ static void draw_transformed_text(wc_t *c, dg_runtime_t *d, unsigned channel,
       unsigned rows = height - y < WC_HEIGHT ? height - y : WC_HEIGHT;
       unsigned columns = width - x < WC_WIDTH ? width - x : WC_WIDTH;
       for (unsigned row = 0; row < rows; row++)
-        memcpy(plane + (size_t)(y + row) * width + x, c->pixels + (size_t)row * WC_WIDTH,
+        memcpy(plane + (size_t)(y + row) * width + x, target(c) + (size_t)row * WC_WIDTH,
                columns * sizeof(*plane));
     }
-  memcpy(c->pixels, saved, sizeof(c->pixels)); free(saved);
+  memcpy(target(c), saved, sizeof(c->pixels)); free(saved);
   if (!d->values->failed) {
     unsigned opacity = dg_opacity(sprite);
     for (size_t at = 0; at < (size_t)width * height; at++)
@@ -1181,31 +1305,39 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     free(plane.pixels);return;
   }
   if (m && m->type == 2 && (m->film_frames || m->film_track_count || driven)) {
-    static unsigned nesting;
     unsigned width, height;
     dg_prescale_plane_dims(m->width, m->height, &width, &height);
-    if (!width || !height || (size_t)width * height > 16u * 1024u * 1024u || nesting >= 8) {
+    if (!width || !height || (size_t)width * height > 16u * 1024u * 1024u || c->film_depth >= 8) {
       lv_fail(values, "film loop render dimensions or nesting exceeded"); return;
     }
-    uint32_t *plane = malloc((size_t)width * height * sizeof(*plane));
-    uint32_t *saved = malloc(sizeof(c->pixels));
-    if (!plane || !saved) {
-      free(plane); free(saved); lv_fail(values, "film loop framebuffer allocation"); return;
-    }
-    memcpy(saved, c->pixels, sizeof(c->pixels));
     dg_film_frame_t driven_frame;
     bool resolve = driven || m->film_track_count;
     dg_film_layer_t *driven_layers = resolve ? dg_film_frame_resolve(d, i, s, m, &driven_frame) : NULL;
-    if (resolve && !driven_layers) { free(plane); free(saved); return; }
+    if (resolve && !driven_layers) return;
     const dg_film_frame_t *frame = resolve ? &driven_frame : &m->film_frames[dg_film_storage_pose(m, s)];
-    nesting++;
-    for (unsigned top = 0; top < height && !values->failed; top += WC_HEIGHT)
-      for (unsigned left = 0; left < width && !values->failed; left += WC_WIDTH) {
-        memset(c->pixels, 0, sizeof(c->pixels));
+    wc_film_key_t key=film_key(d,i,s,m,frame);
+    const wc_image_t *cached=key.valid ? plane_find(c,2,key.data,key.count) : NULL;
+    if (cached) {
+      draw_bitmap(c,d,s,cached,l,t,r,b,s->value.ink,opacity,ox,oy);
+      free(driven_layers); free(key.data); return;
+    }
+    dg_film_bounds_t crop=dg_film_bounds(d,i,m,frame,width,height);
+    if (!crop.width || !crop.height) { free(driven_layers); free(key.data); return; }
+    uint32_t *plane=malloc((size_t)crop.width*crop.height*sizeof(*plane));
+    if (!c->film_scratch[c->film_depth]) c->film_scratch[c->film_depth]=malloc(sizeof(c->pixels));
+    if (!plane || !c->film_scratch[c->film_depth]) {
+      free(plane); free(driven_layers); free(key.data);
+      lv_fail(values,"film loop framebuffer allocation"); return;
+    }
+    uint32_t *previous=c->target;
+    c->target=c->film_scratch[c->film_depth++];
+    for (unsigned top = 0; top < crop.height && !values->failed; top += WC_HEIGHT)
+      for (unsigned left = 0; left < crop.width && !values->failed; left += WC_WIDTH) {
+        memset(target(c), 0, sizeof(c->pixels));
         for (unsigned layer = 0; layer < frame->count && !values->failed; layer++) {
           const dg_film_layer_t *item = &frame->layers[layer];
-          int offset_x = -m->film_left - dg_stage_coord((int)left);
-          int offset_y = -m->film_top - dg_stage_coord((int)top);
+          int offset_x = -m->film_left - dg_stage_coord((int)(crop.left+left));
+          int offset_y = -m->film_top - dg_stage_coord((int)(crop.top+top));
           if (!item->value.member && item->name && *item->name &&
               (!item->asset || !*item->asset)) {
             dg_sprite_t field_parent = {.value = {.member = m->id, .type = 16,
@@ -1232,24 +1364,26 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
                           dg_opacity(&child), offset_x, offset_y);
           } else draw_sprite(c, d, DG_SPRITES, &child, offset_x, offset_y);
         }
-        unsigned rows = height - top < WC_HEIGHT ? height - top : WC_HEIGHT;
-        unsigned columns = width - left < WC_WIDTH ? width - left : WC_WIDTH;
+        unsigned rows = crop.height - top < WC_HEIGHT ? crop.height - top : WC_HEIGHT;
+        unsigned columns = crop.width - left < WC_WIDTH ? crop.width - left : WC_WIDTH;
         for (unsigned y = 0; y < rows; y++)
-          memcpy(plane + (size_t)(top + y) * width + left,
-                 c->pixels + (size_t)y * WC_WIDTH, columns * sizeof(*plane));
+          memcpy(plane + (size_t)(top + y) * crop.width + left,
+                 target(c) + (size_t)y * WC_WIDTH, columns * sizeof(*plane));
       }
-    nesting--;
-    memcpy(c->pixels, saved, sizeof(c->pixels)); free(saved);
+    c->film_depth--; c->target=previous;
     if (!values->failed) {
-      wc_image_t image = {.width = width, .height = height, .pixels = plane, .follow_alpha = true};
+      wc_image_t image = {.width = crop.width, .height = crop.height, .pixels = plane, .follow_alpha = true,
+          .source_width=width, .source_height=height, .source_x=(int)crop.left, .source_y=(int)crop.top};
       image_coverage(&image);
       if (s->value.ink == 9) {
         const dg_member_t *mask = dg_member(d, m->id + 1);
         if (mask && mask->type == 1 && mask_pair(m, mask)) apply_mask(c, d, m, mask, &image);
       }
-      draw_bitmap(c, d, s, &image, l, t, r, b, s->value.ink, opacity, ox, oy);
+      if (key.valid) cached=plane_keep(c,2,key.data,key.count,key.identity_bytes,&image);
+      draw_bitmap(c, d, s, cached ? cached : &image, l, t, r, b, s->value.ink, opacity, ox, oy);
+      if (cached) plane=NULL;
     }
-    free(plane); free(driven_layers);
+    free(plane); free(driven_layers); free(key.data);
     return;
   }
 #endif
@@ -1274,7 +1408,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     }
     uint32_t *plane = malloc(sizeof(c->pixels));
     if (!plane) { lv_fail(values, "linked movie framebuffer allocation"); return; }
-    memcpy(plane, c->pixels, sizeof(c->pixels));
+    memcpy(plane, target(c), sizeof(c->pixels));
     dg_runtime_t *child = dg_linked_begin(d, i);
     if (!child) {
       free(plane);
@@ -1286,7 +1420,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     // The temporary plane now keeps the child while the parent's stage
     // returns to the live framebuffer. Shared decoded assets stay cached.
     for (size_t p = 0; p < (size_t)WC_WIDTH * WC_HEIGHT; p++) {
-      uint32_t pixel = c->pixels[p]; c->pixels[p] = plane[p]; plane[p] = pixel;
+      uint32_t pixel = target(c)[p]; target(c)[p] = plane[p]; plane[p] = pixel;
     }
     wc_image_t image = {.width = width, .height = height, .stride = WC_WIDTH,
         .pixels = plane, .cover_r = width, .cover_b = height, .linked_member = m};
@@ -1368,16 +1502,13 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     const wc_image_t *image = wc_image(c, values, m->asset, pose ? 0 : width, pose ? 0 : height, decode_ink);
     if (!image)
       return;
+    wc_image_t cropped_pose;
     if (pose && (image->width != width || image->height != height) && width && height) {
-      int64_t span_x = (int64_t)r - l, span_y = (int64_t)b - t;
-      int pl = l + (int)((int64_t)(m->reg_x - image->reg_x) * span_x / width);
-      int pt = t + (int)((int64_t)(m->reg_y - image->reg_y) * span_y / height);
-      r = pl + (int)((int64_t)image->width * span_x / width);
-      b = pt + (int)((int64_t)image->height * span_y / height);
-      l = pl;
-      t = pt;
-      if (r <= 0 || b <= 0 || l >= WC_WIDTH || t >= WC_HEIGHT || r <= l || b <= t)
-        return;
+      cropped_pose = *image;
+      cropped_pose.source_width = width; cropped_pose.source_height = height;
+      cropped_pose.source_x = m->reg_x - image->reg_x;
+      cropped_pose.source_y = m->reg_y - image->reg_y;
+      image = &cropped_pose;
     }
 #else
     (void)pose;
@@ -1391,22 +1522,18 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
       if (!image) return;
     }
 #if DG_D10
-    wc_image_t masked_image;
-    uint32_t *masked_pixels = NULL;
+    wc_image_t masked = {0};
     if (ink == 9) {
       const dg_member_t *mask = dg_member(d, m->id + 1);
       if (mask && mask->type == 1 && mask_pair(m, mask)) {
-        masked_pixels = malloc((size_t)image->width * image->height * sizeof(*masked_pixels));
-        if (!masked_pixels) { lv_fail(values, "mask image allocation"); return; }
-        memcpy(masked_pixels, image->pixels, (size_t)image->width * image->height * sizeof(*masked_pixels));
-        masked_image = *image; masked_image.pixels = masked_pixels;
-        apply_mask(c, d, m, mask, &masked_image); image = &masked_image;
+        image = masked_image(c, d, m, mask, image, &masked);
+        if (!image) return;
       }
     }
 #endif
     draw_bitmap(c, d, s, image, l, t, r, b, ink, opacity, ox, oy);
 #if DG_D10
-    free(masked_pixels);
+    free(masked.pixels);
     draw_flash_overlays(c, d, i, s, m, ox, oy, NULL, false);
 #endif
   } else if (m && (m->type == 3 || m->type == 7)) {
@@ -1494,6 +1621,32 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
 #endif
     }
 #endif
+    if (!transformed && !tile && pattern <= 1) {
+      if (!dg_shape_ink_visible(true, s->value.ink, opacity, foreground, background)) return;
+      uint32_t channels[3][256];
+      for (unsigned component = 0; component < 3; component++)
+        for (unsigned value = 0; value < 256; value++)
+          channels[component][value] = dg_shape_ink_channel(true, value, s->value.ink,
+              opacity, foreground >> (component * 8) & 255,
+              background >> (component * 8) & 255) << (component * 8);
+      for (int y = t < 0 ? 0 : t; y < b && y < WC_HEIGHT; y++) {
+        int spans[4];
+        unsigned count = dg_shape_spans(kind, r-l, b-t, y-t, line, filled,
+                                        m && m->line_direction == 6, spans);
+        for (unsigned span = 0; span < count; span++) {
+          int left = l + spans[span*2], right = l + spans[span*2+1];
+          if (left < 0) left = 0;
+          if (right > WC_WIDTH) right = WC_WIDTH;
+          for (int x = left; x < right; x++) {
+            uint32_t *pixel = &target(c)[(size_t)y * WC_WIDTH + x], old = *pixel;
+            *pixel = (old >> 24) == 255 ? 0xff000000u | channels[0][old & 255] |
+                channels[1][old >> 8 & 255] | channels[2][old >> 16 & 255] :
+                dg_rgba_shape(old, 0, false, true, s->value.ink, opacity, foreground, background);
+          }
+        }
+      }
+      return;
+    }
     for (int y = t < 0 ? 0 : t; y < b && y < WC_HEIGHT; y++) {
       int spans[4] = {0, r - l};
       unsigned n = transformed ? 1 : dg_shape_spans(kind, r - l, b - t, y - t, line, filled,
@@ -1541,7 +1694,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
             if (!(sample >> 24) || (s->value.ink == 36 &&
                 (sample & 0xffffffu) == (background & 0xffffffu))) continue;
           } else if (!dg_shape_ink_visible(bit, s->value.ink, opacity, foreground, background)) continue;
-          uint32_t *destination = &c->pixels[y * WC_WIDTH + x];
+          uint32_t *destination = &target(c)[y * WC_WIDTH + x];
           *destination=dg_rgba_shape(*destination,sample,use_tile,bit,s->value.ink,
                                      opacity,foreground,background);
         }
@@ -1564,7 +1717,7 @@ static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy) {
     for (unsigned y = 0; y < WC_HEIGHT; y++)
       for (unsigned x = 0; x < WC_WIDTH; x++) {
         int sx = (int)x - dx, sy = (int)y - dy;
-        c->pixels[(size_t)y * WC_WIDTH + x] = sx >= 0 && sx < WC_WIDTH && sy >= 0 && sy < WC_HEIGHT
+        target(c)[(size_t)y * WC_WIDTH + x] = sx >= 0 && sx < WC_WIDTH && sy >= 0 && sy < WC_HEIGHT
             ? stage->pixels[(size_t)((unsigned)sy * stage->height / WC_HEIGHT) * stage->width +
                             (unsigned)sx * stage->width / WC_WIDTH] | 0xff000000u
             : opaque_rgb(d->stage_color);
@@ -1703,7 +1856,7 @@ static void draw_cursor(wc_t *c, dg_runtime_t *d, dg_cursor_t cursor,
       int px = at.x - bitmap->hot_x + column, py = at.y - bitmap->hot_y + row;
       uint16_t pixel = pixels[row * DG_CURSOR_SIZE + column];
       if ((pixel & 1) && px >= 0 && py >= 0 && px < WC_WIDTH && py < WC_HEIGHT)
-        c->pixels[py * WC_WIDTH + px] = from5551(pixel);
+        target(c)[py * WC_WIDTH + px] = from5551(pixel);
     }
 }
 
@@ -1752,30 +1905,33 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
   externals = externals * 31 + (d->ticks < d->alert_until);
   externals = externals * 31 + d->native_dialog;
 #endif
-  if (c->drawn && c->owner == d && c->revision == d->visual_revision &&
-      dg_cursor_equal(c->cursor, cursor) && c->pointer_count == count &&
+  bool same_scene = c->drawn && c->owner == d && c->movie == d->movie &&
+      c->revision == d->visual_revision && c->background == background &&
+      c->externals == externals;
+  if (same_scene && dg_cursor_equal(c->cursor, cursor) && c->pointer_count == count &&
       !memcmp(c->pointers, pointers, count * sizeof(*pointers)) &&
-      c->background == background && c->externals == externals)
+      !d->values->failed)
     return false;
   c->serial++;
   c->renders++;
+  if (same_scene) {
+    memcpy(target(c), c->scene, sizeof(c->pixels));
+  } else {
+    c->scene_renders++;
 #if DG_D5
   if (d->native_dialog && d->suspended_stage) {
     // The source dialog window (416x240) over the suspended stage.
     static uint32_t stage[WC_WIDTH * WC_HEIGHT];
     draw_scene(c, d->suspended_stage, 0, 0);
-    memcpy(stage, c->pixels, sizeof(stage));
+    memcpy(stage, target(c), sizeof(stage));
     draw_scene(c, d, 112, 100);
     for (int y = 0; y < WC_HEIGHT; y++)
       for (int x = 0; x < WC_WIDTH; x++)
         if (x < 112 || x >= 528 || y < 100 || y >= 340)
-          c->pixels[y * WC_WIDTH + x] = stage[y * WC_WIDTH + x];
+          target(c)[y * WC_WIDTH + x] = stage[y * WC_WIDTH + x];
   } else
 #endif
     draw_scene(c, d, 0, 0);
-#if DG_D10
-  memcpy(c->scene, c->pixels, sizeof(c->scene));
-#endif
 #if DG_D5
   if (d->ticks < d->alert_until && !d->values->failed) {
     // A recovered script alert, in the console's builtin font.
@@ -1784,10 +1940,13 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
       lv_fail(d->values,"alert text rasterization failed");
   }
 #endif
+    memcpy(c->scene, target(c), sizeof(c->scene));
+  }
   for (unsigned i = 0; i < count && !d->values->failed; i++)
     draw_cursor(c, d, cursor, pointers[i]);
   c->drawn = true;
   c->owner = d;
+  c->movie = d->movie;
   c->revision = d->visual_revision;
   c->cursor = cursor;
   memcpy(c->pointers, pointers, count * sizeof(*pointers));

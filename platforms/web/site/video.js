@@ -55,18 +55,32 @@ class Player {
     this.fed = -1; // the last chunk given to the decoder
     this.wanted = -1; // the frame the runtime's time asks for
     this.pixels = null;
-    this.decoder = new VideoDecoder({
-      output: (frame) => this.output(frame),
-      error: onError,
-    });
-    try { this.decoder.configure(this.config()); }
+    this.decoder = null;
+    this.generation = 0;
+    this.shownAt = -1;
+    try { this.openDecoder(); }
     catch (error) { this.close(); throw error; }
   }
-  output(frame) {
+  openDecoder() {
+    const generation = ++this.generation;
+    if (this.decoder && this.decoder.state !== "closed") this.decoder.close();
+    this.decoder = new VideoDecoder({
+      output: (frame) => this.output(frame, generation),
+      error: (error) => { if (generation === this.generation) this.onError(error); },
+    });
+    this.decoder.ondequeue = () => {
+      if (generation !== this.generation) return;
+      try { this.pump(); } catch (error) { this.onError(error); }
+    };
+    this.decoder.configure(this.config());
+    this.shownAt = -1;
+  }
+  output(frame, generation) {
     try {
-      // Only the frame the runtime wants is drawn; frames decoded on the way
-      // there are dropped unread.
-      if (this.wanted >= 0 && frame.timestamp === this.video.frames[this.wanted][0]) {
+      // Keep the newest decoded picture no later than the playback clock.
+      // Requiring an exact moving target starves a decoder running behind.
+      if (generation === this.generation && this.wanted >= 0 &&
+          frame.timestamp <= this.video.frames[this.wanted][0] && frame.timestamp > this.shownAt) {
         // A console stream's header leaves the size to its first frame.
         if (!this.video.width) {
           this.video.width = this.canvas.width = frame.displayWidth;
@@ -74,10 +88,16 @@ class Player {
         }
         this.context.drawImage(frame, 0, 0);
         this.pixels = this.context.getImageData(0, 0, this.video.width, this.video.height).data;
+        this.shownAt = frame.timestamp;
         this.onFrame();
       }
     } catch (error) { this.onError(error); }
-    finally { frame.close(); }
+    finally {
+      frame.close();
+      if (generation === this.generation) {
+        try { this.pump(); } catch (error) { this.onError(error); }
+      }
+    }
   }
   config() {
     const {codec, width, height} = this.video;
@@ -90,21 +110,34 @@ class Player {
   }
   seek(time600) {
     const target = frameAt(this.video.frames, Math.round(time600 * 1e6 / 600));
-    if (target < 0 || target === this.wanted || this.decoder.state === "closed") return;
+    if (this.decoder.state === "closed") return;
+    if (target < 0) {
+      this.wanted = -1;
+      if (this.pixels) { this.pixels = null; this.onFrame(); }
+      return;
+    }
+    if (target === this.wanted) { this.pump(); return; }
+    const previous = this.wanted;
     this.wanted = target;
     // Far jumps and rewinds restart from the keyframe before the target;
     // near ones decode forward from where the decoder is.
-    if (target < this.fed || target > this.fed + 30) {
+    if (target < this.fed || target > Math.max(previous, this.fed) + 30) {
       let key = target;
       while (key > 0 && !this.video.frames[key][1]) key--;
-      this.decoder.reset();
-      this.decoder.configure(this.config());
+      this.openDecoder();
+      if (this.pixels) { this.pixels = null; this.onFrame(); }
       this.fed = key - 1;
     }
-    while (this.fed < target) this.decoder.decode(this.chunk(++this.fed));
+    this.pump();
+  }
+  pump() {
+    if (this.decoder.state === "closed") return;
+    while (this.fed < this.wanted && (this.decoder.decodeQueueSize ?? 0) < 8)
+      this.decoder.decode(this.chunk(++this.fed));
   }
   close() {
-    if (this.decoder.state !== "closed") this.decoder.close();
+    this.generation++;
+    if (this.decoder && this.decoder.state !== "closed") this.decoder.close();
   }
 }
 
@@ -124,6 +157,10 @@ export class VideoPlayers {
       if (entry) this.close(sprite);
       return;
     }
+    if (entry && (entry.asset !== asset || entry.sound !== sound)) {
+      this.close(sprite);
+      entry = null;
+    }
     if (!entry) {
       const bytes = asset ? this.lookup(asset) : null;
       let player = null;
@@ -135,7 +172,7 @@ export class VideoPlayers {
           this.errors.push(`video ${asset}: ${error.message ?? error}`);
         }
       } else if (asset) this.errors.push(bytes ? "video decoding is unavailable in this browser" : `missing video ${asset}`);
-      entry = {player, sound, serial: -1, playing: false};
+      entry = {player, asset, sound, serial: -1, playing: false};
       this.players.set(sprite, entry);
     }
     try { entry.player?.seek(time600); }

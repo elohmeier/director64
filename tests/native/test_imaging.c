@@ -11,6 +11,7 @@ static const lv_movie_t code = {.name = "IMAGING.DXR"};
 static const dg_cast_t casts[] = {{.name="Internal",.file=1,.cast=1}};
 static const dg_frame_t frames[] = {{0, 0}};
 static uint32_t palette[256];
+static unsigned image_reads;
 static const dg_member_t members[] = {
     {.id = DG_ID(1, 1, 1), .number = 1, .cast = 1, .type = 1,
      .width = 4, .height = 2, .name = "source"},
@@ -18,13 +19,16 @@ static const dg_member_t members[] = {
      .width = 1, .height = 1, .name = "destination"},
     {.id = DG_ID(1, 1, 3), .number = 3, .cast = 1, .type = 3,
      .width = 4, .height = 2, .name = "text", .text = "X"},
+    {.id = DG_ID(1,1,4), .number = 4, .cast = 1, .type = 7,
+     .width = 4, .height = 2, .name = "button", .text = "X"},
 };
 static const dg_movie_t movie = {
     .code = &code, .id = 1, .tempo = 30, .cast_count = 1,
-    .member_count = 3, .frame_count = 1, .casts = casts,
+    .member_count = 4, .frame_count = 1, .casts = casts,
     .members = members, .frames = frames, .palette = palette};
 static bool read_image(void *ctx, uint32_t member, dg_pixel_image_t *out) {
   (void)ctx; (void)member;
+  image_reads++;
   *out = (dg_pixel_image_t){.width = 4, .height = 2, .depth = 32,
       .pixels = malloc(8 * sizeof(uint32_t)), .use_alpha = true};
   assert(out->pixels);
@@ -155,6 +159,14 @@ int main(void) {
   assert(pixel(stage, 1, 0) == 0x010000);
   lv_t text = lv_get(&values, NULL, "picture", lv_make(LV_MEMBER, DG_ID(1, 1, 3)));
   assert(pixel(text, 1, 0) == 0x010000);
+  // Text and button images both refresh after live text mutations.
+  for(unsigned n=3;n<=4;n++) {
+    lv_t member=lv_make(LV_MEMBER,DG_ID(1,1,n));
+    (void)lv_get(&values,NULL,"image",member);unsigned reads=image_reads;
+    lv_set(&values,NULL,"text",member,lv_text(&values,"changed",false));
+    (void)lv_get(&values,NULL,"image",member);
+    assert(!values.failed&&image_reads==reads+1);
+  }
   // Direct stage painting remains available until a normal scene change.
   lv_t stage_ref = lv_make(LV_IMAGE, 0);
   setpixel(stage_ref, 1, 0, 0x123456);

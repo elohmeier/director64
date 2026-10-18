@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {AudioEngine} from "../../platforms/web/site/audio.js";
+import {AudioEngine, decodeWav, wavInfo} from "../../platforms/web/site/audio.js";
 
 class Context {
   currentTime = 0;
@@ -161,4 +161,31 @@ test("active decode failures reach the player while cancelled requests stay canc
   }
   assert.match(audio.errors[0], /broken.*bad audio header/);
   assert.equal(audio.pending[0], null);
+});
+
+test("video duration reads cached metadata without allocating decoded samples", () => {
+  const rate = 48000, frames = rate * 10, wav = Buffer.alloc(44 + frames * 4);
+  wav.write("RIFF"); wav.writeUInt32LE(wav.length - 8, 4); wav.write("WAVEfmt ", 8);
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22);
+  wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 4, 28);
+  wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34);
+  wav.write("data", 36); wav.writeUInt32LE(frames * 4, 40);
+  const {audio} = engine(); let lookups = 0, allocations = 0;
+  audio.lookup = () => { lookups++; return wav; };
+  const original = globalThis.Float32Array;
+  globalThis.Float32Array = class extends original {
+    constructor(...args) { super(...args); allocations++; }
+  };
+  try { for (let i = 0; i < 120; i++) assert.equal(audio.duration("clip"), 10); }
+  finally { globalThis.Float32Array = original; }
+  assert.equal(lookups, 1);
+  assert.equal(allocations, 0);
+  assert.equal(wavInfo(wav).frames, frames);
+  wav.writeInt16LE(-32768, 44); wav.writeInt16LE(32767, 46);
+  const decoded = decodeWav(wav);
+  assert.equal(decoded.channels[0][0], -1);
+  assert.equal(decoded.channels[1][0], 32767 / 32768);
+  audio.lookup = () => null;
+  assert.equal(audio.duration("missing"), 0);
+  assert.match(audio.errors[0], /missing sound missing/);
 });

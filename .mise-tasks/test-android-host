@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#MISE description="Check Android keyboard behavior and Java/JNI signatures"
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+for tool in javac java; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "Android host tests require JDK 11 or newer (missing $tool)" >&2
+        exit 1
+    fi
+done
+out=build/tests/android-java
+mkdir -p "$out/keys" "$out/abi" "$out/jni"
+mapfile -t stubs < <(rg --files tests/android/stubs -g '*.java')
+javac --release 11 -d "$out/keys" "${stubs[@]}" platforms/android/java/org/director64/tv/Keys.java
+java -cp "$out/keys" org.director64.tv.KeyTest
+mapfile -t stubs < <(rg --files tests/android/abi -g '*.java')
+javac --release 11 -h "$out/jni" -d "$out/abi" "${stubs[@]}" platforms/android/java/org/director64/tv/Native.java
+jdk=$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")
+"${CC:-cc}" -std=c17 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -pedantic \
+    -I"$jdk/include" -I"$jdk/include/linux" -Itests/native/android_stubs \
+    -Iruntime/director -Iruntime/lingo -Iruntime/storage -Iruntime/interaction -Iplatforms/web \
+    -include "$out/jni/org_director64_tv_Native.h" -fsyntax-only platforms/android/jni/main.c
+
+"${CC:-cc}" -std=c17 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -pedantic \
+    -I"$jdk/include" -I"$jdk/include/linux" -Itests/native/android_stubs \
+    -Iruntime/director -Iruntime/lingo -Iruntime/storage -Iruntime/interaction -Iplatforms/web \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections -pthread \
+    tests/native/test_android_main.c -o "$out/main"
+"$out/main"

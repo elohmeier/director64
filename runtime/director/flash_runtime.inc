@@ -48,7 +48,7 @@ struct dg_flash_movie {
   dg_flash_movie_t *next;
   dg_runtime_t *director;
   const dg_member_t *member;
-  unsigned sprite, count, visit, queue_first, queue_count, last_tick,
+  unsigned sprite, count, retired, visit, queue_first, queue_count, last_tick,
       pending_frame;
   dg_avm1_t *vm;
   dg_avm1_library_t *library;
@@ -122,7 +122,14 @@ static const dg_film_frame_t *flash_frame(const dg_flash_instance_t *i) {
   return frames ? &frames[i->frame % i->clip->frame_count] : NULL;
 }
 static void flash_changed(dg_flash_instance_t *i) {
-  dg_sprite_changed(i->movie->director, i->movie->sprite);
+  dg_runtime_t *d = i->movie->director;
+  dg_sprite_changed(d, i->movie->sprite);
+  // Child playheads and AVM properties do not alter the Director sprite's
+  // record. Its staged comparison therefore cannot invalidate these pixels.
+  for (; d; d = d->linked_parent) {
+    d->visual_revision++;
+    d->mouse_hit_valid = false;
+  }
 }
 static void flash_queue(dg_flash_instance_t *i,
                         const dg_flash_action_t *action) {
@@ -389,8 +396,13 @@ static void flash_remove(dg_flash_instance_t *i) {
       flash_remove(c);
   flash_actions(i, 0, 4);
   i->alive = false;
+  i->movie->retired++;
   if (i->movie->drag == i)
     i->movie->drag = NULL;
+  if (i->movie->hover == i)
+    i->movie->hover = NULL;
+  if (i->movie->pressed == i)
+    i->movie->pressed = NULL;
   flash_changed(i);
 }
 static void flash_sync_children(dg_flash_instance_t *parent) {
@@ -1357,19 +1369,53 @@ static bool flash_host_call(void *ctx, dg_avm1_t *vm, const char *name,
   }
   return false;
 }
+static void flash_instance_free(dg_flash_instance_t *i) {
+  flash_root_unlink(i->movie->director->values, &i->root);
+  free(i->name);
+  free(i->paths);
+  free(i->points);
+  free(i->owned_field);
+  free(i->owned_style);
+  free(i);
+}
+static void flash_collect(dg_flash_movie_t *m) {
+  lv_runtime_t *r = m->director->values;
+  // Collect only between complete action batches. Pending unload jobs and
+  // suspended AVM frames can still hold native instance pointers.
+  if (m->retired < 32 || m->busy || m->queue_count || r->atomic_depth)
+    return;
+  // Retired display objects must not keep themselves (or each other) alive.
+  // Trace all remaining script/VM/library roots before reclaiming their native
+  // storage. Externally held removed MovieClip objects keep their identity.
+  for (dg_flash_instance_t *i = m->instances; i; i = i->next)
+    if (!i->alive)
+      i->root.count = 0;
+  dg_flash_instance_t **at = &m->instances;
+  while (*at) {
+    dg_flash_instance_t *i = *at;
+    if (!i->alive && !lv_has_reference(r, LV_PROPLIST, lv_id(i->object))) {
+      *at = i->next;
+      m->count--;
+      m->retired--;
+      flash_instance_free(i);
+    } else {
+      if (!i->alive) {
+        i->root.count = 2;
+        // Every descendant was removed with its parent. Dead-object getters
+        // are inert, so no native link into a reclaimed ancestor is needed.
+        i->parent = NULL;
+      }
+      at = &i->next;
+    }
+  }
+}
 static void flash_movie_dispose(dg_flash_movie_t *m) {
   dg_avm1_library_dispose(m->library);
   dg_avm1_dispose(m->vm);
   dg_flash_instance_t *i = m->instances;
   while (i) {
     dg_flash_instance_t *next = i->next;
-    flash_root_unlink(m->director->values, &i->root);
-    free(i->name);
-    free(i->paths);
-    free(i->points);
-    free(i->owned_field);
-    free(i->owned_style);
-    free(i);
+    flash_instance_free(i);
     i = next;
   }
   free(m->initialized);
@@ -1517,6 +1563,7 @@ bool dg_flash_service(dg_runtime_t *d, unsigned budget) {
         m->last_tick = d->ticks;
         dg_avm1_library_service(m->library, (uint64_t)d->ticks * 1000 / 60);
       }
+      flash_collect(m);
     }
   return !d->values->failed;
 }

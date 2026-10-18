@@ -24,6 +24,7 @@ typedef struct {
   double position, rate;
   bool looping, paused;
   double paused_at, paused_total;
+  double pending_offset, pending_at;
   double requested, release_offset; // active seconds before loop release; -1 while looping
   double loop_start, loop_end; // in decoded frames
   // A start waiting for its sound to decode: the decoder's answer applies
@@ -49,7 +50,6 @@ typedef struct {
   uint64_t offset, length;
   bool looping, stream;
   uint32_t loop_start, loop_end;
-  double requested, offset_seconds;
   char name[64];
 } job_t;
 
@@ -57,7 +57,7 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
 static voice_t voices[VOICES];
 static float gains[VOICES];
-static float master = 1.0f;
+static _Atomic float master = 1.0f;
 static unsigned video_sprite[VIDEO_VOICES];
 #if DG_D10
 static uint32_t flash_ids[FLASH_VOICES];
@@ -70,6 +70,7 @@ static const pack_t *sound_pack, *stream_pack;
 static AAudioStream *stream;
 static int32_t output_rate = 48000;
 static atomic_bool disconnected, suspended;
+static double suspended_at, suspended_total; // guarded by lock
 static job_t jobs[JOBS];
 static unsigned job_count;
 static pthread_t worker;
@@ -95,6 +96,26 @@ static double now(void) {
   return (double)t.tv_sec + t.tv_nsec / 1e9;
 }
 
+// This clock advances only while the whole host is running. Decoder jobs,
+// per-channel pauses and loop releases all use the same active-time domain.
+static double active_now(void) {
+  return (atomic_load(&suspended) ? suspended_at : now()) - suspended_total;
+}
+static double pending_position(const voice_t *voice, double stamp) {
+  return voice->pending_offset + (voice->paused ? 0 : stamp - voice->pending_at) * voice->rate;
+}
+static void pause_voice(voice_t *voice, bool paused) {
+  if (voice->paused == paused) return;
+  double stamp = active_now();
+  if (voice->pending) {
+    voice->pending_offset = pending_position(voice, stamp);
+    voice->pending_at = stamp;
+  }
+  if (paused) voice->paused_at = stamp;
+  else voice->paused_total += stamp - voice->paused_at;
+  voice->paused = paused;
+}
+
 // ---- Output ----
 
 static aaudio_data_callback_result_t render(AAudioStream *s, void *user, void *data,
@@ -104,12 +125,17 @@ static aaudio_data_callback_result_t render(AAudioStream *s, void *user, void *d
   float *out = data;
   memset(out, 0, (size_t)frames * 2 * sizeof(float));
   pthread_mutex_lock(&lock);
+  if (atomic_load(&suspended)) {
+    pthread_mutex_unlock(&lock);
+    return AAUDIO_CALLBACK_RESULT_CONTINUE;
+  }
+  float level = atomic_load(&master);
   for (unsigned v = 0; v < VOICES; v++) {
     voice_t *voice = &voices[v];
     sound_t *sound = voice->sound;
     if (!sound || voice->paused)
       continue;
-    float gain = gains[v] * master;
+    float gain = gains[v] * level;
     double step = voice->rate * sound->rate / output_rate;
     double end = voice->looping ? voice->loop_end : sound->frames;
     const int16_t *pcm = sound->pcm;
@@ -171,8 +197,7 @@ static void open_output(void) {
     stream = NULL;
   } else {
     output_rate = AAudioStream_getSampleRate(stream);
-    if (!atomic_load(&suspended))
-      AAudioStream_requestStart(stream);
+    AAudioStream_requestStart(stream);
     LOG("audio output %d Hz", output_rate);
   }
   AAudioStreamBuilder_delete(builder);
@@ -194,13 +219,16 @@ void audio_poll(void) {
 }
 
 void audio_suspend(bool on) {
-  atomic_store(&suspended, on);
-  if (!stream)
-    return;
-  if (on)
-    AAudioStream_requestPause(stream);
-  else
-    AAudioStream_requestStart(stream);
+  // The callback outputs silence while held. It never advances voice
+  // positions, and no UI thread waits for an AAudio control operation.
+  pthread_mutex_lock(&lock);
+  if (atomic_load(&suspended) != on) {
+    double stamp = now();
+    if (on) suspended_at = stamp;
+    else suspended_total += stamp - suspended_at;
+    atomic_store(&suspended, on);
+  }
+  pthread_mutex_unlock(&lock);
 }
 
 // ---- Sounds ----
@@ -307,31 +335,20 @@ static void *decoder(void *arg) {
       keep(job.name, sound);
     if (sound && voices[job.voice].pending == job.token)
       start(job.voice, sound_retain(sound), job.looping, job.loop_start, job.loop_end,
-            job.offset_seconds + ((voices[job.voice].paused ? voices[job.voice].paused_at : now())
-                                  - job.requested - voices[job.voice].paused_total));
+            pending_position(&voices[job.voice], active_now()));
     sound_release(sound);
   }
   pthread_mutex_unlock(&lock);
   return NULL;
 }
 
-// Plays `entry` of `pack` on voice `v`: at once when decoded before or a
-// WAVE file, otherwise once decoded, as far in as the time it took.
+// Plays cached entries immediately; other sounds decode on the worker.
+// Their eventual position includes only active, unpaused playback time.
 static void play_entry(unsigned v, const pack_t *pack, const pack_entry_t *entry,
                        const char *name, bool stream_entry, bool looping, uint32_t loop_start,
                        uint32_t loop_end, double offset) {
   sound_t *sound = stream_entry ? NULL : cached(name);
   const uint8_t *bytes = pack_data(pack, entry);
-  if (!sound && is_wav(bytes, entry->length)) {
-    sound = decode_wav(bytes, entry->length);
-    if (sound && !stream_entry)
-      keep(name, sound);
-    if (!sound) {
-      LOG("malformed sound %s", name);
-      fail("malformed sound", name);
-      return;
-    }
-  }
   if (sound) {
     start(v, sound, looping, loop_start, loop_end, offset);
     return;
@@ -342,19 +359,22 @@ static void play_entry(unsigned v, const pack_t *pack, const pack_entry_t *entry
   }
   unsigned token = ++tokens ? tokens : ++tokens;
   voices[v].pending = token;
-  voices[v].requested = now();
+  voices[v].requested = active_now();
+  voices[v].pending_at = voices[v].requested;
+  voices[v].pending_offset = offset;
   job_t *job = &jobs[job_count++];
   *job = (job_t){.voice = v, .token = token, .bytes = bytes, .offset = pack->base + entry->offset,
                  .length = entry->length, .looping = looping, .stream = stream_entry,
-                 .loop_start = loop_start, .loop_end = loop_end, .requested = voices[v].requested,
-                 .offset_seconds = offset};
+                 .loop_start = loop_start, .loop_end = loop_end};
   snprintf(job->name, sizeof(job->name), "%s", name);
   pthread_cond_signal(&wake);
 }
 
 void audio_init(const pack_t *sounds, const pack_t *streams) {
+  pthread_mutex_lock(&lock);
   failure[0] = 0;
   atomic_store(&suspended, false);
+  suspended_at = suspended_total = 0;
   atomic_store(&disconnected, false);
   sound_pack = sounds;
   stream_pack = streams;
@@ -365,6 +385,7 @@ void audio_init(const pack_t *sounds, const pack_t *streams) {
   stopping = false;
   worker_running = pthread_create(&worker, NULL, decoder, NULL) == 0;
   if (!worker_running) fail("could not start audio decoder", "worker");
+  pthread_mutex_unlock(&lock);
   open_output();
 }
 
@@ -431,13 +452,7 @@ void audio_pause(unsigned channel, bool paused) {
     return;
   pthread_mutex_lock(&lock);
   voice_t *voice = &voices[channel];
-  if (voice->paused != paused && (voice->sound || voice->pending)) {
-    if (paused)
-      voice->paused_at = now();
-    else
-      voice->paused_total += now() - voice->paused_at;
-    voice->paused = paused;
-  }
+  if (voice->sound || voice->pending) pause_voice(voice, paused);
   pthread_mutex_unlock(&lock);
 }
 
@@ -453,7 +468,7 @@ void audio_break_loop(unsigned channel) {
   pthread_mutex_lock(&lock);
   voice_t *voice = &voices[channel];
   if (voice->pending && voice->release_offset < 0)
-    voice->release_offset = fmax(0, (voice->paused ? voice->paused_at : now()) - voice->requested - voice->paused_total);
+    voice->release_offset = fmax(0, (voice->paused ? voice->paused_at : active_now()) - voice->requested - voice->paused_total);
   if (voice->sound && voice->looping) {
     if (voice->position >= voice->loop_end && voice->loop_end > voice->loop_start)
       voice->position = voice->loop_start + fmod(voice->position - voice->loop_start, voice->loop_end - voice->loop_start);
@@ -463,11 +478,12 @@ void audio_break_loop(unsigned channel) {
 }
 
 void audio_gain(unsigned channel, float gain) {
-  if (channel < CHANNELS)
-    gains[channel] = gain;
+  pthread_mutex_lock(&lock);
+  if (channel < CHANNELS) gains[channel] = gain;
+  pthread_mutex_unlock(&lock);
 }
 
-void audio_volume(float volume) { master = volume; }
+void audio_volume(float volume) { atomic_store(&master, volume); }
 
 void audio_stop_all(void) {
   pthread_mutex_lock(&lock);
@@ -516,6 +532,11 @@ void audio_video_rate(unsigned sprite, double rate, float gain) {
   pthread_mutex_lock(&lock);
   int v = video_voice(sprite, false);
   if (v >= 0) {
+    if (voices[v].pending) {
+      double stamp = active_now();
+      voices[v].pending_offset = pending_position(&voices[v], stamp);
+      voices[v].pending_at = stamp;
+    }
     voices[v].rate = rate > 0 ? rate : 1.0;
     gains[v] = gain;
   }
@@ -560,12 +581,7 @@ void audio_flash_update(uint32_t id,const dg_flash_audio_t *request) {
         (double)request->position/request->sound->rate);
   }
   gains[index]=request->gain;
-  if(voice->paused!=request->paused) {
-    double stamp=now();
-    if(request->paused)voice->paused_at=stamp;
-    else voice->paused_total+=stamp-voice->paused_at;
-    voice->paused=request->paused;
-  }
+  pause_voice(voice, request->paused);
   pthread_mutex_unlock(&lock);
 }
 #endif

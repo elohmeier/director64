@@ -37,6 +37,23 @@ day 5 (Not Transparent ink) playing. Lernerfolg's scene covers were checked in
 the emulator; its masked helper characters still need projector confirmation.
 The diagnostics line in the menu shows ticks, redraws and dropped time.
 
+The worker also logs `DIRECTOR64 ANDROID_PACING` once per active second,
+including service delivery, redraws, separate service/render/presentation costs,
+dropped time and script alerts. Menu and lifecycle holds reset the measurement
+window. Capture the `director64` logcat tag during the scenario, then run:
+
+```sh
+uv run --locked python -m director64.android_pacing build/android-pacing.log
+```
+
+This exits unsuccessfully for incomplete or malformed measurements, script
+alerts, or three consecutive windows below 95% of 60 Hz service. Ten usable
+windows are required by default; a longer run and scene-specific checks remain
+necessary. An idle scene can correctly have zero redraws. The pacing gate
+cannot prove visual correctness, input responsiveness or absence of Android
+ANRs; check those during the device run as well. Device performance is a
+separate qualification step from compiling or installing an APK.
+
 Strict fresh export currently rejects Löwenzahn 7's damaged MP2 stream and
 Optik's damaged MPEG program stream; see [video.md](video.md). Existing installed
 copies are retained when a rebuild fails. A successful install and matching APK

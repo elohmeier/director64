@@ -67,4 +67,6 @@ void web_runtime_host(web_host_t);
 // Release the running engine and package while host services/assets are alive.
 // Idempotent; a new host and package can then be installed in the same process.
 void d64_shutdown(void);
+// Engine event slots available to a single-owner input producer.
+unsigned d64_key_capacity(void);
 #endif

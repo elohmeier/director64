@@ -31,6 +31,12 @@ static const dg_film_frame_t ended_parent={1,&ended_child};
 static const dg_film_layer_t animated_grandchild={.channel=1,
  .value={.member=ID(6),.type=16,.blend=100}};
 static const dg_film_frame_t animated_grandparent={1,&animated_grandchild};
+static const dg_film_frame_t held_frames[]={{1,&moving_layers[0]},{1,&moving_layers[0]},{1,&moving_layers[1]}};
+static const uint32_t held_sounds[]={ID(10),0, ID(11),0, ID(10),0};
+static const char *const baked_assets[]={"pose-a","pose-b"};
+static const dg_film_layer_t baked_child={.channel=1,
+ .value={.member=ID(12),.type=16,.blend=100}};
+static const dg_film_frame_t baked_parent={1,&baked_child};
 static const dg_member_t members[]={
   {.id=ID(1),.number=1,.cast=1,.type=2,.width=8,.height=8,.film_count=4,.film_loop=1,
    .film_track_count=1,.film_tracks=&track},
@@ -47,6 +53,14 @@ static const dg_member_t members[]={
    .film_frames=&ended_parent},
   {.id=ID(8),.number=8,.cast=1,.type=2,.width=8,.height=8,.film_count=1,
    .film_frames=&animated_grandparent},
+  {.id=ID(9),.number=9,.cast=1,.type=2,.width=8,.height=8,.film_count=3,.film_loop=1,
+   .film_frames=held_frames,.film_flags=8,.film_sounds=held_sounds},
+  {.id=ID(10),.number=10,.cast=1,.type=6,.samples=60,.rate=60},
+  {.id=ID(11),.number=11,.cast=1,.type=6,.samples=60,.rate=60},
+  {.id=ID(12),.number=12,.cast=1,.type=2,.width=8,.height=8,.film_count=2,.film_loop=1,
+   .film_assets=baked_assets},
+  {.id=ID(13),.number=13,.cast=1,.type=2,.width=8,.height=8,.film_count=1,
+   .film_frames=&baked_parent},
 };
 static const dg_movie_t movie={.id=1,.code=&code,.cast_count=1,.casts=&cast,
  .member_count=sizeof(members)/sizeof(members[0]),.members=members,.frame_count=1,.frames=&score};
@@ -157,6 +171,53 @@ static void test_visual_revision(lv_t root,lv_t other) {
   assert(dg_film_frame(&d,root,false)==1&&dg_film_frame(&d,child,false)==1);
   assert(dg_film_frame(&d,grand,false)!=pose&&d.visual_revision>revision);
 }
+static void test_effective_visual_state(lv_t root) {
+  lv_set(&r,NULL,"member",root,lv_make(LV_MEMBER,ID(9)));
+  uint32_t instance,visual;
+  assert(dg_film_visual_state(&d,1,&d.sprites[1],&members[8],&instance,&visual));
+  assert(dg_film_frame(&d,root,false)==1); // Preparing a key does not present.
+  call("updatestage",0,NULL);
+  unsigned revision=d.visual_revision;
+  uint32_t original_instance=instance,original_visual=visual;
+  unsigned pose,source;
+  assert(dg_film_sound(&d,1,0,&pose,&source)==ID(10)&&pose==0);
+  dg_films_present(&d,true);dg_update_stage(&d);
+  assert(dg_film_frame(&d,root,false)==2&&d.visual_revision==revision);
+  assert(dg_film_sound(&d,1,0,&pose,&source)==ID(11)&&pose==1);
+  assert(dg_film_visual_state(&d,1,&d.sprites[1],&members[8],&instance,&visual));
+  assert(instance==original_instance&&visual==original_visual);
+  lv_t child=dg_film_tell(&d,root,1);
+  // Repeated authored assignments establish an override but do not dirty
+  // identical pixels, including the otherwise ignored unstretched width.
+  for(unsigned i=0;i<5;i++) {
+    lv_set(&r,NULL,"member",child,lv_make(LV_MEMBER,ID(2)));
+    lv_set(&r,NULL,"loc",child,lv_point(&r,0,0));
+    lv_set(&r,NULL,"blend",child,lv_num(100));
+    dg_update_stage(&d);
+    assert(!r.failed&&d.visual_revision==revision);
+  }
+  // The authored third pose moves, but its location is now overridden.
+  dg_films_present(&d,true);dg_update_stage(&d);
+  assert(dg_film_frame(&d,root,false)==3&&d.visual_revision==revision);
+  assert(dg_film_sound(&d,1,0,&pose,&source)==ID(10)&&pose==2);
+  lv_set(&r,NULL,"puppet",child,lv_num(0));dg_update_stage(&d);
+  assert(d.visual_revision>revision&&lv_integer(&r,lv_get(&r,NULL,"loch",child))==1);
+  assert(dg_film_visual_state(&d,1,&d.sprites[1],&members[8],&instance,&visual));
+  assert(instance==original_instance&&visual!=original_visual);
+  lv_set(&r,NULL,"member",root,lv_make(LV_MEMBER,ID(2)));
+  lv_set(&r,NULL,"member",root,lv_make(LV_MEMBER,ID(9)));
+  assert(dg_film_visual_state(&d,1,&d.sprites[1],&members[8],&instance,&visual));
+  assert(instance!=original_instance);
+  // Legacy raster-only child poses remain visual dependencies even though
+  // they have no retained track/layer subtree to compare.
+  lv_set(&r,NULL,"member",root,lv_make(LV_MEMBER,ID(13)));
+  call("updatestage",0,NULL);
+  assert(dg_film_visual_state(&d,1,&d.sprites[1],&members[12],&instance,&visual));
+  original_visual=visual;revision=d.visual_revision;
+  dg_films_present(&d,true);dg_update_stage(&d);
+  assert(dg_film_visual_state(&d,1,&d.sprites[1],&members[12],&instance,&visual));
+  assert(visual!=original_visual&&d.visual_revision>revision);
+}
 int main(void) {
   dg_init(&d,&r,(dg_platform_t){0},NULL,NULL,0,1);assert(dg_enter(&d,&movie,1,NULL,0));
   lv_t root=lv_make(LV_SPRITE,1),other=lv_make(LV_SPRITE,2);
@@ -223,6 +284,7 @@ int main(void) {
       owned[1].value.member==ID(2));
   free(owned);assert(!r.failed);
   test_visual_revision(root,other);
+  test_effective_visual_state(root);
   dg_films_dispose(&d);
   puts("native film playback: temporal recursion, clocks, seek, lifetime and subtree cache invalidation passed");
 }

@@ -22,6 +22,18 @@ done
 compile lingo tests/native/test_lingo.c runtime/lingo/lingo_runtime.c
 compile audio_release tests/native/test_audio_release.c
 compile android_decode -Itests/native/android_stubs tests/native/test_android_decode.c
+compile android_input tests/native/test_android_input.c
+for profile in d10 d85; do
+    options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$profile" = d85 ]; then options+=(-DDIRECTOR64_D85=1); fi
+    compile "android_key_queue_$profile" "${options[@]}" tests/native/test_android_key_queue.c \
+        runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
+for host in video mixer; do
+    compile "android_$host" -DDIRECTOR64_DIRECTOR_VERSION=5 -Iplatforms/web \
+        -Itests/native/android_stubs -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -pthread "tests/native/test_android_$host.c"
+done
 for profile in d5 d10 d85; do
     options=(-DDIRECTOR64_PACKAGE -DDIRECTOR64_NATIVE_STAGE=1)
     if [ "$profile" = d5 ]; then
@@ -35,6 +47,8 @@ for profile in d5 d10 d85; do
         runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c runtime/package/package.c
 done
 compile n64_movie_names tests/native/test_n64_movie_names.c
+compile web_mask_phase_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 -Iplatforms/web \
+    tests/native/test_web_mask_phase.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
 for profile in d10 d85; do
     options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
     if [ "$profile" = d85 ]; then options+=(-DDIRECTOR64_D85=1); fi
@@ -82,6 +96,7 @@ compile shape tests/native/test_shape.c runtime/director/shape.c
 compile audio tests/native/test_audio_bounds.c
 compile bitmap_tiles tests/native/test_bitmap_tiles.c
 compile image_alpha tests/native/test_image_alpha.c
+compile image_plan tests/native/test_image_plan.c
 compile mpeg_decoder -Wno-unused-parameter tests/native/test_mpeg_decoder.c
 compile ink_projector -DDIRECTOR64_DIRECTOR_VERSION=10 tests/native/test_ink_projector.c
 compile rich_text_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
@@ -156,7 +171,7 @@ done
 for profile in d10 d85; do
     options=(-DDIRECTOR64_NATIVE_STAGE=1 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
     if [ "$profile" = d85 ]; then options+=(-DDIRECTOR64_D85=1); fi
-    for test in avm1 avm1_original avm1_native flash_instances flash_masks film_children film_playback flash_bridge cursor_xtra; do
+    for test in avm1 avm1_original avm1_native flash_instances flash_masks flash_lifetime film_children film_playback flash_bridge cursor_xtra; do
         compile "${test}_$profile" "${options[@]}" -Ibuild/tests "tests/native/test_$test.c" \
             runtime/director/director.c runtime/lingo/lingo_runtime.c
     done
@@ -168,8 +183,14 @@ for profile in d10 d85; do
     compile "web_film_frames_$profile" "${options[@]}" -Iplatforms/web \
         tests/native/test_web_film_frames.c platforms/web/compositor.c \
         runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+    compile "web_render_cache_$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_web_render_cache.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
     compile "web_flash_text_hit_$profile" "${options[@]}" -Iplatforms/web \
         tests/native/test_web_flash_text_hit.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+    compile "web_flash_cache_$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_web_flash_cache.c platforms/web/compositor.c \
         runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
     compile "web_cursor_color_$profile" "${options[@]}" -Iplatforms/web \
         tests/native/test_web_cursor_color.c platforms/web/compositor.c \

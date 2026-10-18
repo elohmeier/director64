@@ -28,12 +28,12 @@ final class Native {
   /** A key as a desktop projector receives it: Macintosh key code and character. */
   static native void key(int code, int character, boolean down);
 
-  static native boolean commitText(byte[] windows1252);
+  static native boolean commitText(int request, byte[] windows1252);
 
-  static native void cancelText();
+  static native void cancelText(int request);
 
   /** A character typed into a key field (Mucklas' name) as the game's key presses; 8 deletes. */
-  static native void typeKey(int character);
+  static native void typeKey(int request, int character);
 
   static native void volume(float level);
 

@@ -4,7 +4,7 @@
 // durable in the origin-private file system.
 import {AudioEngine} from "./audio.js";
 import {PORTS} from "./gamepad.js";
-import {OnScreenKeyboard} from "./keyboard.js";
+import {KeyEvents, OnScreenKeyboard} from "./keyboard.js";
 import {FLASH_BYTES, SaveStore, plausibleFlash} from "./saves.js";
 import {Presenter, WakeLock} from "./screen.js";
 import {t} from "./strings.js";
@@ -481,7 +481,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   // its position and the character the layout types (dg_key). Key codes
   // follow the physical key, as on a Mac; the runtime ignores them in
   // families without keyboard events.
-  const held = new Map();
+  const keys = new KeyEvents(module);
   function character(event) {
     const special = {Enter: 13, Backspace: 8, Tab: 9, Escape: 27, ArrowLeft: 28, ArrowRight: 29,
       ArrowUp: 30, ArrowDown: 31, Delete: 127};
@@ -489,23 +489,16 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     return event.key.length === 1 && event.key.charCodeAt(0) <= 255 ? event.key.charCodeAt(0) : 0;
   }
   function forward(event, down) {
-    if (!running || holds.size || entry.sprite || event.ctrlKey || event.metaKey || event.altKey) return;
-    if (event.target instanceof HTMLInputElement || event.target.closest?.("dialog, .menu-panel")) return;
     const code = MAC_KEYS[event.code];
     if (code === undefined) return;
-    event.preventDefault(); // arrows and space would scroll the page
-    if (down) {
-      if (event.repeat || held.has(code)) return;
-      held.set(code, character(event));
-      module._d64_key(code, held.get(code), 1);
-    } else if (held.has(code)) {
-      module._d64_key(code, held.get(code), 0);
-      held.delete(code);
-    }
+    const allowed = running && !holds.size && !entry.sprite &&
+      !event.ctrlKey && !event.metaKey && !event.altKey &&
+      !(event.target instanceof HTMLInputElement) && !event.target.closest?.("dialog, .menu-panel");
+    if (keys.forward(code, character(event), down, allowed))
+      event.preventDefault(); // arrows and space would scroll the page
   }
   function releaseKeys() {
-    for (const [code, char] of held) module._d64_key(code, char, 0);
-    held.clear();
+    keys.releaseAll();
   }
   window.addEventListener("keydown", (event) => forward(event, true));
   window.addEventListener("keyup", (event) => forward(event, false));
@@ -607,6 +600,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     if (!running) return;
     if (audio.errors.length) return stop(1, audio.errors[0]);
     if (videos.errors.length) return stop(1, videos.errors[0]);
+    if (keys.error) return stop(1, keys.error);
     const state = pads.poll(now);
     if (state.actions.length) unlockAudio();
     if (!capturesPads() && !holds.size && !entry.sprite) {
@@ -630,6 +624,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
       const owed = Math.min(MAX_STEPS, Math.floor(phase / 1e6));
       phase -= owed * 1e6;
       for (let i = 0; i < owed; i++) {
+        keys.drain();
         let status;
         if (injected.length) {
           status = module._d64_step(mouse.x, mouse.y, injected.shift());

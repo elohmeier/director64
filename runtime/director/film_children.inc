@@ -14,11 +14,19 @@ typedef struct {
   uint16_t key, frame, pose;
 } film_cursor_t;
 typedef struct {
+  dg_film_layer_t layer;
+  uint32_t generation, revision;
+} film_visual_t;
+typedef struct {
   uint32_t member, generation;
+  uint32_t visual_revision, staged_revision;
   uint16_t parent, channel, root, pose;
   bool presented, paused;
   film_cursor_t *cursors;
   unsigned cursor_count;
+  film_visual_t *visuals;
+  unsigned visual_count, visual_capacity;
+  bool visual_valid;
 } film_node_t;
 struct dg_film_playback {
   film_node_t nodes[FILM_NODE_LIMIT];
@@ -43,6 +51,12 @@ static uint32_t film_parent_member(dg_runtime_t *d, unsigned parent) {
 }
 static bool film_sync_node(dg_runtime_t *, unsigned, bool, unsigned);
 static film_node_t *film_root(dg_runtime_t *, unsigned);
+static void film_visual_touch(dg_runtime_t *d,film_node_t *node) {
+  while(node) {
+    node->visual_revision++;
+    node=film_node(d,node->parent);
+  }
+}
 static void film_visual_changed(dg_runtime_t *d,unsigned root) {
   dg_sprite_changed(d,root);
   // Root sprite comparison cannot see independent descendant playheads or
@@ -189,6 +203,83 @@ bool dg_film_child_layer(dg_runtime_t *d, unsigned parent, unsigned channel, dg_
   }
   return true;
 }
+static bool film_layer_visible(const dg_film_layer_t *layer) {
+  const dg_spec_t *v=&layer->value;
+  dg_sprite_t sprite={.value=*v};
+  return v->type&&dg_opacity(&sprite)&&
+      (v->member||v->type<16||(layer->asset&&*layer->asset)||(layer->name&&*layer->name));
+}
+static bool film_string_equal(const char *a,const char *b) {
+  return a==b||!strcmp(a?a:"",b?b:"");
+}
+static bool film_visual_equal(const dg_film_layer_t *a,const dg_film_layer_t *b) {
+  const dg_spec_t *x=&a->value,*y=&b->value;
+  bool visible=film_layer_visible(a);
+  if(visible!=film_layer_visible(b))return false;
+  if(!visible)return true;
+  dg_sprite_t sx={.value=*x},sy={.value=*y};
+  // Explicit fields avoid C structure padding and exclude score-only data.
+#define SAME(field) (x->field==y->field)
+  if(!(SAME(member)&&SAME(x)&&SAME(y)&&SAME(ink)&&SAME(type)&&SAME(flags)&&
+       SAME(fore)&&SAME(back)&&SAME(stretch)&&SAME(rotation)&&SAME(skew)))return false;
+  if(x->stretch&&!(SAME(width)&&SAME(height)))return false;
+#undef SAME
+  if(dg_opacity(&sx)!=dg_opacity(&sy)||(x->thickness&15)!=(y->thickness&15))return false;
+  if((x->flags&16)&&x->fore_rgb!=y->fore_rgb)return false;
+  if((x->flags&32)&&x->back_rgb!=y->back_rgb)return false;
+  return a->channel==b->channel&&a->film_frame==b->film_frame&&
+      film_string_equal(a->asset,b->asset)&&film_string_equal(a->name,b->name)&&
+      film_string_equal(a->mask_asset,b->mask_asset)&&
+      a->origin_x==b->origin_x&&a->origin_y==b->origin_y&&a->affine==b->affine&&
+      (!a->affine||!memcmp(a->matrix,b->matrix,sizeof(a->matrix)))&&
+      a->has_cxform==b->has_cxform&&
+      (!a->has_cxform||!memcmp(a->cxform,b->cxform,sizeof(a->cxform)));
+}
+static bool film_visual_refresh(dg_runtime_t *d,film_node_t *node) {
+  const dg_member_t *member=dg_member(d,node->member);
+  unsigned parent=node->parent?FILM_NODE_PARENT|film_node_id(d,node):node->channel;
+  dg_film_channels_t channels=dg_film_channels(d,member,node->pose,parent);
+  unsigned capacity=0;
+  for(unsigned i=0;i<sizeof(channels.bits)/sizeof(*channels.bits);i++)
+    capacity+=(unsigned)__builtin_popcount(channels.bits[i]);
+  if(capacity>node->visual_capacity) {
+    unsigned extra=(capacity-node->visual_capacity)*sizeof(*node->visuals);
+    if(extra>FILM_CACHE_LIMIT-d->film_playback->cache_bytes) {
+      error(d,"film visual state","memory budget exceeded");return false;
+    }
+    film_visual_t *grown=realloc(node->visuals,capacity*sizeof(*grown));
+    if(!grown){error(d,"film visual state","allocation failed");return false;}
+    node->visuals=grown;node->visual_capacity=capacity;
+    d->film_playback->cache_bytes+=extra;
+  }
+  bool changed=!node->visual_valid;
+  unsigned count=0;
+  for(unsigned channel;(channel=dg_film_channels_next(&channels));) {
+    film_visual_t state={0};
+    if(!dg_film_child_layer(d,parent,channel,&state.layer))continue;
+    dg_spec_t *value=&state.layer.value;
+    // Empty template channels are addressable, but do not contribute pixels.
+    if(!film_layer_visible(&state.layer))continue;
+    if(film_native_member(d,value->member)) {
+      film_node_t *child=film_node(d,state.layer.placement_generation);
+      if(child) {
+        state.generation=child->generation;state.revision=child->visual_revision;
+        const dg_member_t *nested=dg_member(d,value->member);
+        // Retained child frames/tracks have their own semantic visual state.
+        // Legacy baked planes still select an image directly by pose.
+        if(nested->film_tracks||nested->film_frames)state.layer.film_frame=0;
+      }
+    }
+    if(count>=node->visual_count||!film_visual_equal(&node->visuals[count].layer,&state.layer)||
+        node->visuals[count].generation!=state.generation||node->visuals[count].revision!=state.revision)
+      changed=true;
+    node->visuals[count++]=state;
+  }
+  changed|=count!=node->visual_count;
+  node->visual_count=count;node->visual_valid=true;
+  if(changed)node->visual_revision++;
+  return changed;
+}
 static const dg_member_t *film_child_context(dg_runtime_t *d, lv_t sprite) {
   unsigned parent = film_child_parent(sprite);
   const dg_member_t *film = dg_member(d,film_parent_member(d,parent));
@@ -333,7 +424,12 @@ static void film_child_set(dg_runtime_t *d, unsigned ln, lv_t sprite, lv_t value
   if(node && (!node->presented || ln==LN_MEMBER || ln==LN_MEMBERNUM ||
               ln==LN_CASTNUM || ln==LN_PUPPET))
     film_sync_node(d,film_node_id(d,node),false,0);
-  film_visual_changed(d,node ? node->root : parent);
+  dg_film_layer_t after;
+  dg_film_child_layer(d,parent,channel,&after);
+  if(!film_visual_equal(&layer,&after)||layer.placement_generation!=after.placement_generation) {
+    film_visual_touch(d,node);
+    film_visual_changed(d,node ? node->root : parent);
+  }
 }
 static void film_drop(dg_runtime_t *d,unsigned id) {
   film_node_t *node=film_node(d,id);if(!node)return;
@@ -344,11 +440,15 @@ static void film_drop(dg_runtime_t *d,unsigned id) {
       d->film_children[i]=d->film_children[--d->film_child_count];
     else i++;
   d->film_playback->cache_bytes-=node->cursor_count*sizeof(*node->cursors);
-  free(node->cursors);*node=(film_node_t){0};
+  d->film_playback->cache_bytes-=node->visual_capacity*sizeof(*node->visuals);
+  free(node->visuals);free(node->cursors);*node=(film_node_t){0};
 }
 void dg_films_dispose(dg_runtime_t *d) {
   if(d->film_playback) {
-    for(unsigned i=0;i<FILM_NODE_LIMIT;i++)free(d->film_playback->nodes[i].cursors);
+    for(unsigned i=0;i<FILM_NODE_LIMIT;i++) {
+      free(d->film_playback->nodes[i].cursors);
+      free(d->film_playback->nodes[i].visuals);
+    }
     free(d->film_playback);d->film_playback=NULL;
   }
   for(unsigned i=1;i<DG_SPRITES;i++)d->sprites[i].film_instance=0;
@@ -393,7 +493,6 @@ static bool film_sync_node(dg_runtime_t *d,unsigned id,bool advance,unsigned dep
   if(depth>=16){error(d,"film nesting","temporal recursion exceeds sixteen active levels");return false;}
   const dg_member_t *member=dg_member(d,node->member);
   if(!member)return false;
-  bool changed=false;
   unsigned parent=node->parent ? FILM_NODE_PARENT|id : node->channel;
   dg_film_channels_t channels=dg_film_channels(d,member,node->pose,parent);
   uint16_t existing[DG_SPRITES]={0};
@@ -413,7 +512,7 @@ static bool film_sync_node(dg_runtime_t *d,unsigned id,bool advance,unsigned dep
     if(child&&(child->type!=2||child->source_xtra||!child->film_count))child=NULL;
     film_node_t *nested=film_node(d,existing[channel]);
     if(nested&&(!child||nested->member!=child->id)) {
-      film_drop(d,film_node_id(d,nested));nested=NULL;changed=true;
+      film_drop(d,film_node_id(d,nested));nested=NULL;
     }
     if(!child)continue;
     bool fresh=!nested;
@@ -421,16 +520,14 @@ static bool film_sync_node(dg_runtime_t *d,unsigned id,bool advance,unsigned dep
       unsigned pose=node->pose+1;
       if(pose>=child->film_count)pose=child->film_loop?pose%child->film_count:child->film_count-1u;
       nested=film_allocate(d,child->id,id,channel,node->root,pose);
-      if(!nested)return changed;
-      changed=true;
+      if(!nested)return false;
     } else if(advance&&!nested->paused) {
       unsigned pose=film_next_pose(child,nested->pose);
-      changed|=pose!=nested->pose;
       nested->pose=(uint16_t)pose;
     }
-    changed|=film_sync_node(d,film_node_id(d,nested),advance&&!fresh,depth+1);
+    film_sync_node(d,film_node_id(d,nested),advance&&!fresh,depth+1);
   }
-  return changed;
+  return film_visual_refresh(d,node);
 }
 static void film_mark_presented(dg_runtime_t *d,unsigned id) {
   film_node_t *node=film_node(d,id);if(!node)return;
@@ -449,6 +546,25 @@ unsigned dg_film_prepare(dg_runtime_t *d,unsigned parent,const dg_sprite_t *spri
   film_sync_node(d,film_node_id(d,node),false,0);
   return node->parent?FILM_NODE_PARENT|film_node_id(d,node):node->channel;
 }
+bool dg_film_visual_state(dg_runtime_t *d,unsigned parent,const dg_sprite_t *sprite,
+    const dg_member_t *member,uint32_t *instance,uint32_t *revision) {
+  unsigned context=dg_film_prepare(d,parent,sprite,member);
+  film_node_t *node=film_node(d,film_parent_id(d,context));
+  if(!node||d->values->failed)return false;
+  *instance=node->generation;*revision=node->visual_revision;return true;
+}
+static bool film_picture_changed(dg_runtime_t *d,const dg_sprite_t *sprite) {
+  film_node_t *node=film_node(d,sprite->film_instance);
+  if(!node)return false;
+  const dg_member_t *member=dg_member(d,node->member);
+  if(!node->parent&&node->pose!=dg_film_pose(member,sprite))
+    dg_film_prepare(d,node->channel,sprite,member);
+  return node->visual_revision!=node->staged_revision;
+}
+static void film_picture_committed(dg_runtime_t *d,const dg_sprite_t *sprite) {
+  film_node_t *node=film_node(d,sprite->film_instance);
+  if(node)node->staged_revision=node->visual_revision;
+}
 void dg_films_present(dg_runtime_t *d,bool advance_roots) {
   for(unsigned channel=1;channel<DG_SPRITES&&!d->values->failed;channel++) {
     if(!d->sprites[channel].value.type)continue;
@@ -462,7 +578,8 @@ void dg_films_present(dg_runtime_t *d,bool advance_roots) {
     node->pose=(uint16_t)dg_film_pose(member,sprite);
     bool changed=film_sync_node(d,film_node_id(d,node),existed,0);
     film_mark_presented(d,film_node_id(d,node));
-    if(!existed||previous_pose!=node->pose||changed)film_visual_changed(d,channel);
+    if(!existed||changed||(!member->film_tracks&&!member->film_frames&&previous_pose!=node->pose))
+      film_visual_changed(d,channel);
   }
 }
 static film_node_t *film_ref_node(dg_runtime_t *d,lv_t reference) {
@@ -504,7 +621,8 @@ bool dg_film_go(dg_runtime_t *d,lv_t reference,unsigned frame) {
   if(!node->parent)d->sprites[node->channel].film_frame=node->pose;
   bool changed=film_sync_node(d,film_node_id(d,node),existed,0);
   film_mark_presented(d,film_node_id(d,node));
-  if(!existed||previous_pose!=node->pose||changed)film_visual_changed(d,node->root);
+  if(!existed||changed||(!member->film_tracks&&!member->film_frames&&previous_pose!=node->pose))
+    film_visual_changed(d,node->root);
   return true;
 }
 

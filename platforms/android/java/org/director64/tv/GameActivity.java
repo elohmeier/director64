@@ -17,6 +17,7 @@ import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
+import android.view.Surface;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
@@ -31,6 +32,8 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.charset.Charset;
 import java.util.regex.Pattern;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.json.JSONObject;
 
 /**
@@ -43,6 +46,9 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   private static final int WIDTH = 640, HEIGHT = 480;
   private static final Charset WINDOWS_1252 = Charset.forName("windows-1252");
 
+  // Serializes shutdown and recreation without joining a slow worker on the UI thread.
+  private static final ExecutorService LIFECYCLE = Executors.newSingleThreadExecutor();
+
   private final Pads pads = new Pads();
   private final Handler handler = new Handler(Looper.getMainLooper());
   private Text text;
@@ -50,7 +56,12 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   private TextView overlay;
   private SharedPreferences preferences;
   private InputManager inputs;
-  private boolean started, stopped, showDiagnostics, keyboardGame, german;
+  private boolean started, stopped, showDiagnostics, keyboardGame, german, paused = true;
+  private volatile boolean destroyed;
+  private Surface currentSurface;
+  private int textRequest;
+  private EditText textField;
+  private AlertDialog textDialog;
   private AlertDialog dialog, keyEntry;
   private int mouseButtons;
   private String title;
@@ -95,7 +106,6 @@ public final class GameActivity extends Activity implements InputManager.InputDe
     keyboardGame = version >= 700;
     german = version >= 1000;
     System.loadLibrary(profile.optString("library"));
-    text = new Text(getAssets(), new File(getCacheDir(), "fonts"));
 
     stage = new SurfaceView(this);
     stage.getHolder().addCallback(
@@ -105,12 +115,14 @@ public final class GameActivity extends Activity implements InputManager.InputDe
 
           @Override
           public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-            Native.surface(holder.getSurface());
+            currentSurface = holder.getSurface();
+            if (started) Native.surface(currentSurface);
           }
 
           @Override
           public void surfaceDestroyed(SurfaceHolder holder) {
-            Native.surface(null);
+            currentSurface = null;
+            if (started) Native.surface(null);
           }
         });
     stage.setOnTouchListener((view, event) -> mouse(view, event));
@@ -132,12 +144,20 @@ public final class GameActivity extends Activity implements InputManager.InputDe
     inputs = (InputManager) getSystemService(INPUT_SERVICE);
     inputs.registerInputDeviceListener(this, handler);
     // The console's FlashRAM image, in the app's own storage.
-    Native.start(
-        this,
-        getAssets(),
-        new File(getFilesDir(), "flash.bin").getAbsolutePath(),
-        preferences.getFloat("volume", 0.8f));
-    started = true;
+    String savePath = new File(getFilesDir(), "flash.bin").getAbsolutePath();
+    float level = preferences.getFloat("volume", 0.8f);
+    LIFECYCLE.execute(() -> {
+      if (destroyed) return;
+      text = new Text(getAssets(), new File(getCacheDir(), "fonts"));
+      if (destroyed) return;
+      Native.start(this, getAssets(), savePath, level);
+      handler.post(() -> {
+        if (destroyed) return;
+        started = true;
+        Native.surface(currentSurface);
+        Native.hold(Native.HOLD_PAUSED, paused);
+      });
+    });
     handler.postDelayed(this::tick, 1000);
   }
 
@@ -155,8 +175,8 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   // Once a second: the diagnostics line and idle remotes.
   private void tick() {
     if (stopped) return;
-    pads.expire(android.os.SystemClock.uptimeMillis());
-    if (showDiagnostics) {
+    if (started) pads.expire(android.os.SystemClock.uptimeMillis());
+    if (started && showDiagnostics) {
       overlay.setText(Native.diagnostics() + "\n" + pads.describe() + pads.lastInput);
       overlay.measure(0, 0);
       overlay.requestLayout();
@@ -168,25 +188,36 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   protected void onResume() {
     super.onResume();
     immersive();
+    paused = false;
     if (started) Native.hold(Native.HOLD_PAUSED, false);
   }
 
   @Override
   protected void onPause() {
-    if (started) Native.hold(Native.HOLD_PAUSED, true);
+    paused = true;
+    if (started) {
+      Native.hold(Native.HOLD_PAUSED, true);
+      Keys.releaseAll();
+      pads.release();
+      Native.mouse(0, 0, 0, false);
+      mouseButtons = 0;
+    }
     super.onPause();
   }
 
   @Override
   protected void onDestroy() {
-    stopped = true;
+    destroyed = stopped = true;
+    if (started) { Keys.releaseAll(); pads.release(); }
+    started = false;
     handler.removeCallbacksAndMessages(null);
     if (inputs != null) inputs.unregisterInputDeviceListener(this);
-    if (started) Native.stop();
+    boolean finishing = isFinishing();
+    LIFECYCLE.execute(() -> {
+      Native.stop();
+      if (finishing) android.os.Process.killProcess(android.os.Process.myPid());
+    });
     super.onDestroy();
-    // The runtime's state lives for the life of the process; leaving the game
-    // ends it, so it starts fresh next time.
-    if (isFinishing()) android.os.Process.killProcess(android.os.Process.myPid());
   }
 
   // ---- Input ----
@@ -201,6 +232,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
 
   @Override
   public boolean dispatchKeyEvent(KeyEvent event) {
+    if (!started || paused) return super.dispatchKeyEvent(event);
     if (dialog != null && dialog.isShowing()) return super.dispatchKeyEvent(event);
     int code = event.getKeyCode();
     if (code == KeyEvent.KEYCODE_VOLUME_UP
@@ -221,6 +253,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
 
   @Override
   public boolean dispatchGenericMotionEvent(MotionEvent event) {
+    if (!started || paused) return super.dispatchGenericMotionEvent(event);
     if (dialog != null && dialog.isShowing()) return super.dispatchGenericMotionEvent(event);
     if (pads.motion(event)) return true;
     return super.dispatchGenericMotionEvent(event);
@@ -229,6 +262,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   // A mouse over the stage, in 640x480 units the runtime maps to its stage;
   // a touch is a click.
   private boolean mouse(View view, MotionEvent event) {
+    if (!started || paused || view.getWidth() == 0 || view.getHeight() == 0) return false;
     int x = (int) (event.getX() * WIDTH / view.getWidth());
     int y = (int) (event.getY() * HEIGHT / view.getHeight());
     int action = event.getActionMasked();
@@ -253,22 +287,25 @@ public final class GameActivity extends Activity implements InputManager.InputDe
 
   @Override
   public void onInputDeviceRemoved(int deviceId) {
-    pads.removed(deviceId);
+    if (started) { Keys.releaseDevice(deviceId); pads.removed(deviceId); }
   }
 
   @Override
-  public void onInputDeviceChanged(int deviceId) {}
+  public void onInputDeviceChanged(int deviceId) {
+    if (started) { Keys.releaseDevice(deviceId); pads.removed(deviceId); }
+  }
 
   // ---- Dialogs: each holds the game while it is open ----
 
   private void opened(AlertDialog shown, int hold) {
     dialog = shown;
-    pads.release();
     Native.hold(hold, true);
+    Keys.releaseAll();
+    pads.release();
   }
 
   private void showMenu() {
-    if (stopped || (dialog != null && dialog.isShowing())) return;
+    if (!started || stopped || (dialog != null && dialog.isShowing())) return;
     int percent = Math.round(preferences.getFloat("volume", 0.8f) * 100);
     String[] items = {
       getString(R.string.menu_resume),
@@ -308,7 +345,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
                   }
                 })
             .create();
-    menu.setOnDismissListener(d -> Native.hold(Native.HOLD_MENU, false));
+    menu.setOnDismissListener(d -> { if (started) Native.hold(Native.HOLD_MENU, false); });
     opened(menu, Native.HOLD_MENU);
     menu.show();
   }
@@ -320,7 +357,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
             .setMessage(getString(R.string.controls_text) + "\n\n" + pads.describe())
             .setPositiveButton(android.R.string.ok, null)
             .create();
-    controls.setOnDismissListener(d -> Native.hold(Native.HOLD_MENU, false));
+    controls.setOnDismissListener(d -> { if (started) Native.hold(Native.HOLD_MENU, false); });
     opened(controls, Native.HOLD_MENU);
     controls.show();
   }
@@ -348,11 +385,12 @@ public final class GameActivity extends Activity implements InputManager.InputDe
    * the game closes it once it is done with the field.
    */
   void openTextEntry(
-      int sprite, byte[] value, int left, int top, int right, int bottom, boolean keys) {
+      int request, byte[] value, int left, int top, int right, int bottom, boolean keys) {
     String current = new String(value, WINDOWS_1252);
     handler.post(
         () -> {
-          if (stopped) return;
+          if (stopped || destroyed) return;
+          textRequest = request;
           Pattern allowed =
               Pattern.compile(german ? "^[\\x20-\\x21\\x23-\\x7eÄÖÜßäöü]*$" : "^[\\x20-\\x21\\x23-\\x7e]*$");
           EditText field = new EditText(this);
@@ -379,9 +417,9 @@ public final class GameActivity extends Activity implements InputManager.InputDe
                   .setTitle(R.string.text_title)
                   .setView(field)
                   .setPositiveButton(android.R.string.ok, null);
-          if (!keys) builder.setNegativeButton(android.R.string.cancel, (d, w) -> Native.cancelText());
+          if (!keys) builder.setNegativeButton(android.R.string.cancel, (d, w) -> Native.cancelText(request));
           AlertDialog entry = builder.create();
-          entry.setOnCancelListener(d -> Native.cancelText());
+          entry.setOnCancelListener(d -> Native.cancelText(request));
           Runnable commit;
           if (keys) {
             // Each edit reaches the game as the keys that make it: deletes
@@ -402,22 +440,24 @@ public final class GameActivity extends Activity implements InputManager.InputDe
                     int same = 0;
                     while (same < typed.length() && same < now.length()
                         && typed.charAt(same) == now.charAt(same)) same++;
-                    for (int i = same; i < typed.length(); i++) Native.typeKey(8);
-                    for (int i = same; i < now.length(); i++) Native.typeKey(now.charAt(i));
+                    for (int i = same; i < typed.length(); i++) Native.typeKey(request, 8);
+                    for (int i = same; i < now.length(); i++) Native.typeKey(request, now.charAt(i));
                     typed = now;
                   }
                 });
-            entry.setOnDismissListener(d -> Native.cancelText());
+            entry.setOnDismissListener(d -> Native.cancelText(request));
             commit = entry::dismiss;
             keyEntry = entry;
           } else {
             commit =
                 () -> {
+                  if (!field.isEnabled()) return;
                   String typed = field.getText().toString();
                   if (!allowed.matcher(typed).matches() || typed.length() > 20) {
                     field.setError(getString(R.string.text_bad_character));
-                  } else if (Native.commitText(typed.getBytes(WINDOWS_1252))) {
-                    entry.dismiss();
+                  } else if (Native.commitText(request, typed.getBytes(WINDOWS_1252))) {
+                    field.setEnabled(false);
+                    entry.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
                   } else {
                     field.setError(getString(R.string.text_refused));
                   }
@@ -436,26 +476,42 @@ public final class GameActivity extends Activity implements InputManager.InputDe
                     .setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
               });
           if (dialog != null && dialog.isShowing()) dialog.dismiss();
-          dialog = entry;
+          dialog = textDialog = entry;
+          textField = field;
+          Keys.releaseAll();
           pads.release();
           entry.show();
         });
   }
 
   /** The game is done with its key field: the keyboard closes. */
-  void closeTextEntry() {
+  void closeTextEntry(int request) {
     handler.post(
         () -> {
+          if (destroyed || request != textRequest) return;
           if (keyEntry != null && keyEntry.isShowing()) keyEntry.dismiss();
           keyEntry = null;
         });
+  }
+
+  /** Acceptance is posted by the game worker; the UI never waits on engine work. */
+  void textCommitted(int request, boolean accepted) {
+    handler.post(() -> {
+      if (destroyed || request != textRequest || textDialog == null || !textDialog.isShowing()) return;
+      if (accepted) textDialog.dismiss();
+      else {
+        textField.setEnabled(true);
+        textDialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+        textField.setError(getString(R.string.text_refused));
+      }
+    });
   }
 
   void gameStopped(int status, byte[] message) {
     String error = new String(message, WINDOWS_1252);
     handler.post(
         () -> {
-          if (isFinishing()) return;
+          if (destroyed || isFinishing()) return;
           if (dialog != null && dialog.isShowing()) dialog.dismiss();
           AlertDialog.Builder builder =
               new AlertDialog.Builder(this)
@@ -469,11 +525,11 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   }
 
   void printRequested(int document) {
-    handler.post(() -> Toast.makeText(this, R.string.no_printing, Toast.LENGTH_LONG).show());
+    handler.post(() -> { if (!destroyed) Toast.makeText(this, R.string.no_printing, Toast.LENGTH_LONG).show(); });
   }
 
   void saveCommitted(boolean ok) {
     if (!ok)
-      handler.post(() -> Toast.makeText(this, R.string.save_failed, Toast.LENGTH_LONG).show());
+      handler.post(() -> { if (!destroyed) Toast.makeText(this, R.string.save_failed, Toast.LENGTH_LONG).show(); });
   }
 }

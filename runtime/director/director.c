@@ -25,6 +25,8 @@ static bool linked_key(dg_runtime_t *, unsigned, unsigned, bool);
 static const dg_movie_t *linked_loaded(const dg_runtime_t *, unsigned, const lv_movie_t *);
 static bool linked_get(dg_runtime_t *, const char *, lv_t, lv_t *);
 static bool linked_call(dg_runtime_t *, const char *, unsigned, const lv_t *, lv_t *);
+static bool film_picture_changed(dg_runtime_t *, const dg_sprite_t *);
+static void film_picture_committed(dg_runtime_t *, const dg_sprite_t *);
 
 #endif
 _Static_assert(DG_FIELD_COLOR_ROOT + DG_FIELDS <= LV_ROOTS,
@@ -973,6 +975,16 @@ static bool picture_changed(dg_runtime_t *d, const dg_sprite_t *a,
       a->value.fore != b->value.fore || a->value.back != b->value.back ||
       (a->value.thickness & 15) != (b->value.thickness & 15))
     return true;
+#if DG_D10
+  // Native-film presentation compares effective child pictures separately.
+  // A changed clock alone (held poses or script-populated templates) is not
+  // a changed picture. Flattened legacy films retain their pose comparison.
+  if(a->film_instance) {
+    const dg_member_t *m=dg_member(d,a->value.member);
+    if(m&&m->type==2&&!m->source_xtra&&(m->film_tracks||m->film_frames))
+      return film_picture_changed(d,a);
+  }
+#endif
   if (a->film_frame == b->film_frame)
     return false;
   const dg_member_t *m = dg_member(d, a->value.member);
@@ -1103,6 +1115,9 @@ void dg_update_stage(dg_runtime_t *d) {
   for (unsigned n = 0; n < d->stage_count; n++) {
     unsigned i = d->stage_channels[n];
     d->staged[i] = d->sprites[i];
+#if DG_D10
+    film_picture_committed(d,&d->sprites[i]);
+#endif
     if (!d->sprites[i].value.type) {
       d->active_sprites[i >> 5] &= ~(UINT32_C(1) << (i & 31));
       d->order_serial++;

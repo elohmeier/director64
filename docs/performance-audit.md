@@ -4,9 +4,9 @@ Audit date: 2026-10-18. Runtime baseline: `25ae3bd`.
 
 This review combines a startup on the EF-62N, focused reproductions against
 the current C/Java/JavaScript implementations, and recovered game requirements.
-It identifies remaining defects; it does not qualify complete games. Runtime
-code was left unchanged during the audit. Generated harnesses, game data and
-captures remain under ignored build directories.
+The baseline findings below were recorded before the repair. The repair status
+at the end distinguishes regression evidence from complete-game qualification.
+Generated harnesses, game data and captures remain under ignored build directories.
 
 ## Projector measurements
 
@@ -165,3 +165,77 @@ Birthday's actual bedroom on the EF-62N with 60 Hz service and its authored
 12 Hz animation as targets. Host timings and pixel equivalence alone cannot
 establish projector performance or original-player parity. N64 needs its own
 memory and pacing qualification.
+
+## Repair and regression evidence
+
+The software renderer now retains cursor-free scenes, renders native films
+into cropped local bounds, and caches the latest effective plane per instance.
+Immutable paired masks have reusable coverage variants. Derived planes share
+the decoded-image cache target; admission cannot push it over budget. Existing
+base images retain their prior policy of pinning the current working set, so
+the target remains soft if those base images alone exceed it. Sampling maps
+and constant shape operations avoid repeated per-pixel setup. Cropped poses
+retain their original virtual coordinates through scaling, rotation and flips.
+
+Conversion now stores conservative source coverage in optional FDI header
+bytes, preserving all source pixels, extent and registration. Runtime plans
+resolve live child state and mask dependencies, then reuse the resulting
+cropped planes. This repair does not compile arbitrary animation-manager Lingo
+into baked pictures: Birthday's existing manager already resolves its catalog
+at initialization, and changing its mutable return values or method effects
+would require additional semantics. The measured bottleneck was repeatedly
+rebuilding equivalent pictures, not catalog expansion.
+
+Film presentation now compares effective children independently of their
+clocks. Sounds, timing, first presentation and independent nested playheads
+continue advancing. Flash child edits invalidate the visible ancestor, and
+removed display objects can be reclaimed after complete action batches while
+externally retained objects and pending unload actions stay valid. Actual
+Deutsch SoundControl handlers complete 1,200 press/release cycles, versus the
+baseline failure at 109. Heap size stays at 88,192 bytes and 2,700 objects;
+the first and last 100-cycle CPU times are 0.1224 and 0.1205 seconds.
+
+With the same production Birthday package, seed and 300-tick host replay,
+the optimized renderer's cursor-free scene hashes match the original renderer
+at all 300 checkpoints. There are still 29 distinct pictures. Effective
+invalidation reduces actual redraws from 300 to 28. Rendering takes 99.119 ms
+versus 5,913.862 ms; service takes 16.571 ms versus 25.026 ms. Compositor
+allocation requests fall from 9.137 GB to 7.213 MB over this phase. Cached
+images and derived planes total 21.026 MB. One hundred forced frozen redraws
+take 306.511 ms and allocate no additional pixel planes, versus 2,010 ms and
+3.044 GB in the baseline. These remain desktop measurements with the blank
+font callback described above, not projector speed or whole-scene font parity.
+
+A second comparison regenerated the package with conversion-time coverage
+hints and compared all 1,920,000 scene bytes at each of 300 ticks: every frame
+matched exactly. Both renderers used the repaired runtime, hence both performed
+28 redraws. Thread CPU time was 605.621 ms for the original renderer and
+111.684 ms for the optimized renderer (5.42 times faster), isolating compositor
+work from the runtime's separate redraw reduction and concurrent-build
+scheduling. Allocation requests were 852.874 MB versus 7.213 MB. The frozen
+100-redraw comparison took 2,108.559 versus 326.852 ms, again with zero new
+pixel-plane allocations on the optimized path. These runs use current converted
+assets and retain the font and hardware limitations above.
+
+Android and browser video pumps accept completed pictures behind the advancing
+target, bound decoder work and reject stale output after seeks. Decoder errors
+remain observable. Browser WAV duration queries cache header metadata instead
+of decoding sample arrays. Android input uses ordered transition and command
+queues, engine access belongs to the worker, diagnostics use a short state
+snapshot, and activity teardown joins off the UI thread. Pending audio starts
+use an active clock that excludes global holds. Modified key releases and
+lifecycle/device cleanup release held keys. Cached button images refresh after
+text edits.
+
+Focused contracts exercise delayed decoding, seek generations, audio holds,
+input bursts, Flash retention/unload, live film edits, masks, palette and Imaging
+changes, flips, fractional geometry, and final-compositor invalidation.
+Keyboard bursts wait for the engine's own 32-event capacity; a typed character
+reserves both press/release slots. Browser queues also retain releases across
+modifier, focus and menu changes. The actual compiled Wasm module exports the
+capacity service and loads successfully; it does not require a package format
+change.
+The Android worker emits active-time pacing windows and the
+[qualification command](android.md) rejects missing measurements, alerts and
+sustained service loss. These checks complement visual and input checks on
+the device; an APK build alone cannot perform them.

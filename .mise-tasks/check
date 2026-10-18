@@ -31,4 +31,5 @@ for module in export pool-worker video; do
 done
 node --test tests/node/*.test.mjs
 "$repo_root/.mise-tasks/test-native"
+"$repo_root/.mise-tasks/test-android-host"
 cargo test --release --manifest-path compiler/Cargo.toml

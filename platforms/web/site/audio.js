@@ -6,7 +6,7 @@ import {FlashSounds} from "./flash-audio.js";
 
 // Converted sounds are PCM RIFF WAVE files, decoded synchronously so a sound
 // starts on the tick the score started it.
-export function decodeWav(bytes) {
+export function wavInfo(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const tag = (at) => String.fromCharCode(...bytes.subarray(at, at + 4));
   if (bytes.length < 12 || tag(0) !== "RIFF" || tag(8) !== "WAVE") throw new Error("not a WAVE file");
@@ -15,6 +15,7 @@ export function decodeWav(bytes) {
     const id = tag(at), size = view.getUint32(at + 4, true), body = at + 8;
     if (body + size > bytes.length) throw new Error("truncated WAVE chunk");
     if (id === "fmt ") {
+      if (size < 16) throw new Error("truncated WAVE format");
       format = {
         code: view.getUint16(body, true), channels: view.getUint16(body + 2, true),
         rate: view.getUint32(body + 4, true), bits: view.getUint16(body + 14, true),
@@ -29,7 +30,13 @@ export function decodeWav(bytes) {
     throw new Error("unsupported WAVE format");
   }
   const stride = (format.bits / 8) * format.channels;
+  if (data.length % stride) throw new Error("incomplete WAVE sample frame");
   const frames = Math.floor(data.length / stride);
+  return {...format, frames, data};
+}
+export function decodeWav(bytes) {
+  const format = wavInfo(bytes), {data, frames} = format;
+  const stride = (format.bits / 8) * format.channels;
   const samples = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const channels = [];
   for (let c = 0; c < format.channels; c++) {
@@ -126,6 +133,7 @@ export class AudioEngine {
     this.buffers = new Map();
     this.decoding = new Map();
     this.bufferBytes = 0;
+    this.durations = new Map();
     this.errors = [];
     this.flash = new FlashSounds(this);
   }
@@ -336,16 +344,24 @@ export class AudioEngine {
   }
   // A sound's length in seconds (0 when missing), without decoding it.
   duration(name) {
-    const bytes = this.lookup(name);
-    if (!bytes) return 0;
+    if (this.durations.has(name)) return this.durations.get(name);
     try {
+      const bytes = this.lookup(name);
+      if (!bytes) throw new Error(`missing sound ${name}`);
+      let duration;
       if (isOpusSound(bytes)) {
         const {frames, sampleRate} = readOpusHeader(bytes);
-        return frames / sampleRate;
+        duration = frames / sampleRate;
+      } else {
+        const {frames, rate} = wavInfo(bytes);
+        duration = frames / rate;
       }
-      const wav = decodeWav(bytes);
-      return wav.frames / wav.rate;
-    } catch {
+      if (!Number.isFinite(duration) || duration < 0) throw new Error("invalid sound duration");
+      this.durations.set(name, duration);
+      return duration;
+    } catch (error) {
+      this.durations.set(name, 0);
+      this.errors.push(`cannot read sound duration ${name}: ${error}`);
       return 0;
     }
   }

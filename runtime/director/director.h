@@ -963,6 +963,10 @@ void dg_films_dispose(dg_runtime_t *);
 void dg_film_reset(dg_runtime_t *, unsigned stage_channel);
 void dg_films_present(dg_runtime_t *, bool advance_roots);
 unsigned dg_film_prepare(dg_runtime_t *, unsigned parent, const dg_sprite_t *, const dg_member_t *);
+// Playback/override visual identity only; renderer caches also track mutable
+// source members, text, images, masks and palette dependencies. Never presents.
+bool dg_film_visual_state(dg_runtime_t *, unsigned parent, const dg_sprite_t *,
+                         const dg_member_t *, uint32_t *instance, uint32_t *revision);
 lv_t dg_film_tell(dg_runtime_t *, lv_t parent, unsigned channel);
 bool dg_film_go(dg_runtime_t *, lv_t parent, unsigned frame);
 unsigned dg_film_frame(dg_runtime_t *, lv_t parent, bool last);

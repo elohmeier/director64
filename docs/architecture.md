@@ -120,6 +120,15 @@ remain explicit in the asset model. FDIA images retain RGB555 plus A8 coverage
 in paired textures within the existing bounded image cache. The selected static
 SWF vector-shape conversion is also explicit.
 
+Converted FDI images carry optional conservative coverage bounds in reserved
+header bytes: byte 27 is `0xa0 | shift`, and bytes 28–31 are left, top, right
+and bottom in units of `2^shift` source pixels. Conversion rounds outward;
+four zero coordinates mean empty coverage. Original pixels, dimensions and
+registration remain intact, including tiled and indexed images. Older images
+fall back to scanning decoded pixels. The compositor uses this hint only when
+the selected ink follows source alpha; rectangle inks, palette brushes,
+opaque rich text and derived paired-mask coverage retain their own rules.
+
 The Löwenzahn D5 profile keeps direct score/cast script references, versioned
 tempo operands, mouse-event propagation, actorList callbacks, and cross-movie
 labels. Its selected host postprocessor converts all linked QuickTime media

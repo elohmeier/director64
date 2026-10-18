@@ -188,6 +188,11 @@ title. Without `--artwork`, existing artwork is preserved.
 
 ## Development and validation
 
+The full `check` task also requires a host JDK 11 or newer (`javac` and
+`java`) for the Android keyboard, JNI signature and UI-thread contracts.
+`test-native` retains its portable C-only tool requirements; the Android host
+checks can be run separately with `mise run test-android-host`.
+
 ```sh
 mise run check
 uv run --locked director64 native --game findus-workshop --sanitizers --soak
