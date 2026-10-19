@@ -50,7 +50,7 @@ pub fn recover(fs: &mut dyn Files, input: &str, output: &str, aliases: &[String]
             "parser": {
                 "implementation": "compiler/src/convert/pfr.rs",
                 "sha256": sha256(DECODER.as_bytes()),
-                "verifiedAgainst": "the original TrueDoc player in Director's Font Xtra, by emulation (tools/fonts/pfr1-verify.py)",
+                "verifiedAgainst": "the original TrueDoc player in Director's Font Xtra, by emulation",
             },
             "writer": "original CFF/Type2 exporter",
             "writerSha256": sha256(WRITER.as_bytes()),

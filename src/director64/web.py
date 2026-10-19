@@ -90,7 +90,7 @@ SITE_FILES = (
     "print.css",
 )
 # CC0 (datagoblin): the builtin font unstyled text prints with.
-FONT = Path("third_party/libdragon/examples/fontgallery/assets/monogram.ttf")
+FONT = Path("third_party/fonts/monogram.ttf")
 
 
 def sha256(path: Path) -> str:

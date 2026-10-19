@@ -1,6 +1,6 @@
-//! A minimal OpenType/CFF writer for recovered, unhinted cubic outlines
-//! (ported from the former tools/fonts/cff_font.py). Format facts: Adobe Technical
-//! Notes 5176 (CFF) and 5177 (Type 2 charstrings) and the OpenType spec.
+//! A minimal OpenType/CFF writer for recovered, unhinted cubic outlines.
+//! Format facts: Adobe Technical Notes 5176 (CFF) and 5177 (Type 2
+//! charstrings) and the OpenType spec.
 //! No curve fitting, font substitution or cubic-to-quadratic conversion.
 
 use std::collections::BTreeMap;

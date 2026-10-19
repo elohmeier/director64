@@ -10,8 +10,7 @@ standalone per-game web app ([web.md](web.md)).
 | `src/director64/` | CLI, game manifests, disc extraction, the conversion driver (`convert.py`), media repair, the Android and web builds, fuzz/parity/journey drivers |
 | `compiler/` | The Rust converter `director64-aot`: ISO/ZIP reading, analysis and source audit, score recovery, media conversion, the Lingo compiler, the package writer, per-port corrections (`ports.rs`) |
 | `tools/director/` | ProjectorRays dump driver (Node) and the package validator |
-| `tools/convert/` | Host tools the converter builds: the WebP packer, mksprite's build stub |
-| `tools/fonts/` | PFR1 font verification |
+| `tools/convert/` | Host tools the converter builds: the WebP packer and the font measurer |
 | `runtime/lingo/` | Values, heap, bytecode VM; `family.h` names each Director family's capabilities |
 | `runtime/director/` | Score, sprites, inks, film loops, Flash, shapes, events, sound and video services |
 | `runtime/interaction/` | Controller input and the per-player pointer |
@@ -37,8 +36,8 @@ standalone per-game web app ([web.md](web.md)).
    corrections, the Lingo compiler and packaging into `game.d64p`.
 4. The driver packs assets: images as lossless WebP where smaller
    (`tools/convert/webp_tool.c`, vendored libwebp), sounds of 8 s or more as
-   Ogg Opus and video as VP9 (FFmpeg). libdragon's mkfont measures a
-   substitute font where a port needs it.
+   Ogg Opus and video as VP9 (FFmpeg). `tools/convert/font_metrics.c`
+   (vendored FreeType) measures fonts where a port needs it.
 5. The C package loader validates the package against the runtime ABI.
 
 Host tools build on first use under `build/tools/`. A conversion is reused
@@ -130,7 +129,7 @@ pinned to the reviewed source and fails on anything else):
 | `print` | Folder with print artwork (Löwenzahn 1) |
 | `external_media` | `{root, extensions, bind}` with `bind` = `linked-movies` (QuickTime/AIFF, `sounds_movie`), `linked-sounds` or `directmedia` |
 | `substitute_font` | `{asset, sizes, names, controller}`: Droid Sans for unembedded system fonts |
-| `measure_fonts` | Measure every authored font size with mkfont for text layout |
+| `measure_fonts` | Measure every authored font size with FreeType for text layout |
 | `[[convert.patch]]` | `movie`, `member`, `cast`, `handler` (or `all = true`), pinned by `source_sha256` or `calls`; then `body` (Lingo), `parameters`, or `rename_call = [from, to]` with `count` |
 | `[[convert.text_fix]]` | `movie`, `member`, `text_sha256`, `trim` trailing characters |
 | `[[convert.tempo_fix]]` | `movie`, `frame`, `from`, `to` |

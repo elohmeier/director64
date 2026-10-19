@@ -4,7 +4,7 @@
 //! glyph program strings use PFR1's compact encodings, which this module
 //! implements from the behaviour of the original Bitstream TrueDoc player
 //! linked into Director's Font Xtra. Correctness is anchored by emulating
-//! that player (tools/fonts/pfr1-verify.py), not by any other decoder.
+//! that player, not by any other decoder.
 //!
 //! Output is the outline model the OpenType writer (cff.rs) consumes:
 //! contours of moveto/lineto/curveto commands in outline units, left open

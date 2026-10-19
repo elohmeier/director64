@@ -32,7 +32,7 @@ saves = ["players.ini", "start.ini", "book.ini", "highscore.ini", "config.txt", 
 long_date = "Montag, 1. September 2014"
 
 [convert]
-# Text layout reads mkfont-measured advances for every authored font size.
+# Text layout reads FreeType-measured advances for every authored font size.
 measure_fonts = true
 streams = ["voc", "sfx"]
 data = ["tests_db"]

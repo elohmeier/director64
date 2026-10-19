@@ -22,8 +22,6 @@ jobs:
       MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: true
 
       # Python, uv and Node as pinned in mise.toml.
       - uses: jdx/mise-action@v3

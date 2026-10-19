@@ -8,8 +8,8 @@ Every stage is the Rust converter's (compiler/, `director64-aot`), run on the
 host, except the Director file parse, which is ProjectorRays under Node
 (tools/director/dump.mjs). FFmpeg encodes long sounds as Opus and video as
 VP9; images pack as lossless WebP where that is smaller (tools/convert/
-webp_tool.c), and the ports that measure their substitute font do so with
-libdragon's mkfont. The manifest is written last, so a directory without one
+webp_tool.c), and the ports that measure their fonts do so with
+tools/convert/font_metrics.c. The manifest is written last, so a directory without one
 is incomplete.
 """
 
@@ -34,9 +34,9 @@ TOOLS = Path("build/tools")
 PARSER = Path("node_modules/projectorrays/dist")
 PARSER_WASM_SHA256 = "e4d7ab15a9cb20586d0e5afc54ad4d48412254d98b78a0c834b5adc8e2e3983e"
 # The ports' pinned substitute for unembedded system fonts (Apache-2.0).
-DROID_SANS = Path("third_party/libdragon/examples/fontgallery/assets/droid-sans.ttf")
+DROID_SANS = Path("third_party/fonts/droid-sans.ttf")
 WEBP = Path("third_party/libwebp")
-LIBDRAGON = Path("third_party/libdragon")
+FREETYPE = Path("third_party/freetype")
 PACKS = ("images", "audio", "fonts", "streams", "data", "video", "print")
 GAME_FILES = ("game.d64p", *(f"{kind}.{ext}" for kind in PACKS for ext in ("bin", "json")))
 # libwebp lossless method 2 at quality 50: within 5% of its smallest output at
@@ -118,50 +118,21 @@ def webp_tool(root: Path) -> Path:
     return built(root, "webp", inputs, build) / "d64-webp"
 
 
-def font_tools(root: Path) -> Path:
-    """libdragon's mkfont and its mksprite, as an N64_INST tree (bin/)."""
-    lib = LIBDRAGON
+def metrics_tool(root: Path) -> Path:
+    """The font measurer (tools/convert/font_metrics.c) with the vendored
+    FreeType."""
 
     def build(folder: Path) -> None:
-        objects = folder / "objects"
-        objects.mkdir()
-        (folder / "bin").mkdir()
-        cc, cxx = os.environ.get("CC", "cc"), os.environ.get("CXX", "c++")
-        common = ["-O2", "-D__LIBDRAGON_INTERNAL_BUILD", f"-I{lib}/include", "-w"]
-        fonts = [f"-I{lib}/tools/mkfont/plutosvg", f"-I{lib}/tools/mkfont/freetype"]
-        units = [
-            (cxx, "-std=gnu++17", common, f"{lib}/tools/common/shrinkler_compress.cpp",
-             "shrinkler"),
-            (cc, "-std=gnu11", common, f"{lib}/tools/common/assetcomp.c", "assetcomp"),
-            (cc, "-std=gnu11", common, f"{lib}/tools/common/lz4_compress.c", "lz4"),
-            (cc, "-std=gnu11", common, f"{lib}/tools/common/aplib_compress.c", "aplib"),
-            (cc, "-std=gnu11", common, f"{lib}/tools/mksprite/mksprite.c", "mksprite"),
-            (cc, "-std=gnu11", [*common, f"-I{lib}/tools/mksprite"],
-             "tools/convert/mksprite_lossy_stub.c", "lossy"),
-            (cc, "-std=gnu11", ["-O2", "-w"], f"{lib}/tools/mkfont/freetype/FreeTypeAmalgam.c",
-             "freetype"),
-            (cc, "-std=gnu11", ["-O2", "-w", *fonts],
-             f"{lib}/tools/mkfont/plutosvg/plutosvg-amalgam.c", "plutosvg"),
-            (cxx, "-std=gnu++17", [*common, *fonts], f"{lib}/tools/mkfont/mkfont.cpp", "mkfont"),
-        ]
+        cc = os.environ.get("CC", "cc")
+        subprocess.run([cc, "-O2", "-w", f"-I{FREETYPE}", "-c", FREETYPE / "FreeTypeAmalgam.c",
+                        "-o", folder / "freetype.o"], cwd=root, check=True)
+        subprocess.run([cc, "-std=gnu11", "-O2", f"-I{FREETYPE}", "tools/convert/font_metrics.c",
+                        folder / "freetype.o", "-lm", "-o", folder / "font-metrics"],
+                       cwd=root, check=True)
+        (folder / "freetype.o").unlink()
 
-        def compile_unit(unit):
-            compiler, standard, flags, source, name = unit
-            subprocess.run([compiler, standard, *flags, "-c", source, "-o",
-                            objects / f"{name}.o"], cwd=root, check=True)
-
-        with ThreadPoolExecutor(jobs()) as pool:
-            list(pool.map(compile_unit, units))
-        shared = [objects / f"{n}.o" for n in ("assetcomp", "lz4", "aplib", "shrinkler")]
-        subprocess.run([cxx, objects / "mksprite.o", objects / "lossy.o", *shared, "-lm",
-                        "-o", folder / "bin/mksprite"], check=True)
-        subprocess.run([cxx, objects / "mkfont.o", objects / "freetype.o", objects / "plutosvg.o",
-                        *shared, "-lm", "-o", folder / "bin/mkfont"], check=True)
-        shutil.rmtree(objects)
-
-    inputs = [str(lib / "tools/common"), str(lib / "tools/mksprite"), str(lib / "tools/mkfont"),
-              str(lib / "include"), "tools/convert/mksprite_lossy_stub.c"]
-    return built(root, "libdragon", inputs, build)
+    return built(root, "font-metrics", [str(FREETYPE), "tools/convert/font_metrics.c"],
+                 build) / "font-metrics"
 
 
 def aot(root: Path) -> Path:
@@ -175,7 +146,7 @@ def source_digest(root: Path) -> str:
     return tree_digest(root, [
         "compiler/src", "compiler/Cargo.toml", "compiler/Cargo.lock", "tools/convert",
         "tools/director/dump.mjs", "tools/director/dump-format.mjs",
-        str(WEBP / "src"), str(LIBDRAGON / "tools/mkfont"), str(LIBDRAGON / "tools/mksprite"),
+        str(WEBP / "src"), str(FREETYPE),
         "platforms/web/webp_image.c", "src/director64/convert.py",
         "src/director64/system_fonts.py", "runtime/director/director.h",
         "runtime/package/package.h", "runtime/lingo/names.txt",
@@ -294,7 +265,7 @@ class Converter:
 
     def port(self, director: Path) -> dict:
         """What the port adds (game.toml [convert], compiler/src/ports.rs): model
-        corrections with its substitute font measured by mkfont, external
+        corrections with its substitute font and measured metrics, external
         media, and the disc folders the runtime streams or reads as data."""
         model = director / "model.json"
         port = self.port_file
@@ -305,17 +276,13 @@ class Converter:
         shutil.copyfile(self.root / DROID_SANS, substitute)
         measured = []
         if plan["measure"]:
-            inst = font_tools(self.root)
+            tool = metrics_tool(self.root)
             for n, request in enumerate(plan["measure"]):
                 font = request["font"]
                 source = substitute if font == "substitute" else director / font
-                staged = folder / f"measure-{n}" / source.name
-                staged.parent.mkdir()
-                shutil.copyfile(source, staged)
-                self.run(inst / "bin/mkfont", "--size", request["size"],
-                         *[a for r in request["ranges"] for a in ("--range", r)], "-c", "0",
-                         "-o", staged.parent, staged, env=os.environ | {"N64_INST": str(inst)})
-                measured.append(f"{request['key']}={staged.with_suffix('.font64')}")
+                metrics = folder / f"measure-{n}.json"
+                metrics.write_text(self.run(tool, source, request["size"], *request["ranges"]))
+                measured.append(f"{request['key']}={metrics}")
         extracted = self.extracted
         data_files = sum(
             1 for name in plan["data"] for p in (extracted / name).rglob("*") if p.is_file()

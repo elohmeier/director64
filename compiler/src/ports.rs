@@ -1,7 +1,7 @@
 //! What a port adds to the converted game beyond the generic pipeline, from
 //! its game.toml [convert] table: the embedded projector's launcher
 //! handlers, program patches, a system-font substitute (with metrics
-//! measured by mkfont where a port needs them), external media bound to
+//! where a port needs them), external media bound to
 //! their members, small source-data fixes, and the disc folders the runtime
 //! streams, reads as data or prints. Every patch and fix is pinned to the
 //! exact source it was reviewed against and refuses anything else.
@@ -198,9 +198,8 @@ fn rename_calls(node: &mut Value, from: &str, to: &str) -> usize {
 // ---- The plan ----
 
 /// What the conversion driver does for a port around postprocess_model: the
-/// mkfont runs it measures first, each {key, font ("substitute" or a
-/// converted font asset), size, ranges}, packed with `--size SIZE --range
-/// R... -c 0`; the disc folders the runtime streams as sound (playFile) or
+/// fonts it measures first (tools/convert/font_metrics.c), each {key, font
+/// ("substitute" or a converted font asset), size, ranges}; the disc folders the runtime streams as sound (playFile) or
 /// reads as data (read_data); the print folder; and the external media to
 /// convert ({root, extensions}).
 pub fn plan(port: &Port, model: &Value) -> R<Value> {
@@ -289,7 +288,7 @@ fn metric_ranges(codepoints: &[i64]) -> R<Vec<String>> {
 // ---- The model ----
 
 /// The port's model corrections after conversion. `measure(key)` returns the
-/// font64 mkfont packed for one of plan()'s measurement requests.
+/// metrics measured for one of plan()'s requests (tools/convert/font_metrics.c).
 pub fn postprocess_model(
     model: &mut Value,
     port: &Port,
@@ -312,7 +311,7 @@ pub fn postprocess_model(
         for request in measure_requests(model)? {
             let key = text(&request["key"]).to_string();
             let packed = measure(&key)?;
-            metrics.insert(key, font64_metrics(&packed)?);
+            metrics.insert(key, font_metrics(&packed)?);
         }
         model["fontMetrics"] = Value::Object(metrics);
     }
@@ -385,7 +384,7 @@ fn substitute(
 ) -> R<()> {
     let source = fonts.droid_sans.as_ref().ok_or("the substitute font is missing")?;
     let controller = match spec["controller"]["size"].as_i64() {
-        Some(size) => Some((size, font64_ascii_metrics(&measure(&format!("substitute:{size}"))?)?)),
+        Some(size) => Some((size, ascii_metrics(&measure(&format!("substitute:{size}"))?)?)),
         None => None,
     };
     let controller_members: Vec<&str> = list(&spec["controller"]["members"]).map(text).collect();
@@ -625,102 +624,27 @@ fn directmedia(model: &mut Value, fonts: &PortFonts) -> R<()> {
     Ok(())
 }
 
-// ---- mkfont's font64 ----
+// ---- Measured metrics ----
 
-struct Font64<'a>(&'a [u8]);
-
-impl Font64<'_> {
-    fn new(font: &[u8]) -> R<Font64<'_>> {
-        if font.len() < 100 || &font[..4] != b"FNT\x0b" {
-            return Err("unsupported font64 metrics header".into());
-        }
-        Ok(Font64(font))
+/// A font's measured metrics (tools/convert/font_metrics.c): advances for
+/// 32..=255, kerning, size, ascent and descent.
+pub fn font_metrics(measured: &[u8]) -> R<Value> {
+    let metrics: Value = serde_json::from_slice(measured).map_err(|e| format!("font metrics: {e}"))?;
+    if metrics["advances"].as_array().map(Vec::len) != Some(224) {
+        return Err("font metrics without 224 advances".into());
     }
-    fn u32_at(&self, at: usize) -> R<usize> {
-        self.0
-            .get(at..at + 4)
-            .map(|b| u32::from_be_bytes(b.try_into().unwrap()) as usize)
-            .ok_or_else(|| "truncated font64".to_string())
-    }
-    fn byte(&self, at: usize) -> R<u8> {
-        self.0.get(at).copied().ok_or_else(|| "truncated font64".to_string())
-    }
-    /// Glyph indices of the codepoints in `range`, in first-seen order.
-    fn glyphs(&self, range: std::ops::Range<i64>) -> R<Vec<(i64, i64)>> {
-        let ranges = self.u32_at(72)?;
-        let mut order: Vec<(i64, i64)> = Vec::new();
-        for i in 0..self.u32_at(36)? {
-            let at = ranges + i * 12;
-            let (start, count) = (self.u32_at(at)? as i64, self.u32_at(at + 4)? as i64);
-            let glyph = self.u32_at(at + 8)? as i32 as i64;
-            if glyph < 0 {
-                return Err("sparse metrics font range".into());
-            }
-            for c in start.max(range.start)..(start + count).min(range.end) {
-                match order.iter_mut().find(|(code, _)| *code == c) {
-                    Some(entry) => entry.1 = glyph + c - start,
-                    None => order.push((c, glyph + c - start)),
-                }
-            }
-        }
-        Ok(order)
-    }
-    fn advance(&self, glyph: i64) -> R<u8> {
-        self.byte(self.u32_at(80)? + glyph as usize * 8)
-    }
-    fn kerning(&self, glyphs: &[(i64, i64)]) -> R<Vec<Value>> {
-        let (kranges, kern) = (self.u32_at(84)?, self.u32_at(92)?);
-        let reverse: HashMap<i64, i64> = glyphs.iter().map(|&(c, g)| (g, c)).collect();
-        let mut pairs = Vec::new();
-        if kranges == 0 {
-            return Ok(pairs);
-        }
-        for &(c, g) in glyphs {
-            let at = kranges + g as usize * 4;
-            let lo = u16::from_be_bytes([self.byte(at)?, self.byte(at + 1)?]) as usize;
-            let hi = u16::from_be_bytes([self.byte(at + 2)?, self.byte(at + 3)?]) as usize;
-            if lo == 0 {
-                continue;
-            }
-            for i in lo..=hi {
-                let at = kern + i * 3;
-                let second = i16::from_be_bytes([self.byte(at)?, self.byte(at + 1)?]) as i64;
-                let amount = self.byte(at + 2)? as i8 as i64;
-                if let Some(&other) = reverse.get(&second) {
-                    pairs.push(json!([c, other, amount]));
-                }
-            }
-        }
-        Ok(pairs)
-    }
+    Ok(metrics)
 }
 
-/// Advances for 32..=255 (0 where the font has no glyph), kerning among
-/// them, point size, ascent and descent.
-pub fn font64_metrics(font: &[u8]) -> R<Value> {
-    let font = Font64::new(font)?;
-    let glyphs = font.glyphs(32..256)?;
-    if !(0x20..0x7f).all(|c| glyphs.iter().any(|&(code, _)| code == c)) {
-        return Err("metrics font lacks printable ASCII".into());
-    }
-    let advances = (32..=255)
-        .map(|c| glyphs.iter().find(|&&(code, _)| code == c).map_or(Ok(0), |&(_, g)| font.advance(g)))
-        .collect::<R<Vec<u8>>>()?;
-    let i32_at = |at| -> R<i64> { Ok(font.u32_at(at)? as u32 as i32 as i64) };
-    Ok(json!({"advances": advances, "kerning": font.kerning(&glyphs)?, "size": font.u32_at(8)?,
-              "ascent": i32_at(12)?, "descent": -i32_at(16)?}))
-}
-
-/// Advances and kerning for printable ASCII, and the point size.
-pub fn font64_ascii_metrics(font: &[u8]) -> R<Value> {
-    let font = Font64::new(font)?;
-    let mut glyphs = font.glyphs(32..127)?;
-    glyphs.sort();
-    if glyphs.len() != 95 {
-        return Err("controller font lacks printable ASCII".into());
-    }
-    let advances = glyphs.iter().map(|&(_, g)| font.advance(g)).collect::<R<Vec<u8>>>()?;
-    Ok(json!({"advances": advances, "kerning": font.kerning(&glyphs)?, "size": font.u32_at(8)?}))
+/// The printable-ASCII part of measured metrics, for controller text entry:
+/// advances for 32..=126, kerning among them, and the size.
+pub fn ascii_metrics(measured: &[u8]) -> R<Value> {
+    let metrics = font_metrics(measured)?;
+    let advances = &metrics["advances"].as_array().unwrap()[..95];
+    let kerning: Vec<&Value> = list(&metrics["kerning"])
+        .filter(|k| k[0].as_i64() < Some(127) && k[1].as_i64() < Some(127))
+        .collect();
+    Ok(json!({"advances": advances, "kerning": kerning, "size": metrics["size"]}))
 }
 
 #[cfg(test)]

@@ -134,7 +134,7 @@ typedef struct {
   uint32_t color;
 #if DG_EXTENDED
   const uint8_t *advances;
-  const int16_t *kerning; // Printable ASCII pairs and font64 signed kerning amounts.
+  const int16_t *kerning; // Printable ASCII pairs and signed kerning amounts (1/127 em).
   unsigned kerning_count;
   // Advance entries counted from codepoint 32. The measured D10 tables cover
   // 32..255; the D6 controller tables cover printable ASCII (95 entries).

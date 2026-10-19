@@ -286,7 +286,7 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             let port = director64_aot::ports::Port::from_json(&json_file(1)?)?;
             Ok(director64_aot::ports::plan(&port, &json_file(2)?)?.to_string())
         }
-        // director port-model MODEL PORT SUBSTITUTE-TTF DATA-FILES [KEY=FONT64 ...] [external=RECORDS.json]:
+        // director port-model MODEL PORT SUBSTITUTE-TTF DATA-FILES [KEY=METRICS.json ...] [external=RECORDS.json]:
         // prints the model; a port's substitute font lands beside it.
         "port-model" => {
             let mut model = json_file(1)?;
