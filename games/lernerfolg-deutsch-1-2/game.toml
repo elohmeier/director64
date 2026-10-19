@@ -25,3 +25,9 @@ native_compatibility = true
 host_package = "director64_lernerfolg_deutsch_1_2"
 # Videos convert after the scene model (compiler/src/ports.rs plan).
 defer_video = true
+
+[player]
+saves = ["players.ini", "start.ini", "book.ini", "highscore.ini", "config.txt", "time_reg.txt",
+         "save", "save0#"]
+# Save timestamps show a fixed date: there is no clock selection.
+long_date = "Montag, 1. September 2014"

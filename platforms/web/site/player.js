@@ -558,7 +558,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
       overlay({heading: t("game.ended"), buttons: ["reload"]});
     } else {
       overlay({heading: t("game.stopped"), text: error,
-        detail: profile.save_files.length ? t("game.savesKept") : "", buttons: ["reload"], error: true});
+        detail: profile.saves ? t("game.savesKept") : "", buttons: ["reload"], error: true});
     }
   }
   function tick(now) {
@@ -675,7 +675,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
 
   // What the page's menu works with.
   return {
-    hasSaves: profile.save_files.length > 0,
+    hasSaves: profile.saves,
     durable,
     hold,
     exportSave,

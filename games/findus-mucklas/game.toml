@@ -22,3 +22,16 @@ entry_movie = "START"
 launcher_movie = "START.DXR"
 native_compatibility = true
 host_package = "director64_findus_mucklas"
+
+[player]
+saves = ["player#.p3", "data.p3", "moblemang.dxt|mobleman.dxt", "pettson3.ini"]
+switches = ["MUCKLAS"]
+folders = [
+  ["p3media", "intro.dxr"],
+  ["*", "player1.p3", "player2.p3", "player3.p3", "player4.p3", "player5.p3", "player6.p3",
+   "data.p3", "moblemang.dxt"],
+]
+[player.files]
+# A fresh installation's configuration. This disc has no VI movie; the
+# attic control is gated on Vind, which would request an absent asset.
+"pettson3.ini" = "[CD]\rcdrom=d\r[Wind]\rVind=0\r[Screen]\rfullscreen=1\r"

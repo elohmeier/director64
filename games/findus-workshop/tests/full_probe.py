@@ -384,7 +384,7 @@ def verkork(p):
     instruments, notes = p.value("linstrument"), p.value("lnot")
     assert instruments[:3] == [1, 1, 1] and notes[:3] == [1, 2, 3], "music placement"
     p.click(484, 42, after=500)
-    assert p.value("antalposterifil") == 1 and p.state["save_lengths"][8] == 161
+    assert p.value("antalposterifil") == 1 and len(p.state["saves"].get("musikfil.txt", "")) == 161
     p.click(150, 50, after=500)
     assert not any(p.value("linstrument")), "music clear"
     p.click(536, 45, after=500)
@@ -430,7 +430,7 @@ def bredhogn(p):
     assert p.value("lrot")[:3] != old, "construction editor rotation"
     objects, rotations = p.value("lobjekt")[:3], p.value("lrot")[:3]
     p.click(315, 455, after=500)
-    assert p.value("antalposterifil") == 1 and p.state["save_lengths"][7] > 30
+    assert p.value("antalposterifil") == 1 and len(p.state["saves"].get("byggfil.txt", "")) > 30
     p.click(612, 440, after=500)
     assert not p.value("gantalobj"), "construction editor clear"
     p.click(360, 455, after=500)
@@ -443,7 +443,7 @@ def bredhogn(p):
     left, t, r, b = p.sprite(46)["bounds"]
     p.click((left + r) // 2, (t + b) // 2, after=100)
     p.until(lambda s: s["movie"] == "PINTRO.DXR")
-    assert p.state["save_lengths"][7] > 60, "save-on-return"
+    assert len(p.state["saves"].get("byggfil.txt", "")) > 60, "save-on-return"
 
 
 def mossen(p):
@@ -580,7 +580,8 @@ def profiles(p):
         p.click(530, 35)
         p.until(lambda s: s["movie"] == "VEMORY.DXR")
         vemory(p, 1)
-        saved = [int(s.split("\r")[0]) for s in p.state["save_contents"][:7]]
+        saves = p.state["saves"]
+        saved = [int((saves.get(f"vakt{n}.txt") or "0").split("\r")[0]) for n in range(1, 8)]
         assert saved == [1] * profile + [0] * (7 - profile), "profile isolation"
     p.reboot()
     workshop(p, 3)

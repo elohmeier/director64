@@ -7,14 +7,15 @@
 
 export const FLASH_BYTES = 131072;
 
-// An archive slot starts with its magic, or the slot is erased flash.
+// A generation starts with its magic (runtime/storage/saves.c), or the slot
+// is erased.
 export function plausibleFlash(bytes) {
   if (bytes.length !== FLASH_BYTES) return false;
   const half = FLASH_BYTES / 2;
   for (const offset of [0, half]) {
     const slot = bytes.subarray(offset, offset + half);
     const magic = String.fromCharCode(...slot.subarray(0, 4));
-    if (!/^[A-Z0-9]{4}$/.test(magic) && !slot.every((b) => b === 255)) return false;
+    if (magic !== "D64S" && !slot.every((b) => b === 255)) return false;
   }
   return true;
 }

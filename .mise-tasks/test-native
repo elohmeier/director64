@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 mkdir -p build/tests
 python3 tools/reference/generate_avm1_fixtures.py build/tests/avm1_original.h
-includes=(-Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage -Igames/findus-workshop/runtime)
+includes=(-Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage)
 compile() {
     local name=$1
     shift
@@ -59,7 +59,7 @@ done
 compile lingo_d8 -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_lingo_d8.c runtime/lingo/lingo_runtime.c
 compile lingo_collect tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
 compile lingo_collect_extended_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
-compile archive games/findus-workshop/tests/test_archive.c games/findus-workshop/runtime/{archive,save}.c
+compile saves -Iruntime -Itests/native/saves_profile tests/native/test_saves.c runtime/storage/saves.c
 for test in director director_timing director_state; do
     compile "$test" "tests/native/test_$test.c" runtime/director/director.c runtime/lingo/lingo_runtime.c
 done
@@ -111,19 +111,11 @@ compile rich_text_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_rich_text.c ru
 compile rich_text_d7 -DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile rich_text_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 
-"${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic -Iruntime -Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage -Igames/findus-mucklas/runtime games/findus-mucklas/tests/test_save.c games/findus-mucklas/runtime/{archive,game}.c -o build/tests/mucklas_save
-build/tests/mucklas_save
 
-"${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic -Iruntime/storage -Igames/willy-werkel-cars/runtime games/willy-werkel-cars/tests/test_archive.c games/willy-werkel-cars/runtime/archive.c -o build/tests/willy_archive
-build/tests/willy_archive
 
 compile director_d7 -DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d7.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 
-"${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic -Iruntime/storage -Igames/findus-christmas/runtime games/findus-christmas/tests/test_archive.c games/findus-christmas/runtime/archive.c -o build/tests/christmas_archive
-build/tests/christmas_archive
 
-"${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic -Iruntime/storage -Igames/lernerfolg-deutsch-1-2/runtime games/lernerfolg-deutsch-1-2/tests/test_archive.c games/lernerfolg-deutsch-1-2/runtime/archive.c -o build/tests/deutsch_archive
-build/tests/deutsch_archive
 
 compile director_d7_frame_events -DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_frame_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 

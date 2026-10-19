@@ -24,3 +24,8 @@ launcher_movie = "START.DXR"
 host_package = "director64_findus_christmas"
 # Videos convert after the scene model (compiler/src/ports.rs plan).
 defer_video = true
+
+[player]
+saves = ["byggfil.txt"]
+# A fixed Christmas Eve makes all 24 activities available.
+long_date = "Sunday, December 24, 2000"

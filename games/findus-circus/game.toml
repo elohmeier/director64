@@ -23,3 +23,12 @@ media_root = "PF2"
 entry_movie = "PF2"
 launcher_movie = "PF2.DXR"
 native_compatibility = true
+
+[player]
+saves = ["score.dat", "pf2.ini"]
+# The engine locates itself from the projector's folder (ENGINE.CXT
+# psPathLocator); PF2\ beside the movie file is its developer layout.
+movie_path = "C:\\PF2\\"
+# LOGIN's own keyDown handlers type the player's name into editText while
+# the score waits at markers 50-52 or 64-66.
+key_field = { movie = "LOGIN.DXR", member = "editText", frames = [105, 114, 175, 184] }

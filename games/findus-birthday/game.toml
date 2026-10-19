@@ -24,3 +24,13 @@ media_root = "SPIEL"
 entry_movie = "PF3"
 launcher_movie = "PF3.DXR"
 native_compatibility = false
+
+[player]
+saves = ["info.dat", "generalsettings.dat", "###.sav"]
+data_folder = "SPIEL/XML"
+[player.files]
+# The projector's settings with the developers' debug switches: no copy
+# check (optgraph.dll), no CD drive search, no display mode change.
+"pf3.ini|projector.ini" = "[Settings]\r\nSingleInstance=1\r\n\r\n[Sound]\r\nLowSpoolBufferMs=5000\r\nHighSpoolBufferMs=3000\r\n\r\n[Debug]\r\nCheckCopyProtection=0\r\nCheckCDInsert=0\r\nChangeScreenDim=0\r\n"
+# The flag file beside the projector marks the installed data layout.
+"cd1pf3.flg" = " "

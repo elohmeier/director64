@@ -421,15 +421,16 @@ class Converter:
                           for f in model.get("fonts", [])
                           if f["asset"].endswith((".otf", ".ttf"))}
         # Sound streams for playFile, by "folder/stem" in lowercase, with their
-        # durations; a NAME=FOLDER entry streams FOLDER's files under NAME.
+        # durations.
         packs["streams"] = {}
         if plan.get("streams"):
-            specs = [s if "=" in s else f"{s}={s}" for s in plan["streams"]]
+            # A NAME=FOLDER entry streams FOLDER's files under NAME; a folder
+            # the disc does not have streams nothing.
+            specs = [s.partition("=") if "=" in s else (s, "=", s) for s in plan["streams"]]
+            folders = [f"{name}={extracted / folder}" for name, _, folder in specs
+                       if (extracted / folder).is_dir()]
             blob = self.work / "streams.bin"
-            index = json.loads(self.director(
-                "stream-pack", blob,
-                *[f"{name}={extracted / folder}" for name, _, folder in
-                  (s.partition("=") for s in specs)]))
+            index = json.loads(self.director("stream-pack", blob, *folders))
             data = blob.read_bytes()
             packs["streams"] = {name: (data[at:at + length], rest)
                                 for name, (at, length, *rest) in index.items()}
@@ -714,11 +715,9 @@ def prepared_policy(game: GameSpec, work: Path, extracted: Path) -> Path:
 
 
 def profile_sha256(game: GameSpec) -> str:
-    from .web import profile_entry, web_profile
+    from .web import profile_entry
 
-    return hashlib.sha256(
-        json.dumps(profile_entry(game, web_profile(game)), sort_keys=True).encode()
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(profile_entry(game), sort_keys=True).encode()).hexdigest()
 
 
 def convert(game: GameSpec, out: Path | None = None, force: bool = False) -> Path:

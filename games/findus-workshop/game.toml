@@ -23,3 +23,8 @@ director_version = 600
 media_root = "POFMEDIA"
 entry_movie = "START"
 host_package = "director64_findus_workshop"
+
+[player]
+saves = ["vakt#.txt", "byggfil.txt", "musikfil.txt"]
+# The profile picker lists the seven player files in any folder.
+folders = [["*", "vakt1.txt", "vakt2.txt", "vakt3.txt", "vakt4.txt", "vakt5.txt", "vakt6.txt", "vakt7.txt"]]

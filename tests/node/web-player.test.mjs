@@ -72,7 +72,7 @@ test("imported saves must look like an archive or erased flash", () => {
   const erased = new Uint8Array(FLASH_BYTES).fill(255);
   assert.ok(plausibleFlash(erased));
   const saved = erased.slice();
-  saved.set(Buffer.from("F64D"), 0);
+  saved.set(Buffer.from("D64S"), 0);
   assert.ok(plausibleFlash(saved));
   assert.ok(!plausibleFlash(erased.subarray(1)));
   const garbage = new Uint8Array(FLASH_BYTES);

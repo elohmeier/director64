@@ -9,7 +9,7 @@
 #include "compositor.h"
 #include "game.h"
 #include "pointer.h"
-#include "web_profile.h" // generated: entry movie and the game's save files
+#include "game_profile.h" // generated from the game's game.toml [player] table
 #ifdef DIRECTOR64_WILLY
 #include "willy_input.h"
 #endif
@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
+#include <strings.h>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #else
@@ -48,12 +49,6 @@ static const char *const global_names[] = {
 #include "globals.inc"
 };
 static const unsigned global_count = sizeof(global_names) / sizeof(*global_names);
-#endif
-#ifndef DIRECTOR64_GAME_PROBE
-// The default state line reports the save archive's files; a game's own
-// probe state (games/<slug>/probe) reports what that game needs.
-static const char *const save_files[] = {DIRECTOR64_SAVE_FILES};
-enum { SAVE_FILE_COUNT = sizeof(save_files) / sizeof(*save_files) };
 #endif
 
 static lv_runtime_t values;
@@ -250,15 +245,27 @@ static int layout(void *ctx, const char *text, int width, int height,
   return host.layout ? host.layout(host.ctx, text, width, height, style, boxes, max_chars) : 0;
 }
 
-// Ports whose engine reads no folder of its own answer the drive root.
-__attribute__((weak)) const char *game_movie_path(void *ctx) {
+#if DG_D10
+// The folder `the moviePath` names, or NULL for the drive root "C:\": a
+// port's engine that locates itself from its folder answers its own.
+static const char *game_movie_path(void *ctx) {
   (void)ctx;
+#ifdef GAME_MOVIE_PATH
+  return GAME_MOVIE_PATH;
+#else
   return NULL;
+#endif
 }
-__attribute__((weak)) const char *game_data_folder(void *ctx) {
+// The shipped read-only data folder FileIO reads from, or NULL.
+static const char *game_data_folder(void *ctx) {
   (void)ctx;
+#ifdef GAME_DATA_FOLDER
+  return GAME_DATA_FOLDER;
+#else
   return NULL;
+#endif
 }
+#endif
 #if DG_D10
 // The authored long name find() last resolved through its 8.3 truncation.
 static char found_alias[40];
@@ -681,11 +688,23 @@ EMSCRIPTEN_KEEPALIVE const int *d64_text_field_rect(void) { return text_field_re
 // at the pointer, or with `anywhere` the one taking a name now, while it
 // does; its stage rectangle is filled in as d64_text_field's.
 #if DG_D10 && !defined(DIRECTOR64_MUCKLAS)
-// A Director 8.5 port's key field (games/<slug>/runtime): none by default.
-__attribute__((weak)) bool game_key_field(void *runtime, unsigned sprite) {
-  (void)runtime;
+// The field a port's own keyDown handlers type a name into (game.toml
+// [player.key_field]): the member of that name in that movie, while the
+// score is in one of the frame ranges.
+static bool game_key_field(dg_runtime_t *d, unsigned sprite) {
+#ifdef GAME_KEY_FIELD_MOVIE
+  static const unsigned frames[] = {GAME_KEY_FIELD_FRAMES};
+  if (!d->movie || strcasecmp(d->movie->code->name, GAME_KEY_FIELD_MOVIE)) return false;
+  bool inside = false;
+  for (unsigned i = 0; i + 1 < sizeof(frames) / sizeof(*frames); i += 2)
+    inside |= d->frame >= frames[i] && d->frame <= frames[i + 1];
+  const dg_member_t *m = inside ? dg_member(d, d->sprites[sprite].value.member) : NULL;
+  return m && m->name && !strcasecmp(m->name, GAME_KEY_FIELD_MEMBER);
+#else
+  (void)d;
   (void)sprite;
   return false;
+#endif
 }
 #endif
 EMSCRIPTEN_KEEPALIVE unsigned d64_key_field(int x, int y, int anywhere) {
@@ -879,25 +898,22 @@ static void state(void) {
     emit("}");
   }
   const pointer_player_t *driver = pointer_driver(&pointer);
-  emit("],\"pointer\":{\"player\":%u,\"x\":%d,\"y\":%d},\"save_lengths\":[",
+  emit("],\"pointer\":{\"player\":%u,\"x\":%d,\"y\":%d},\"saves\":{",
        pointer.active + 1, driver->input.x / INPUT_ONE,
        driver->input.y / INPUT_ONE);
-  static char contents[SAVE_FILE_COUNT][16384];
-  unsigned lengths[SAVE_FILE_COUNT];
-  for (unsigned i = 0; i < SAVE_FILE_COUNT; i++) {
-    lengths[i] = 0;
-    if (!game_read_file(save_files[i], contents[i], sizeof(contents[i]), &lengths[i]))
-      lengths[i] = 0;
-    contents[i][lengths[i]] = 0;
-    emit("%s%u", i ? "," : "", lengths[i]);
-  }
-  emit("],\"save_contents\":[");
-  for (unsigned i = 0; i < SAVE_FILE_COUNT; i++) {
+  // The saved files by name, with their text.
+  static char contents[16384];
+  for (unsigned i = 0; game_save_name(i); i++) {
+    unsigned length = 0;
+    if (!game_read_file(game_save_name(i), contents, sizeof(contents), &length)) length = 0;
+    contents[length] = 0;
     if (i)
       emit(",");
-    quoted(contents[i]);
+    quoted(game_save_name(i));
+    emit(":");
+    quoted(contents);
   }
-  emit("],\"save_generation\":%u}\n", game_save_generation());
+  emit("},\"save_generation\":%u}\n", game_save_generation());
 }
 #endif
 static void point(unsigned sprite) {

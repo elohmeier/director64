@@ -23,3 +23,14 @@ media_root = "."
 entry_movie = "START"
 launcher_movie = "START.DXR"
 native_compatibility = true
+
+[player]
+saves = ["pfscore.dat"]
+# The launcher's installed-copy test lists the Score folder.
+folders = [["score", "pfScore.dat"]]
+[player.files]
+# The launcher's developer switch plays from the installed copy: no CD drive
+# search and no optgraph.dll copy check.
+"pfstart.ini" = "[custom]\r\nhdEnabled=1\r\ndebug=0\r\n"
+# What the installer writes to the Windows folder: the score folder.
+"pfgame.ini" = "[Pettersson]\r\ninstpfad=C:\\Findus\\Score\r\n"

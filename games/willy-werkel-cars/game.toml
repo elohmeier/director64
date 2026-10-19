@@ -25,3 +25,10 @@ launcher_movie = "START.DXR"
 host_package = "director64_willy_werkel_cars"
 # Videos convert after the scene model (compiler/src/ports.rs plan).
 defer_video = true
+
+[player]
+saves = ["data.cxt|data.cst"]
+switches = ["WILLY"]
+[player.files]
+# The embedded launcher only checks that this disc marker exists.
+"mulle.ico" = ""

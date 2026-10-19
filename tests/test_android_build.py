@@ -86,8 +86,7 @@ def test_apk_receipt_tracks_selected_image_without_changing_edition(tmp_path, mo
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fixture")
-    monkeypatch.setattr(web, "web_profile", lambda game: {})
-    monkeypatch.setattr(web, "profile_entry", lambda game, web: {"source": game.source})
+    monkeypatch.setattr(web, "profile_entry", lambda game: {"source": game.source})
     monkeypatch.setattr(android, "source_digest", lambda root: "converter")
     game.dist.mkdir(parents=True)
     apk = android.apk_path(game)

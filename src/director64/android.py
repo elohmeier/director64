@@ -95,9 +95,9 @@ def makefile(game: GameSpec, output: Path, abis: list[str]) -> Path:
     root = game.root
     gen = output / "gen"
     gen.mkdir(parents=True, exist_ok=True)
-    header = web.profile_header(game, web.web_profile(game))
-    if not (gen / "web_profile.h").is_file() or (gen / "web_profile.h").read_text() != header:
-        (gen / "web_profile.h").write_text(header)
+    header = web.profile_header(game)
+    if not (gen / "game_profile.h").is_file() or (gen / "game_profile.h").read_text() != header:
+        (gen / "game_profile.h").write_text(header)
     command = web.compile_command(game, output)
     arguments = command[1 : command.index("--js-library")]
     sources = [a for a in arguments if a.endswith(".c") and a != "platforms/web/web_main.c"] + list(
@@ -310,7 +310,7 @@ def apk_input_digest(game: GameSpec, abis: list[str]) -> str:
     digest = hashlib.sha256(json.dumps({
         "source": game.source["sha256"], "abis": abis,
         **game.image_identity,
-        "profile": web.profile_entry(game, web.web_profile(game)),
+        "profile": web.profile_entry(game),
         "converter": source_digest(root),
     }, sort_keys=True).encode())
     for path in sorted(paths):

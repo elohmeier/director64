@@ -31,3 +31,6 @@ native_compatibility = true
 host_package = "director64_loewenzahn_1"
 # Videos convert after the scene model (compiler/src/ports.rs plan).
 defer_video = true
+
+[player]
+switches = ["PRINTING"]

@@ -21,3 +21,7 @@ director_version = 850
 media_root = "DATA"
 entry_movie = "START"
 native_compatibility = true
+
+[player]
+# The preferences file, whatever its spelling ("Löwenzahn 7.usr").
+saves = ["*.usr"]
