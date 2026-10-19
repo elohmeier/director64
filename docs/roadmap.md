@@ -119,11 +119,6 @@ hosted target:
   time (`runtime/lingo/lingo_runtime.h`), and D8.5 already needs 4 MiB and
   32,768 objects. Pools that grow on demand on hosted builds would remove a
   class of overrun alerts.
-- **Cache-tuned struct layout.** Field order and padding in `lv_runtime_t`
-  (the per-step scalars first, `LV_CALL_BYTES` sized to the table it
-  replaced, appended rather than grouped tables) were chosen against a
-  console cache profile. On ARM and in the browser that ordering only holds
-  layout steady and can be simplified.
 - **The 640x480 prescale path.** `runtime/director/ink.h` and the converter
   still carry the rule that prescales an authored 800x600 stage to 640x480.
   Android and the web build run with `native_stage` (`DIRECTOR64_NATIVE_STAGE`)

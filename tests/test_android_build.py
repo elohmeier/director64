@@ -240,7 +240,7 @@ def test_apk_receipt_tracks_selected_image_without_changing_edition(tmp_path, mo
     game, repaired, data = repair_game(tmp_path)
     edition = game.source["sha256"]
     for name in (
-        "src/director64/android.py", "src/director64/build_inputs.py",
+        "src/director64/android.py", "src/director64/project.py",
         "src/director64/web.py", web.FONT, "tools/director/validate-package.c",
     ):
         path = tmp_path / name

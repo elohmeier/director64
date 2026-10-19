@@ -4138,14 +4138,7 @@ static unsigned next_event_channel(const dg_runtime_t *d, unsigned cursor,
     active = d->event_channels[word] & ~(quiet ? quiet[word] : 0u);
   unsigned next = DG_SPRITES;
   if (active) {
-    // Portable five-step bit scan; VR4300 has no count-trailing-zero opcode.
-    unsigned first = 0;
-    if (!(active & UINT32_C(0xffff))) { active >>= 16; first += 16; }
-    if (!(active & UINT32_C(0xff))) { active >>= 8; first += 8; }
-    if (!(active & UINT32_C(0xf))) { active >>= 4; first += 4; }
-    if (!(active & UINT32_C(3))) { active >>= 2; first += 2; }
-    if (!(active & UINT32_C(1))) first++;
-    next = word * 32 + first;
+    next = word * 32 + (unsigned)__builtin_ctz(active);
   }
   return next;
 }

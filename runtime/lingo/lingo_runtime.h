@@ -16,16 +16,11 @@
 // the recursion authored code does (a puzzle piece dragged against a wall
 // recurses once per stage update) is bounded by these, not by the widest
 // handler in the corpus.
-#ifdef DIRECTOR64_HOSTED
-// The browser and Android TV have the memory for the depth a player
-// reaches by holding a wedged puzzle piece for half a minute (Mucklas' NY
-// drag recurses a level per tick while the button is down).
+// The depth a player reaches by holding a wedged puzzle piece for half a
+// minute (Mucklas' NY drag recurses a level per tick while the button is
+// down).
 #define LV_FRAMES 4096
 #define LV_STACK_SLOTS 65536
-#else
-#define LV_FRAMES 256
-#define LV_STACK_SLOTS 4096
-#endif
 #define LV_TEXT_BYTES 16384
 #ifndef DIRECTOR64_DIRECTOR_VERSION
 #define DIRECTOR64_DIRECTOR_VERSION 6
@@ -296,8 +291,7 @@ typedef struct {
   uint32_t generation;
   uint8_t valid, self_void;
 } lv_call_cache_t;
-// The old table's bytes; the size is historical.
-enum { LV_CALL_BYTES = 4864, LV_CALL_SLOTS = LV_CALL_BYTES / sizeof(lv_call_cache_t) };
+enum { LV_CALL_SLOTS = 256 };
 // Inactive embedded-movie interpreters share this heap. Their suspended
 // roots and stacks remain visible to both garbage collection and resources.
 typedef struct lv_root_span {
@@ -342,25 +336,17 @@ struct lv_runtime {
   const lv_movie_t *current, *shared[LV_SHARED];
   unsigned shared_count;
   lv_call_cache_t call_cache[LV_CALL_SLOTS];
-  uint8_t call_cache_pad[LV_CALL_BYTES - LV_CALL_SLOTS * sizeof(lv_call_cache_t)];
   uint32_t call_generation;
   lv_t globals[LV_GLOBALS], roots[LV_ROOTS], the_result;
   lv_t script_objects[LV_SCRIPTS];
   unsigned script_count;
   unsigned char item_delimiter;
   // The frames, then the slots every frame's locals and temps are cut from.
-  // Field order is historical; no layout constraint remains.
   lv_frame_t frames[LV_FRAMES];
   lv_t stack[LV_STACK_SLOTS];
   lv_object_t objects[LV_OBJECTS];
 #if LV_ALLOCATION_CHAIN
   uint16_t allocation_first, allocation_last;
-#endif
-#if DG_EXTENDED
-  // The dynamic symbols' hash slots. The extended-D6 profile keeps this
-  // kilobyte here, where the symbol cache it replaced sat; every other
-  // profile appends it below.
-  uint16_t dynamic_symbol_slot[LV_DYNAMIC_SYMBOL_SLOTS];
 #endif
   _Alignas(lv_t) uint8_t heap[LV_HEAP_BYTES];
   char text_scratch[LV_TEXT_BYTES];
@@ -378,11 +364,8 @@ struct lv_runtime {
   uint32_t script_error_count;
   char error[160];
   char last_script_error[160];
-  // Appended rather than grouped with the other tables; the placement is
-  // historical.
-#if !DG_EXTENDED
+  // The dynamic symbols' hash slots.
   uint16_t dynamic_symbol_slot[LV_DYNAMIC_SYMBOL_SLOTS];
-#endif
   // Global slots by folded name hash (index + 1, 0 empty): the dynamic
   // paths (do, value) look globals up by name, and this spares them a walk
   // over hundreds of names per lookup.

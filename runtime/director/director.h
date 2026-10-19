@@ -54,8 +54,7 @@
 #define DG_FIELD_COLOR_ROOT (DG_FIELD_TEXT_ROOT + DG_FIELDS)
 #define DG_TRAILS 256
 // Stage commits no longer yield per object. Bound service work so dense script
-// loops leave VR4300 time for input, audio and drawing at the 60 Hz service
-// rate.
+// loops leave time for input, audio and drawing at the 60 Hz service rate.
 #define DG_SERVICE_BUDGET 288
 // A member id packs its file, its cast within that file and its number:
 // file << 21 | cast << 16 | number. Five cast bits hold the 17 cast

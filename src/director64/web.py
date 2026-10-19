@@ -218,8 +218,6 @@ def compile_command(game: GameSpec, output: Path) -> list[str]:
         *family_defines(game),
         *game_defines(game),
         "-DDIRECTOR64_WEBP=1",
-        # A hosted build: the deeper Lingo call stack (lingo_runtime.h).
-        "-DDIRECTOR64_HOSTED=1",
         "-DDIRECTOR64_PACKAGE",
         *sources(game),
         "--js-library",
