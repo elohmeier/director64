@@ -21,9 +21,9 @@ class LingoError(ValueError):
 
 
 def _binary() -> Path:
-    from .aot import generator_command, repository_root
+    from .project import converter
 
-    return Path(generator_command(repository_root())[0])
+    return Path(converter()[0])
 
 
 class _Server:

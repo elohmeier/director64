@@ -1,5 +1,5 @@
 // Durable saves in the origin-private file system. The runtime's save device
-// is a 128 KiB save image (games/*/runtime/archive.c); every committed
+// is a 128 KiB save image (runtime/storage/saves.c); every committed
 // generation is written here whole, and reported saved only once that write
 // has closed.
 // Saves live under their own namespace, apart from any converted-asset cache,

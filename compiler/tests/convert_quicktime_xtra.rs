@@ -54,6 +54,7 @@ fn bind(model: &mut Value, records: Vec<Value>) -> Result<(), String> {
         model,
         &Port {
             slug: "loewenzahn-7".into(),
+            convert: json!({"external_media": {"bind": "directmedia"}}),
             ..Port::default()
         },
         &PortFonts {

@@ -4,7 +4,7 @@ import json
 import struct
 import subprocess
 
-from director64.aot import generator_command, repository_root
+from director64.project import converter, repository
 
 
 def film_track_data(keys):
@@ -44,7 +44,7 @@ def film_track_data(keys):
 
 
 def test_linked_movie_metadata_survives_packaging(tmp_path):
-    root = repository_root()
+    root = repository()
     def layer(channel, *, enabled=True, x=11):
         data = [0] * 48
         data[0], data[1], data[2], data[3] = int(enabled), 136, 2, 3
@@ -160,7 +160,7 @@ def test_linked_movie_metadata_survives_packaging(tmp_path):
         (tmp_path / name).write_text(json.dumps(value))
     package = tmp_path / "game.d64p"
     subprocess.run([
-        *generator_command(root), "package", tmp_path / "program.json", tmp_path / "model.json",
+        *converter(), "package", tmp_path / "program.json", tmp_path / "model.json",
         package, "--bytecode", root / "runtime/lingo/lingo_bytecode.h",
         "--meta", tmp_path / "meta.json",
     ], check=True, capture_output=True)

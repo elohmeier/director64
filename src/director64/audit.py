@@ -14,10 +14,10 @@ from pathlib import Path
 
 def audit_model(model: dict, target: str) -> dict:
     """Use the same capability implementation as native and Wasm packaging."""
-    from .aot import generator_command, repository_root
+    from .project import converter
 
     result = subprocess.run(
-        [*generator_command(repository_root()), "capabilities", "-", target],
+        [*converter(), "capabilities", "-", target],
         input=json.dumps(model), text=True, capture_output=True, check=False,
     )
     if result.returncode:

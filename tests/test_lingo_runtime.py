@@ -1,42 +1,12 @@
-"""Execute D8 source lowering against native objects and GC continuations."""
-
-import shutil
-import subprocess
+"""Lingo run end to end on the runtime: control flow, yields, objects and
+collection, from source through a converted package (lingo_harness.py)."""
 
 import pytest
+from lingo_harness import run_lingo
 
-from director64.aot import generate
-from director64.lingo import parse_movie
-
-
-def test_decompiled_pi_call_initializes_local_before_heading_math(tmp_path):
-    run_native(tmp_path, """-- cast: Internal; member: 1; type: MovieScript; name: Test
-global east, north
-on start
-  set pi to PI
-  set east to sin(pi / 2)
-  set north to cos(PI)
-end
-""", 'assert(lv_numeric(global("east")) > 0.999); assert(lv_numeric(global("north")) < -0.999);')
-
-
-def run_native(tmp_path, source, assertions):
-    cc = shutil.which("cc")
-    if not cc:
-        pytest.skip("native C compiler unavailable")
-    generate({"handlers": parse_movie(source, "FIXTURE.DXR")}, tmp_path)
-    (tmp_path / "harness.c").write_text(
-        r"""
-#include "lingo_runtime.h"
-#include <assert.h>
-#include <stdio.h>
-#include <string.h>
-extern const lv_movie_t aot_fixture_dxr;
+D8_HARNESS = r"""
 static lv_runtime_t runtime;
 static unsigned yields;
-static const char *const names[]={
-#include "globals.inc"
-};
 static lv_t script(lv_runtime_t *r,const lv_movie_t *m,const lv_handler_t *h) {
     (void)r; (void)m;
     return lv_make(LV_SCRIPT, h->member);
@@ -50,7 +20,7 @@ static lv_t reference(lv_runtime_t *r,const char *kind,lv_t name,lv_t library) {
 static const lv_handler_t *resolve(lv_runtime_t *r,lv_t receiver,const char *name,
                                    const lv_movie_t **movie) {
     (void)r;
-    *movie=&aot_fixture_dxr;
+    *movie=fixture;
     return lv_find(NULL,*movie,name,(unsigned)lv_id(receiver));
 }
 static bool call(lv_runtime_t *r,const char *name,unsigned argc,const lv_t *args,
@@ -64,11 +34,13 @@ static lv_t global(const char *name) {
     assert(index>=0);
     return runtime.globals[index];
 }
-int main(void) {
+int main(int argc, char **argv) {
+    (void)argc;
+    load_fixture(argv[1]);
     lv_init(&runtime,(lv_services_t){.call=call,.script=script,.reference=reference,
-                                    .resolve=resolve},NULL,names,sizeof(names)/sizeof(*names),1);
-    runtime.current=&aot_fixture_dxr;
-    assert(lv_start(&runtime,&aot_fixture_dxr,"start",1,0,NULL));
+                                    .resolve=resolve},NULL,global_names,global_count,1);
+    runtime.current=fixture;
+    assert(lv_start(&runtime,fixture,"start",1,0,NULL));
     unsigned ticks=0;
     while(runtime.depth && ticks++<10000) {
         if (!lv_run(&runtime,3)) {
@@ -81,31 +53,135 @@ int main(void) {
     }
     assert(!runtime.depth && !runtime.failed);
 """
-        + assertions
-        + "\n}\n"
-    )
-    executable = tmp_path / "native-test"
-    subprocess.run(
-        [
-            cc,
-            "-std=c17",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-pedantic",
-            "-DDIRECTOR64_DIRECTOR_VERSION=8",
-            "-Iruntime/lingo",
-            str(tmp_path / "harness.c"),
-            str(tmp_path / "fixture_dxr.c"),
-            str(tmp_path / "symbols.c"),
-            "runtime/lingo/lingo_runtime.c",
-            "-lm",
-            "-o",
-            str(executable),
-        ],
-        check=True,
-    )
-    subprocess.run([str(executable)], check=True)
+
+
+def run_d8(tmp_path, source, assertions):
+    run_lingo(tmp_path, source, D8_HARNESS + assertions + "\n}\n", version=800)
+
+
+def test_control_flow_yields_and_results(tmp_path):
+    source = """-- cast: Internal; member: 1; type: MovieScript; name: fixture
+on start
+  global answer, aliased, nested, stringResult, retained
+  set a to [1, 2]
+  set aliased to a
+  set answer to 0
+  repeat with i = 1 to 5
+    if i = 2 then
+      next repeat
+    end if
+    set answer to answer + twice(i)
+    if i = 4 then
+      exit repeat
+    end if
+  end repeat
+  setAt(a, 2, answer)
+  repeat while answer < 20
+    set answer to answer + 1
+    updateStage()
+  end repeat
+  set nested to twice(waitFor(2)) + waitFor(twice(3))
+  set stringResult to "kept alive" & waitFor(8)
+  repeat while waitFor(nested) < 12
+    set nested to nested + 1
+  end repeat
+  twice(7)
+  set ignored to count([1, 2, 3])
+  set ignored to twice(5)
+  updateStage()
+  noResult()
+  set retained to the result
+end
+on twice n
+  return n * 2
+end
+on waitFor n
+  updateStage()
+  return n
+end
+on noResult
+  updateStage()
+end
+"""
+    run_lingo(tmp_path, source, r"""
+static lv_runtime_t runtime;
+static unsigned yields;
+static bool call(lv_runtime_t *r,const char *name,unsigned n,const lv_t *a,lv_t *v,bool *y) {
+    (void)r; (void)n; (void)a; (void)v;
+    if (strcmp(name,"updatestage")) return false;
+    *y=true; yields++; return true;
+}
+int main(int argc, char **argv) {
+    (void)argc;
+    load_fixture(argv[1]);
+    lv_init(&runtime,(lv_services_t){.call=call},0,global_names,global_count,1);
+    assert(lv_start(&runtime,fixture,"start",0,0,0));
+    unsigned ticks=0;
+    while(runtime.depth && ticks++<1000) assert(lv_run(&runtime,7));
+    assert(!runtime.depth && !runtime.failed && yields==12);
+    assert(lv_number(&runtime,runtime.globals[lv_global_id(&runtime,"retained")])==14);
+    assert(lv_number(&runtime,runtime.globals[lv_global_id(&runtime,"answer")])==20);
+    assert(lv_number(&runtime,lv_at(&runtime,runtime.globals[lv_global_id(&runtime,"aliased")],2))==16);
+    assert(lv_number(&runtime,runtime.globals[lv_global_id(&runtime,"nested")])==12);
+    lv_t text=runtime.globals[lv_global_id(&runtime,"stringresult")];
+    assert(!strcmp(lv_cstr(&runtime,text),"kept alive8"));
+}
+""")
+
+
+@pytest.mark.parametrize("condition", ["the timer < 3", "the mouseDown = 0", "soundBusy(1)"])
+def test_stage_updates_in_polling_loop(tmp_path, condition):
+    source = f"""-- cast: Internal; member: 1; type: MovieScript; name: fixture
+on start
+  global iterations, finished
+  set iterations to 0
+  repeat while {condition}
+    set iterations to iterations + 1
+    updateStage()
+  end repeat
+  set finished to 1
+end
+"""
+    run_lingo(tmp_path, source, r"""
+#include "director.h"
+static lv_runtime_t values;
+static dg_runtime_t director;
+static bool busy(void *context, unsigned channel) {
+    (void)context; (void)channel;
+    return director.ticks < 3;
+}
+int main(int argc, char **argv) {
+    (void)argc;
+    load_fixture(argv[1]);
+    const dg_frame_t frame={0};
+    const dg_movie_t movie={.code=fixture,.id=1,.tempo=1,
+                           .frame_count=1,.frames=&frame};
+    dg_init(&director,&values,(dg_platform_t){.sound_busy=busy},NULL,
+            global_names,global_count,1);
+    assert(dg_enter(&director,&movie,1,NULL,0));
+    assert(lv_start(&values,fixture,"start",0,0,NULL));
+    for (int tick=1;tick<=2;tick++) {
+        assert(dg_tick(&director,0,0,false,2048));
+        assert(values.yielded && values.depth);
+        assert(lv_integer(&values,values.globals[lv_global_id(&values,"iterations")])==tick);
+        assert(values.steps < 100);
+    }
+    assert(dg_tick(&director,0,0,true,2048));
+    assert(!values.depth);
+    assert(lv_integer(&values,values.globals[lv_global_id(&values,"finished")])==1);
+}
+""", director=True)
+
+
+def test_decompiled_pi_call_initializes_local_before_heading_math(tmp_path):
+    run_d8(tmp_path, """-- cast: Internal; member: 1; type: MovieScript; name: Test
+global east, north
+on start
+  set pi to PI
+  set east to sin(pi / 2)
+  set north to cos(PI)
+end
+""", 'assert(lv_numeric(global("east")) > 0.999); assert(lv_numeric(global("north")) < -0.999);')
 
 
 def test_cached_foreach_case_and_property_loop(tmp_path):
@@ -166,7 +242,7 @@ on tally me
   return [counter, total]
 end
 """
-    run_native(
+    run_d8(
         tmp_path,
         source,
         r"""
@@ -224,7 +300,7 @@ on join me, first, second
   return text & first & second
 end
 """
-    run_native(
+    run_d8(
         tmp_path,
         source,
         r"""
@@ -263,7 +339,7 @@ on bump me, amount
   counter = counter + amount
 end
 """
-    run_native(
+    run_d8(
         tmp_path,
         source,
         r"""
@@ -310,7 +386,7 @@ on nextSound me
   return ljudMember
 end
 """
-    run_native(
+    run_d8(
         tmp_path,
         source,
         r"""
@@ -353,13 +429,13 @@ on inner me
   return 3
 end
 """
-    run_native(
+    run_d8(
         tmp_path,
         source,
         r"""
     assert(lv_numeric(global("result"))==1);
     assert(yields==2 && runtime.aborted);
-    assert(lv_start(&runtime,&aot_fixture_dxr,"nextevent",1,0,NULL));
+    assert(lv_start(&runtime,fixture,"nextevent",1,0,NULL));
     assert(lv_run(&runtime,100));
     assert(!runtime.depth && !runtime.aborted && !runtime.failed);
     assert(lv_numeric(global("result"))==11);
@@ -384,7 +460,7 @@ on read me
   return junk
 end
 """
-    run_native(
+    run_d8(
         tmp_path,
         source,
         'assert(lv_numeric(global("result")) == 42); assert(lv_numeric(global("junk")) == 99);',
@@ -394,7 +470,7 @@ end
 def test_long_literal_list_builds_in_segments(tmp_path):
     """A 120-item literal exceeds one expression-stack segment (48 slots)."""
     items = ",".join(str(i * 3) for i in range(1, 121))
-    run_native(
+    run_d8(
         tmp_path,
         f"""-- cast: Internal; member: 1; type: MovieScript; name: Test
 global total, width, head, tail

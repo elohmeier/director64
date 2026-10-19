@@ -31,6 +31,16 @@ def repository() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def converter(root: Path | None = None) -> list[str]:
+    """The Rust converter binary (`cargo build --release` in compiler/) with
+    the runtime's name table."""
+    root = root or repository()
+    binary = root / "compiler/target/release/director64-aot"
+    if not binary.is_file():
+        raise ValueError(f"{binary} is not built; run mise run compiler")
+    return [str(binary), "--names", str(root / "runtime/lingo/names.txt")]
+
+
 @dataclass(frozen=True)
 class GameSpec:
     root: Path

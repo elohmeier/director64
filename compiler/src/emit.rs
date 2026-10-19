@@ -1,25 +1,15 @@
-//! Write a program's bytecode units: one C file and one listing per movie,
-//! the globals table and the manifest, byte for byte what the Python
-//! generator wrote.
+//! Compile a program into per-movie bytecode units, handler tables and the
+//! symbol layout the game package carries.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::Path;
 
-use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
+
 use crate::ast::{Handler, Program, StmtKind, for_each_stmt};
-use crate::bytecode::listing;
 use crate::compiler::{Compiler, Corpus, Interner, Sibling, polling_cycles};
 use crate::names::Names;
 use crate::normalize::normalize;
-use crate::pyfmt::{cstring, float_repr, json_dumps};
-
-pub struct Summary {
-    pub movies: usize,
-    pub bytecode_bytes: usize,
-    pub globals: usize,
-}
 
 /// FNV-1a over the ASCII-folded name, matching `lv_text_hash` in
 /// runtime/lingo/lingo_runtime.c: the key of every generated name index.
@@ -67,10 +57,6 @@ pub fn handler_index(names: &[&str]) -> (Vec<usize>, Vec<usize>) {
 /// symbol, spelled the way it was first interned.
 pub fn fold(name: &str) -> String {
     name.to_ascii_lowercase()
-}
-
-fn hex(digest: &[u8]) -> String {
-    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// One handler's table entry, as the runtime's lv_handler_t holds it.
@@ -310,240 +296,6 @@ pub fn compile_program(program: &Program, names: &Names) -> Result<Compiled, Str
         globals: declared.into_iter().collect(),
         ancestors: corpus.ancestors,
         bytecode_bytes: total_bytes,
-    })
-}
-
-fn unit_source(unit: &Unit, compiled: &Compiled, names: &Names) -> String {
-    let mut source = String::from("#include \"lingo_runtime.h\"\n");
-    for (name, code, _) in &unit.blocks {
-        source.push_str(&format!(
-            "static const uint8_t {name}[]={{{}}};\n",
-            code.iter()
-                .map(|b| b.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        ));
-    }
-    let entries: Vec<String> = unit
-        .entries
-        .iter()
-        .map(|e| {
-            let local_names = if e.locals.is_empty() {
-                "NULL".to_string()
-            } else {
-                e.locals.iter().map(|n| cstring(n)).collect::<Vec<_>>().join(",")
-            };
-            let property_names = if e.properties.is_empty() {
-                "NULL".to_string()
-            } else {
-                e.properties.iter().map(|n| cstring(n)).collect::<Vec<_>>().join(",")
-            };
-            let name = &unit.blocks[e.block].0;
-            format!(
-                "{{{},{},{},{},{},{},{},NULL,(const char *const[]){{{}}},{},(const char *const[]){{{}}},{},sizeof({})}}",
-                cstring(&e.name),
-                e.member,
-                cstring(&e.cast),
-                cstring(&e.kind),
-                e.arguments,
-                e.locals.len(),
-                e.entry,
-                local_names,
-                e.properties.len(),
-                property_names,
-                name,
-                name
-            )
-        })
-        .collect();
-    source.push_str(&format!(
-        "static const lv_handler_t entries[]={{ {} }};\n",
-        if entries.is_empty() {
-            "{0}".to_string()
-        } else {
-            entries.join(",")
-        }
-    ));
-    if !unit.doubles.is_empty() {
-        source.push_str(&format!(
-            "static const double lx_doubles[]={{{}}};\n",
-            unit.doubles
-                .iter()
-                .map(|v| float_repr(*v))
-                .collect::<Vec<_>>()
-                .join(",")
-        ));
-    }
-    if !unit.entries.is_empty() {
-        source.push_str(&format!(
-            "static const uint16_t lx_handler_order[]={{{}}};\nstatic const uint16_t lx_handler_buckets[]={{{}}};\n",
-            unit.order.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(","),
-            unit.buckets.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(","),
-        ));
-    }
-    // Every pooled name with its dispatch id and its symbol id
-    // (LV_NO_SYMBOL where no op reads the name as a symbol).
-    if !unit.names.is_empty() {
-        let records: Vec<String> = unit
-            .names
-            .iter()
-            .zip(&unit.symbol_use)
-            .map(|(name, used)| {
-                format!(
-                    "{{{},{},{}}}",
-                    cstring(name),
-                    names.id(name),
-                    if *used {
-                        compiled.symbol_ids[&fold(name)].to_string()
-                    } else {
-                        "65535".to_string()
-                    }
-                )
-            })
-            .collect();
-        source.push_str(&format!(
-            "static const lv_name_t lx_names[]={{{}}};\n",
-            records.join(",")
-        ));
-    }
-    let has_entries = !unit.entries.is_empty();
-    source.push_str(&format!(
-        "const lv_movie_t {}={{{}, {}, entries, {}, {}, {}, {}, {}}};\n",
-        unit.symbol,
-        cstring(&unit.movie),
-        unit.entries.len(),
-        if unit.names.is_empty() {
-            "NULL"
-        } else {
-            "lx_names"
-        },
-        if unit.doubles.is_empty() {
-            "NULL"
-        } else {
-            "lx_doubles"
-        },
-        if has_entries {
-            "lx_handler_order"
-        } else {
-            "NULL"
-        },
-        if has_entries {
-            "lx_handler_buckets"
-        } else {
-            "NULL"
-        },
-        unit.bucket_count(),
-    ));
-    source
-}
-
-fn symbols_source(compiled: &Compiled) -> String {
-    let mut source = String::from("#include \"lingo_runtime.h\"\n");
-    source.push_str(&format!(
-        "static const char *const text[]={{{}}};\n",
-        if compiled.symbols.is_empty() {
-            "NULL".to_string()
-        } else {
-            compiled
-                .symbols
-                .iter()
-                .map(|n| cstring(n))
-                .collect::<Vec<_>>()
-                .join(",")
-        }
-    ));
-    source.push_str(&format!(
-        "static const uint16_t buckets[]={{{}}};\n",
-        compiled
-            .symbol_buckets
-            .iter()
-            .map(|i| i.to_string())
-            .collect::<Vec<_>>()
-            .join(",")
-    ));
-    source.push_str(&format!(
-        "const lb_symbol_table_t lb_symbols={{text, {}, buckets, {}}};\n",
-        compiled.symbols.len(),
-        compiled.symbol_bucket_count
-    ));
-    source
-}
-
-pub fn generate(program: &Program, output: &Path, names: &Names) -> Result<Summary, String> {
-    let compiled = compile_program(program, names)?;
-    std::fs::create_dir_all(output).map_err(|e| format!("{}: {e}", output.display()))?;
-    std::fs::write(output.join("symbols.c"), symbols_source(&compiled))
-        .map_err(|e| e.to_string())?;
-    let mut specs = Vec::new();
-    for unit in &compiled.units {
-        let source = unit_source(unit, &compiled, names);
-        let mut text = format!("# {} bytecode\n", unit.movie);
-        for (name, code, owners) in &unit.blocks {
-            text.push_str(&format!(
-                "\n{name}: {}\n{}",
-                owners.join("; "),
-                listing(code)?
-            ));
-        }
-        std::fs::write(output.join(format!("{}.c", unit.stem)), &source)
-            .map_err(|e| e.to_string())?;
-        std::fs::write(output.join(format!("{}.lst", unit.stem)), &text)
-            .map_err(|e| e.to_string())?;
-        specs.push(json!({
-            "movie": unit.movie,
-            "file": format!("{}.c", unit.stem),
-            "symbol": unit.symbol,
-            "sha256": hex(&Sha256::digest(source.as_bytes())),
-            "handlers": unit.entries.len(),
-            "code_kind": "bytecode",
-            "native_functions": 0,
-            "bytecode_functions": unit.blocks.len(),
-            "bytecode_bytes": unit.bytes,
-            "local_calls": unit.local_calls,
-            "builtin_calls": unit.builtin_calls,
-            "dynamic_calls": unit.dynamic_calls,
-        }));
-    }
-    let mut globals_json = Map::new();
-    for (i, name) in compiled.globals.iter().enumerate() {
-        globals_json.insert(name.clone(), Value::from(i));
-    }
-    let globals_value = Value::Object(globals_json);
-    std::fs::write(
-        output.join("globals.json"),
-        json_dumps(&globals_value) + "\n",
-    )
-    .map_err(|e| e.to_string())?;
-    std::fs::write(
-        output.join("globals.inc"),
-        compiled
-            .globals
-            .iter()
-            .map(|n| cstring(n))
-            .collect::<Vec<_>>()
-            .join(",\n")
-            + "\n",
-    )
-    .map_err(|e| e.to_string())?;
-    let mut manifest = Map::new();
-    manifest.insert("schema_version".into(), Value::from(1));
-    manifest.insert("movies".into(), Value::Array(specs));
-    manifest.insert("symbols".into(), Value::from(compiled.symbol_names.len()));
-    manifest.insert("ancestors".into(), Value::Bool(compiled.ancestors));
-    manifest.insert("globals".into(), globals_value);
-    manifest.insert("native_execution_verified".into(), Value::Bool(false));
-    if let Some(fixes) = &program.compatibility_fixes {
-        manifest.insert("compatibility_fixes".into(), fixes.clone());
-    }
-    std::fs::write(
-        output.join("manifest.json"),
-        json_dumps(&Value::Object(manifest)) + "\n",
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(Summary {
-        movies: compiled.units.len(),
-        bytecode_bytes: compiled.bytecode_bytes,
-        globals: compiled.globals.len(),
     })
 }
 

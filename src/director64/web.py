@@ -229,7 +229,6 @@ def compile_command(game: GameSpec, output: Path) -> list[str]:
         *family_defines(game),
         *game_defines(game),
         "-DDIRECTOR64_WEBP=1",
-        "-DDIRECTOR64_PACKAGE",
         *sources(game),
         "--js-library",
         "platforms/web/library.js",
@@ -315,12 +314,12 @@ def profile_entry(game: GameSpec) -> dict:
                 "entry_movie",
                 "extended_d6",
                 "launcher_movie",
-                "native_compatibility",
                 "defer_video",
             )
             if key in port
         },
         "policy": web_policy(game),
+        "convert": game.data.get("convert", {}),
     }
 
 

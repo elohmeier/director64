@@ -26,13 +26,11 @@ void d64_shutdown(void) {
   release_runtime();
   memset(&director, 0, sizeof(director));
   memset(&values, 0, sizeof(values));
-#ifdef DIRECTOR64_PACKAGE
   dg_package_free(&package);
   dg_registry = NULL;
   dg_registry_count = global_count = 0;
   global_names = NULL;
   lv_use_symbols((lb_symbol_table_t){0});
   package_error[0] = 0;
-#endif
   host = (web_host_t){0};
 }

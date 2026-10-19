@@ -29,3 +29,6 @@ defer_video = true
 saves = ["byggfil.txt"]
 # A fixed Christmas Eve makes all 24 activities available.
 long_date = "Sunday, December 24, 2000"
+
+[convert]
+substitute_font = { asset = "fonts/christmas-system.ttf" }

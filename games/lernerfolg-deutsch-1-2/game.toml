@@ -21,7 +21,6 @@ director_version = 1000
 media_root = "."
 entry_movie = "DEUTSCH"
 launcher_movie = "DEUTSCH.DXR"
-native_compatibility = true
 host_package = "director64_lernerfolg_deutsch_1_2"
 # Videos convert after the scene model (compiler/src/ports.rs plan).
 defer_video = true
@@ -31,3 +30,28 @@ saves = ["players.ini", "start.ini", "book.ini", "highscore.ini", "config.txt", 
          "save", "save0#"]
 # Save timestamps show a fixed date: there is no clock selection.
 long_date = "Montag, 1. September 2014"
+
+[convert]
+# Text layout reads mkfont-measured advances for every authored font size.
+measure_fonts = true
+streams = ["voc", "sfx"]
+data = ["tests_db"]
+
+# The two MX 2004 JavaScript-dialect handlers, recovered from their compiled
+# payloads, call the runtime's js_* natives.
+[[convert.patch]]
+id = "javascript-int2hex"
+movie = "TASKSCRIPTS.CXT"
+member = 9
+handler = "int2hex"
+source_sha256 = "400f1d944fee13df345a3ccb97a597363c5edde995cd689359145e1e8185abac"
+parameters = ["num"]
+body = "return js_int2hex(num)"
+
+[[convert.patch]]
+id = "javascript-cleargarbage"
+movie = "ZMSCRIPTS.CXT"
+member = 58
+handler = "cleargarbage"
+source_sha256 = "515abd3ad032882fdf3ff3d1d8e2468de62f28da773fa5cec0ae1b127a475822"
+body = "js_cleargarbage()"

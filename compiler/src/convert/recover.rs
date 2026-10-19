@@ -1,5 +1,4 @@
-//! tools/projectorrays/recover.mjs: run structural score recovery over the
-//! source audit's score resources.
+//! Structural score recovery over the source audit's score resources.
 
 use serde_json::{json, Value};
 
@@ -8,19 +7,13 @@ use super::js::stringify_pretty;
 use super::score::decode;
 use super::source::sha256;
 
-const PIN: &str = include_str!("../../../tools/projectorrays/pin.json");
 const DECODER: &str = include_str!("score.rs");
 
-/// The pinned extension this decoder ports, and the decoder itself.
+/// The decoder that recovered the scores.
 pub fn provenance() -> Value {
-    let pin: Value = serde_json::from_str(PIN).expect("pin.json");
     json!({
         "interface": "director64-convert",
-        "upstream_commit": pin["upstream_commit"],
-        "extension_commit": pin["extension_commit"],
         "implementation": {"compiler/src/convert/score.rs": sha256(DECODER.as_bytes())},
-        "ported_from": ["score_recovery.cpp", "score_recovery.h", "probe.cpp"],
-        "format_reference": pin["format_reference"],
     })
 }
 

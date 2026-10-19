@@ -1,27 +1,19 @@
-# Findus Workshop
+# Pettersson und Findus (Findus' workshop)
 
-The completed Director 6 Pettersson und Findus port is Director64's first game
-adapter.
+Supported Director 6 port of the German disc pinned in `game.toml` (an
+alternate CloneCD rip of the same pressing is accepted too).
 
 ```sh
 uv run --locked director64 android build --game findus-workshop
-uv run --locked director64 android install --game findus-workshop --serial <device>
 uv run --locked director64 web --game findus-workshop --serve
+uv run --locked director64 journey --game findus-workshop routes
 ```
 
-- Stick or D-pad moves the pointer; A (✕ on a DualShock) is the mouse button.
-  A mouse works too.
-- Up to four controllers play together, each with its own coloured cursor
-  ([shared pointer](../../docs/architecture.md#players-and-cursors)).
-- The game provides seven profiles and its construction/music save files.
+The port needs no source corrections. `[player]` in `game.toml` lists the
+seven player profiles (`vakt1.txt`–`vakt7.txt`) and the construction and
+music files the game writes.
 
-The adapter owns the Swedish source-global mappings, virtual `vakt1.txt` through
-`vakt7.txt`, construction/music files, and the two-generation save journal. Its
-host code owns the startup equivalence audit and the original-projector
-reference runner (`host/reference_runner.py`, `director64 reference`; see
-[reference capture](../../docs/reference-capture.md)).
-
-Preserved runtime behavior includes rational score timing, retained elapsed time,
-resumable `updateStage`/wait execution, score ownership of sprite properties,
-trail/stage commits, and audio/field cleanup when movies change. These behaviors
-are tested in the shared runtime; game-specific assertions live under `tests/`.
+Journeys (`routes`, `hubs`, `treasure`, `exit`, `garden`, `profiles`) live in
+`tests/full_probe.py`. `host/reference_runner.py` captures the original
+projector under Wine (`director64 reference`, see
+[architecture](../../docs/architecture.md#original-projector-reference)).

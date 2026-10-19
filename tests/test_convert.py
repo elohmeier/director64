@@ -7,10 +7,13 @@ import shutil
 import struct
 import subprocess
 import zlib
+from copy import deepcopy
 
 import pytest
 
 from director64 import convert
+from director64.convert import check_handlers
+from director64.lingo import parse_movie
 
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
 
@@ -254,3 +257,56 @@ def test_source_digest_covers_compiler_tools_schema_and_vendored_libraries(tmp_p
     generated.parent.mkdir()
     generated.write_bytes(b"generated output")
     assert convert.source_digest(tmp_path) == first
+
+
+# ---- The recovered program ----
+
+
+def handler_fixture():
+    source = {
+        "files": [
+            {
+                "name": "SHARED.CXT",
+                "members": [{"id": "member-hash", "library_id": 1024, "member_id": 3}],
+                "libraries": [{"library_id": 1024, "name": "External"}],
+                "scripts": [{"member_id": "member-hash", "handlers": [{"name": "new"}]}],
+            }
+        ],
+    }
+    program = {
+        "handlers": parse_movie(
+            "-- cast: External; member: 3; type: MovieScript; name: actor\n"
+            "property position\non new me\n  position = point(1, 2)\n  return me\nend\n",
+            "SHARED.CXT",
+        )
+    }
+    return source, program
+
+
+def test_script_identity_agreement_accepts_native_object_lowering():
+    source, program = handler_fixture()
+    check_handlers(source, program)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("cast", "Internal"),
+        ("member", 4),
+        ("name", "start"),
+        ("movie", "OTHER.CXT"),
+    ],
+)
+def test_same_handler_count_cannot_hide_changed_bindings(field, value):
+    source, program = handler_fixture()
+    modified = deepcopy(program)
+    modified["handlers"][0][field] = value
+    with pytest.raises(ValueError, match="identities"):
+        check_handlers(source, modified)
+
+
+def test_missing_or_duplicated_handlers_are_rejected():
+    source, program = handler_fixture()
+    for handlers in ([], program["handlers"] * 2):
+        with pytest.raises(ValueError, match="identities"):
+            check_handlers(source, {"handlers": handlers})

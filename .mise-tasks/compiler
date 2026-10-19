@@ -4,4 +4,4 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 cargo build --release --manifest-path compiler/Cargo.toml
 cargo test --release --manifest-path compiler/Cargo.toml
-uv run --locked pytest -q tests/test_aot_bytecode.py tests/test_lingo.py
+uv run --locked pytest -q tests/test_lingo.py tests/test_lingo_runtime.py

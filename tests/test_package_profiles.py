@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from director64.aot import generator_command, repository_root
+from director64.project import converter, repository
 from director64.web import validate_package
 
 
@@ -18,7 +18,7 @@ from director64.web import validate_package
     ids=["d5", "d6", "d6-extended", "d7", "d8", "d85", "d10"],
 )
 def test_rust_package_member_layout_loads_in_matching_c_profile(tmp_path, version, extended):
-    root = repository_root()
+    root = repository()
     style = {"fontName": "Fixture", "fontId": 3, "size": 13, "color": 0x123456,
              "ascent": 10, "descent": 3, "leading": 2, "lineHeight": 15, "align": 1}
     film = {"cast": 1, "number": 1, "type": 2, "name": "Film", "width": 17, "height": 19,
@@ -55,7 +55,7 @@ def test_rust_package_member_layout_loads_in_matching_c_profile(tmp_path, versio
         (tmp_path / name).write_text(json.dumps(value))
     package = tmp_path / "game.d64p"
     subprocess.run([
-        *generator_command(root), "package", tmp_path / "program.json", tmp_path / "model.json",
+        *converter(), "package", tmp_path / "program.json", tmp_path / "model.json",
         package, "--bytecode", root / "runtime/lingo/lingo_bytecode.h",
         "--meta", tmp_path / "meta.json",
     ], check=True, capture_output=True, text=True)

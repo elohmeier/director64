@@ -45,7 +45,7 @@ for host in video mixer; do
         -pthread "tests/native/test_android_$host.c"
 done
 for profile in d5 d10 d85; do
-    options=(-DDIRECTOR64_PACKAGE -DDIRECTOR64_NATIVE_STAGE=1)
+    options=(-DDIRECTOR64_NATIVE_STAGE=1)
     if [ "$profile" = d5 ]; then
         options+=(-DDIRECTOR64_DIRECTOR_VERSION=5)
     else

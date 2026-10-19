@@ -1,7 +1,7 @@
 [project]
 name = "director64"
 version = "0.1.0"
-description = "Director/Lingo ahead-of-time ports for Nintendo 64"
+description = "Director/Lingo game ports for Android TV and the web"
 readme = "README.md"
 license = "MIT AND MPL-2.0 AND LGPL-2.1-or-later"
 license-files = ["LICENSE"]

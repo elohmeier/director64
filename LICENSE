@@ -25,10 +25,10 @@ SOFTWARE.
 Files carrying their own license header are excepted from the MIT license
 above and remain under the license they state:
 
-- tools/projectorrays/* and compiler/src/convert/score.rs: Mozilla Public
-  License 2.0 (https://mozilla.org/MPL/2.0/).
+- compiler/src/convert/score.rs: Mozilla Public License 2.0
+  (https://mozilla.org/MPL/2.0/).
 - compiler/src/convert/cinepak.rs: GNU Lesser General Public License 2.1 or
   later, as a derivative of FFmpeg's libavcodec/cinepak.c.
 
-Third-party code in third_party/ and in the browser build is listed in
+Third-party code in third_party/ and in the players is listed in
 THIRD_PARTY_NOTICES.md.

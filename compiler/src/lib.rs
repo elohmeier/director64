@@ -14,7 +14,6 @@ pub mod names;
 pub mod normalize;
 pub mod package;
 pub mod ports;
-pub mod pyfmt;
 pub mod scene;
 pub mod zip;
 

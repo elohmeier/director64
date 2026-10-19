@@ -1,41 +1,21 @@
 # 25 Jahre Löwenzahn: Laser, Linsen, Flaschenzüge
 
-Experimental Director 8.5 port of the locally supplied German disc, for the
-Android TV player and the standalone web app. Director 8.5 runs as the D10
-runtime family with extended behaviors and `-DDIRECTOR64_D85`
-(`runtime/lingo/family.h`). The movies are Shockwave (Afterburner) files.
+Experimental Director 8.5 port of the German disc pinned in `game.toml`
+(D10 runtime family with `DIRECTOR64_D85`, 800×600 stage). The movies are
+Shockwave files; `START` is the entry movie.
 
 ```sh
 uv run --locked director64 repair-media --game loewenzahn-optik
-uv run --locked director64 android build --game loewenzahn-optik --abi armeabi-v7a
-uv run --locked director64 android install --game loewenzahn-optik --serial <device>
+uv run --locked director64 android build --game loewenzahn-optik
 uv run --locked director64 web --game loewenzahn-optik --serve
 ```
 
-The selected image contains filesystem journal data overwriting one MPEG.
-`repair-media` creates a separate, hash-pinned ISO and receipt while retaining
-the original. The recipe in `host/media-repair.json` holds pictures for a total
-of 3.32 seconds and inserts 1.2 seconds of silence across the damaged intervals.
-The remaining 1,556 pictures and 2,682 compressed audio frames are preserved,
-with the original timing. Missing content is reconstructed, not restored.
-The prepared copy is selected automatically once present; the ordinary
-conversion and strict video/audio checks still apply.
+Filesystem journal data overwrites part of one MPEG (`VLUZIFER`) on the
+pinned image. `repair-media` writes a separately pinned image (recipe in
+`host/media-repair.json`) that holds pictures for 3.3 s and silences 1.2 s
+of audio across the damage, keeping the timeline
+([media repairs](../../docs/architecture.md#media-repairs)). The missing
+content is reconstructed, not restored.
 
-There is no launcher projector to convert: `START` is the entry movie. The
-preferences file saves as `LZ9.usr` in the save archive.
-
-Videos are MPEG-1 movies played through Tabuleiro's DirectMedia Xtra. Each
-member names its file by the authoring machine's path; the port binds it to
-the disc's 8.3 file (`compiler/src/ports.rs`). The conversion transcodes
-them with FFmpeg to VP9, with their sound as WAV or Ogg Opus; the Android TV
-and web players share that conversion. The Mac QuickTime
-cast (`videoM`) is pinned as deferred: the runtime answers `the machineType`
-as Windows, so it is never used.
-
-Optik's quiz plays its videos through behaviors that swap DirectMedia
-members; it has no `getRegOptimal` check.
-
-Checked with the web build's probe: the intro and the Bauwagen hub, without script errors.
-
-Original-projector parity and current physical Android gameplay checks remain
-pending.
+`[convert]` binds the DirectMedia Xtra's MPEG-1 movies to their disc files
+(converted to VP9). `[player]` saves the `.usr` preferences file.

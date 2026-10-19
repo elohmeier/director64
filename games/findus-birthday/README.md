@@ -1,27 +1,19 @@
 # Pettersson und Findus: Der Torten werfende Geburtstagskater
 
-Experimental Director 8.5 port of the locally supplied German disc, for the
-Android TV player and the standalone web app.
+Experimental Director 8.5 port of the German disc pinned in `game.toml`
+(D10 runtime family with `DIRECTOR64_D85`, 800×600 stage). The launcher in
+`PF3.EXE` converts as `PF3.DXR`.
 
 ```sh
-uv run --locked director64 android build --game findus-birthday --abi armeabi-v7a
-uv run --locked director64 android install --game findus-birthday --serial <device>
+uv run --locked director64 android build --game findus-birthday
 uv run --locked director64 web --game findus-birthday --serve
 ```
 
-`PF3.EXE`'s launcher (converted as `PF3.DXR`) goes to `Utilities`. The engine
-reads its debug switches from the projector's INI; `runtime/game.c` answers it
-with `CheckCopyProtection=0`, `CheckCDInsert=0` and `ChangeScreenDim=0`, which
-skip the `optgraph.dll` copy check, the CD search and the display mode change.
+`[player]` installs the projector's INI with the developers' debug switches
+(no `optgraph.dll` copy check, no CD search, no display mode change), saves
+`info.dat`, `generalSettings.dat` and `NNN.sav`, and exposes `SPIEL/XML`
+(string tables, rooms, game logic) as the read-only data folder, which
+`[convert] data` ships.
 
-String tables, room descriptions and game logic come from `SPIEL/XML`, shipped
-as read-only data and read through FileIO and the XML Parser Xtra (implemented
-over property lists). The engine animates every room by driving placeholder film
-loops' channels inside `tell sprite(n)`; the runtime keeps those channels and
-the compositor draws them. Saves (`info.dat`, `generalSettings.dat`, `NNN.sav`)
-live in the save archive.
-
-Known gaps:
-
-- Text formatting set on run-time text members (font, colour) is not applied.
-- Nothing has been compared against the original projector.
+Known gap: text formatting set on run-time text members (font, colour) is
+not applied.

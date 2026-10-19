@@ -27,10 +27,33 @@ director_version = 500
 media_root = "MEDIA"
 entry_movie = "START"
 launcher_movie = "START.DXR"
-native_compatibility = true
 host_package = "director64_loewenzahn_1"
 # Videos convert after the scene model (compiler/src/ports.rs plan).
 defer_video = true
 
 [player]
 switches = ["PRINTING"]
+
+[convert]
+print = "MEDIA/PRINT"
+# Linked QuickTime movies and external AIFF sounds; the sounds join CURSOR.CXT.
+external_media = { root = "MEDIA", extensions = ["MOV", "AIF"], bind = "linked-movies", sounds_movie = "CURSOR.CXT" }
+# Geneva and Monaco are not on the disc.
+substitute_font = { asset = "fonts/d5-system.ttf", sizes = [18, 24], names = { "3" = "Geneva", "4" = "Monaco" } }
+
+# The print stamp hands its book and chapter to the player's printing.
+[[convert.patch]]
+id = "printing"
+movie = "CURSOR.CXT"
+member = 90
+cast = "External"
+handler = "drucken"
+source_sha256 = "0687160c839bd70d5c6a07c1ddb955f06de6b93c23bc24f2b499f8bcf9724901"
+body = "director64_print(mBuch, mKapitel)"
+
+# FILMSPIEL's slider owns the loop's tempo: drop the score's 30 fps override.
+[[convert.tempo_fix]]
+movie = "FIL.DXR"
+frame = 33
+from = 30
+to = 0

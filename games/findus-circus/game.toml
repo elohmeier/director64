@@ -22,7 +22,6 @@ director_version = 850
 media_root = "PF2"
 entry_movie = "PF2"
 launcher_movie = "PF2.DXR"
-native_compatibility = true
 
 [player]
 saves = ["score.dat", "pf2.ini"]
@@ -32,3 +31,25 @@ movie_path = "C:\\PF2\\"
 # LOGIN's own keyDown handlers type the player's name into editText while
 # the score waits at markers 50-52 or 64-66.
 key_field = { movie = "LOGIN.DXR", member = "editText", frames = [105, 114, 175, 184] }
+
+[convert]
+# The voice and effect members link AIFF files beside the movies.
+external_media = { root = "PF2/MOVIES/SOUNDS", extensions = ["AIF"], bind = "linked-sounds" }
+
+# The copy check asks optgraph.dll for the authored Verification constant.
+[[convert.patch]]
+id = "optgraph-cd-code"
+movie = "ENGINE.CXT"
+member = 12
+handler = "getcdcode"
+source_sha256 = "660e4add2b83a06e76279e7010676f44dc61fc03eb694bdeb9480cc29d209404"
+body = "return 50576302"
+
+# The copy check asks optgraph.dll for the authored Verification constant.
+[[convert.patch]]
+id = "optgraph-cd-code"
+movie = "ENGINE.CXT"
+member = 144
+handler = "getcdcode"
+source_sha256 = "660e4add2b83a06e76279e7010676f44dc61fc03eb694bdeb9480cc29d209404"
+body = "return 50576302"

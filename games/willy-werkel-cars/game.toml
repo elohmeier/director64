@@ -20,7 +20,6 @@ extended_d6 = true
 director_version = 600
 media_root = "Willy1"
 entry_movie = "START"
-native_compatibility = true
 launcher_movie = "START.DXR"
 host_package = "director64_willy_werkel_cars"
 # Videos convert after the scene model (compiler/src/ports.rs plan).
@@ -32,3 +31,61 @@ switches = ["WILLY"]
 [player.files]
 # The embedded launcher only checks that this disc marker exists.
 "mulle.ico" = ""
+
+[convert]
+substitute_font = { asset = "fonts/willy-system.ttf", controller = { members = ["SavedCarName", "EnterField"], size = 24 } }
+
+# Choosing a car file on the PC: a fail-closed trap instead of the window.
+[[convert.patch]]
+id = "external-file-chooser-trap"
+movie = "06.DXR"
+member = 2
+handler = "closewindow"
+source_sha256 = "9cb4f829e9e23a5271fd9568ca2e71bd5f0eee9d18368bc95c1437a710e7ec0d"
+body = """
+global gSound, gMulleGlobals
+if not (myMIAW = 0) then
+  tell_window(myMIAW)
+  cleanUp()
+  close(myMIAW)
+  myMIAW = 0
+end if
+doNextFrame = #activateScreen
+"""
+
+[[convert.patch]]
+id = "external-file-chooser-opener-trap"
+movie = "06.DXR"
+member = 2
+handler = "openwindow"
+source_sha256 = "b8cdef14b9e36e5fb60da419e8af19c7fc6841c965fa318a7eda2bb109224500"
+body = "open_window_trap()"
+
+# The certificate prints nowhere: a dismissible notice says so.
+[[convert.patch]]
+id = "certificate-print-notice"
+movie = "08.DXR"
+member = 38
+handler = "print"
+source_sha256 = "408f357aa657c52dfd018fbd3759b070f44a55ba66a9dbb86ae33d2677d388ac"
+body = "certificate_print_notice()"
+
+# The new-player template ends with an unmatched bracket.
+[[convert.text_fix]]
+movie = "CDDATA.CXT"
+member = 1
+text_sha256 = "ac7f41cbf12bfe707ef1d0f284ebfd363e1a1272abe9a5ebe2ac69788287bb36"
+trim = 1
+
+# Two animation charts end in a stray "333" after the property list.
+[[convert.text_fix]]
+movie = "00.CXT"
+member = 170
+text_sha256 = "4926eca66bc61a7a708afbf2bcc2780c553da3005e6af0dcb8e485fb69daeaf1"
+trim = 3
+
+[[convert.text_fix]]
+movie = "00.CXT"
+member = 173
+text_sha256 = "2b3f97edade776b90c18901c4a1fdd4bf583bc5723519a00b371eed46f1deb1c"
+trim = 3

@@ -210,6 +210,8 @@ class Converter:
         self.root = game.root
         self.work = game.work / "conversion"
         self.extracted = self.work / "extracted"
+        self.table = game.data.get("convert", {})
+        self.port_file = self.work / "port.json"
         self.aot = aot(self.root)
         self.report: dict = {"stages": {}}
 
@@ -239,6 +241,10 @@ class Converter:
             shutil.rmtree(self.work)
         self.work.mkdir(parents=True)
         port = self.game.data["port"]
+        self.port_file.write_text(json.dumps({
+            "slug": self.game.slug, "source_sha256": self.game.source["sha256"],
+            "launcher_movie": port.get("launcher_movie"), "convert": self.table,
+        }))
         # A conversion extracts its own copy: the policy installs original
         # system fonts into it.
         media = self.stage(
@@ -287,14 +293,12 @@ class Converter:
             path.unlink()
 
     def port(self, director: Path) -> dict:
-        """What the port adds (compiler/src/ports.rs): model corrections with its
-        substitute font measured by mkfont, external media, and the disc
-        folders the runtime streams or reads as data."""
-        game = self.game
+        """What the port adds (game.toml [convert], compiler/src/ports.rs): model
+        corrections with its substitute font measured by mkfont, external
+        media, and the disc folders the runtime streams or reads as data."""
         model = director / "model.json"
-        plan = json.loads(self.director("port-plan", game.slug, model))
-        if not plan.get("model"):
-            return plan
+        port = self.port_file
+        plan = json.loads(self.director("port-plan", port, model))
         folder = self.work / "port"
         folder.mkdir()
         substitute = folder / "substitute.ttf"
@@ -316,7 +320,7 @@ class Converter:
         data_files = sum(
             1 for name in plan["data"] for p in (extracted / name).rglob("*") if p.is_file()
         )
-        arguments = [model, game.slug, substitute, data_files, *measured]
+        arguments = [model, port, substitute, data_files, *measured]
         if plan.get("external_media"):
             records = folder / "external.json"
             records.write_text(json.dumps(self.external_media(plan["external_media"], director)))
@@ -379,21 +383,17 @@ class Converter:
         return records
 
     def program(self, analysis: Path) -> Path:
-        """The parsed Lingo program; with the port's compatibility fixes and the
-        embedded projector's launcher handlers when it has them."""
-        port = self.game.data["port"]
+        """The parsed Lingo program; with the port's patches and the embedded
+        projector's launcher handlers when it has them."""
         program = self.work / "aot/program.json"
         self.run(self.aot, "lingo", analysis / "lingo", program)
         check_handlers(json.loads((analysis / "source/manifest.json").read_text()),
                        json.loads(program.read_text()))
-        if not port.get("launcher_movie") and not port.get("native_compatibility"):
+        if not self.game.data["port"].get("launcher_movie") and not self.table.get("patch"):
             return program
         native = self.work / "aot/native-program.json"
-        native.write_text(self.director(
-            "port-program", program, analysis / "source/manifest.json", self.game.slug,
-            self.game.source["sha256"], port.get("launcher_movie") or "-",
-            "compat" if port.get("native_compatibility") else "-",
-        ))
+        native.write_text(self.director("port-program", program,
+                                        analysis / "source/manifest.json", self.port_file))
         return native
 
     def package(self, program: Path, director: Path, plan: dict) -> dict:

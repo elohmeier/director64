@@ -20,7 +20,6 @@ director_version = 800
 media_root = "P3MEDIA"
 entry_movie = "START"
 launcher_movie = "START.DXR"
-native_compatibility = true
 host_package = "director64_findus_mucklas"
 
 [player]
@@ -35,3 +34,16 @@ folders = [
 # A fresh installation's configuration. This disc has no VI movie; the
 # attic control is gated on Vind, which would request an absent asset.
 "pettson3.ini" = "[CD]\rcdrom=d\r[Wind]\rVind=0\r[Screen]\rfullscreen=1\r"
+
+[convert]
+# BR's keyed spacing table at its two authored symbolic getAt sites takes
+# getaProp (bytecode offsets 546 and 579 confirm getAt was authored).
+[[convert.patch]]
+id = "br-symbolic-spacing"
+movie = "BR.DXR"
+member = 4
+cast = "Internal"
+handler = "ritabana"
+source_sha256 = "d2db226e23a14304b8953395fdbe7684f6109f2bdd386609d3db07ce1d49e906"
+rename_call = ["getat", "getaprop"]
+count = 2

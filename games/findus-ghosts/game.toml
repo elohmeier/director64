@@ -22,7 +22,6 @@ director_version = 850
 media_root = "."
 entry_movie = "START"
 launcher_movie = "START.DXR"
-native_compatibility = true
 
 [player]
 saves = ["pfscore.dat"]
@@ -34,3 +33,44 @@ folders = [["score", "pfScore.dat"]]
 "pfstart.ini" = "[custom]\r\nhdEnabled=1\r\ndebug=0\r\n"
 # What the installer writes to the Windows folder: the score folder.
 "pfgame.ini" = "[Pettersson]\r\ninstpfad=C:\\Findus\\Score\r\n"
+
+[convert]
+# Each scene streams its speech from its own SOUNDS folder, which Lingo
+# addresses as "@/sounds/NAME": one "sounds" namespace.
+streams = [
+  "sounds=DATA/ABSPANN/SOUNDS", "sounds=DATA/BAUMHOEH/SOUNDS", "sounds=DATA/DACHBODE/SOUNDS",
+  "sounds=DATA/FINALE/SOUNDS", "sounds=DATA/HOF/SOUNDS", "sounds=DATA/HUEGEL/SOUNDS",
+  "sounds=DATA/HUEHNER/SOUNDS", "sounds=DATA/INTRO/SOUNDS", "sounds=DATA/KUECHENA/SOUNDS",
+  "sounds=DATA/KUECHETA/SOUNDS", "sounds=DATA/LOGIN/SOUNDS", "sounds=DATA/SCHATTEN/SOUNDS",
+  "sounds=DATA/SCHIESSB/SOUNDS", "sounds=DATA/SCHWARZE/SOUNDS",
+]
+
+# The film-loop players sweep every channel to puppet a flattened loop's own
+# channels, which it no longer has: 2,000 empty iterations a character.
+[[convert.patch]]
+id = "flattened-loop-puppet-sweep"
+movie = "GLOBPROG.CXT"
+member = 25
+handler = "puppetallsprites"
+source_sha256 = "85d9eb23db484959f0ebe059e3347249c150f9aadc9e1d64d964287386b7613f"
+body = ""
+
+# The film-loop players sweep every channel to puppet a flattened loop's own
+# channels, which it no longer has: 2,000 empty iterations a character.
+[[convert.patch]]
+id = "flattened-loop-puppet-sweep"
+movie = "HUEHNER.DXR"
+member = 15
+handler = "puppetallsprites"
+source_sha256 = "85d9eb23db484959f0ebe059e3347249c150f9aadc9e1d64d964287386b7613f"
+body = ""
+
+# The film-loop players sweep every channel to puppet a flattened loop's own
+# channels, which it no longer has: 2,000 empty iterations a character.
+[[convert.patch]]
+id = "flattened-loop-puppet-sweep"
+movie = "SCHATTEN.DXR"
+member = 37
+handler = "puppetallsprites"
+source_sha256 = "85d9eb23db484959f0ebe059e3347249c150f9aadc9e1d64d964287386b7613f"
+body = ""

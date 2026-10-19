@@ -62,7 +62,7 @@ def main(argv=None):
         "--movie NAME --replay CASE --no-minimize --output DIR --probe EXECUTABLE "
         "--prelude FILE",
         "parity": "Options: --against PROBE --probe PROBE --episodes N --actions N --seed N "
-        "--movie NAME --output DIR (side A defaults to parity/probe-a)",
+        "--movie NAME --output DIR (side A defaults to the web build kept at parity/site-a)",
         "journey": "Arguments: [NAME] --activity",
         "reference": "Adapter options: --replay PATH --output PATH --windows-version VERSION",
         "convert": "Options: --force --output DIR (default build/<slug>/<source>/converted)",

@@ -1,4 +1,3 @@
-//! `director64-aot <program.json> <output dir> [--names runtime/lingo/names.txt]`
 //! `director64-aot iso-inventory <image.iso>` (JSON inventory)
 //! `director64-aot iso <image.iso>` (inventory with file digests)
 //! `director64-aot lingo-server` (JSON requests on stdin, for host tools)
@@ -6,16 +5,17 @@
 //! `director64-aot package <program.json> <model.json> <output.d64p>
 //!     [--names runtime/lingo/names.txt] [--bytecode runtime/lingo/lingo_bytecode.h] [--meta meta.json]`
 //!
-//! The converter's compiler stage (docs/roadmap.md, Track C). It reads the
-//! parser's program.json and lowers every handler to the bytecode contract
-//! of runtime/lingo/lingo_bytecode.h. The first form writes one C unit,
-//! listing and manifest per movie for the console; `package` writes the
-//! game package the browser runtime loads (docs/package-format.md).
+//! `director64-aot director <stage> ...` (the conversion stages, below)
+//! `director64-aot capabilities <model.json|-> <web|android>`
+//!
+//! The converter. `package` lowers every handler of the parser's
+//! program.json to the bytecode contract of runtime/lingo/lingo_bytecode.h
+//! and writes the game package the runtime loads (docs/package-format.md).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use director64_aot::{ast, build_package, emit, names};
+use director64_aot::build_package;
 
 fn main() -> ExitCode {
     let mut positional = Vec::new();
@@ -107,8 +107,6 @@ fn main() -> ExitCode {
             &bytecode_path,
             meta_path.as_ref(),
         )
-    } else if positional.len() == 2 {
-        run(&positional[0], &positional[1], &names_path)
     } else {
         return usage();
     };
@@ -142,10 +140,9 @@ fn capabilities(path: &PathBuf, target: &PathBuf) -> Result<String, String> {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: director64-aot <program.json> <output dir> [--names names.txt]\n       \
-         director64-aot package <program.json> <model.json> <output.d64p> [--names names.txt] \
+        "usage: director64-aot package <program.json> <model.json> <output.d64p> [--names names.txt] \
          [--bytecode lingo_bytecode.h] [--meta meta.json]\n       \
-         director64-aot capabilities <model.json|-> <web|android|n64>"
+         director64-aot capabilities <model.json|-> <web|android>"
     );
     ExitCode::from(2)
 }
@@ -275,28 +272,25 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             &text(2)?,
             &recover::provenance(),
         )?)),
-        // director port-program PROGRAM SOURCE-MANIFEST SLUG SOURCE-SHA [LAUNCHER] [compat]
+        // The port stages read PORT.json, the game's port as the conversion
+        // driver describes it: {slug, source_sha256, launcher_movie, convert}.
+        // director port-program PROGRAM SOURCE-MANIFEST PORT
         "port-program" => {
-            let port = director64_aot::ports::Port {
-                slug: text(3)?,
-                source_sha256: text(4)?,
-                launcher_movie: text(5).ok().filter(|m| m != "-"),
-                native_compatibility: text(6).is_ok_and(|c| c == "compat"),
-            };
+            let port = director64_aot::ports::Port::from_json(&json_file(3)?)?;
             let program =
                 director64_aot::ports::executable_program(&json_file(1)?, &port, &json_file(2)?)?;
             Ok(program.to_string())
         }
-        // director port-plan SLUG MODEL
-        "port-plan" => Ok(director64_aot::ports::plan(&text(1)?, &json_file(2)?)?.to_string()),
-        // director port-model MODEL SLUG SUBSTITUTE-TTF DATA-FILES [KEY=FONT64 ...] [external=RECORDS.json]:
+        // director port-plan PORT MODEL
+        "port-plan" => {
+            let port = director64_aot::ports::Port::from_json(&json_file(1)?)?;
+            Ok(director64_aot::ports::plan(&port, &json_file(2)?)?.to_string())
+        }
+        // director port-model MODEL PORT SUBSTITUTE-TTF DATA-FILES [KEY=FONT64 ...] [external=RECORDS.json]:
         // prints the model; a port's substitute font lands beside it.
         "port-model" => {
             let mut model = json_file(1)?;
-            let port = director64_aot::ports::Port {
-                slug: text(2)?,
-                ..Default::default()
-            };
+            let port = director64_aot::ports::Port::from_json(&json_file(2)?)?;
             let measured: Vec<(String, String)> = args[5..]
                 .iter()
                 .filter_map(|a| {
@@ -328,7 +322,7 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             director64_aot::ports::postprocess_model(&mut model, &port, &fonts, &mut measure)?;
             // The model names its substitute as a converted font asset beside it.
             if let (Some(asset), Some(bytes)) = (
-                director64_aot::ports::substitute_asset(&port.slug),
+                port.convert["substitute_font"]["asset"].as_str(),
                 fonts.droid_sans.as_ref(),
             ) {
                 let path = args[1].parent().unwrap_or(std::path::Path::new(".")).join(asset);
@@ -336,9 +330,8 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             }
             Ok(model.to_string())
         }
-        // director stream-pack OUT.bin FOLDER=DIR...: the browser's streams
-        // pack (platforms/web/import/pipeline.mjs streamPack) from disc
-        // folders; prints its {name: [offset, length, milliseconds]} index.
+        // director stream-pack OUT.bin FOLDER=DIR...: the streams pack from
+        // disc folders; prints its {name: [offset, length, milliseconds]} index.
         "stream-pack" => {
             let mut files = Vec::new();
             for i in 2..args.len() {
@@ -660,7 +653,7 @@ fn lingo(directory: &PathBuf, output: &PathBuf) -> Result<String, String> {
     }
     std::fs::write(
         output,
-        director64_aot::lingo::dumps_compact(&program) + "\n",
+        program.to_string() + "\n",
     )
     .map_err(|e| e.to_string())?;
     Ok(format!(
@@ -672,19 +665,6 @@ fn lingo(directory: &PathBuf, output: &PathBuf) -> Result<String, String> {
 
 fn read(path: &PathBuf) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn run(program: &PathBuf, output: &PathBuf, names_path: &PathBuf) -> Result<String, String> {
-    let text = read(program)?;
-    let value: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", program.display()))?;
-    let program = ast::Program::from_json(&value)?;
-    let table = names::load(names_path)?;
-    let manifest = emit::generate(&program, output, &table)?;
-    Ok(format!(
-        "Generated {} bytecode movie units / {} bytes / {} globals",
-        manifest.movies, manifest.bytecode_bytes, manifest.globals
-    ))
 }
 
 fn package(

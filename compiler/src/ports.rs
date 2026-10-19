@@ -1,9 +1,12 @@
-//! What a port adds to the converted game beyond the generic pipeline: the
-//! embedded projector's launcher handlers, source-pinned compatibility
-//! fixes to the recovered program, and each port's model corrections
-//! (games/<slug>/host/compatibility.py and full_media.py, ported so the
-//! browser importer applies them too). Every fix is pinned to the exact
-//! source it was reviewed against and refuses anything else.
+//! What a port adds to the converted game beyond the generic pipeline, from
+//! its game.toml [convert] table: the embedded projector's launcher
+//! handlers, program patches, a system-font substitute (with metrics
+//! measured by mkfont where a port needs them), external media bound to
+//! their members, small source-data fixes, and the disc folders the runtime
+//! streams, reads as data or prints. Every patch and fix is pinned to the
+//! exact source it was reviewed against and refuses anything else.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde_json::{Map, Value, json};
 
@@ -12,56 +15,80 @@ use crate::lingo;
 
 pub type R<T> = Result<T, String>;
 
-/// A port's settings from games/<slug>/game.toml [port].
+/// A port: its game's slug and edition, the launcher movie its embedded
+/// projector's handlers join, and its [convert] table.
 #[derive(Clone, Debug, Default)]
 pub struct Port {
     pub slug: String,
     pub source_sha256: String,
     pub launcher_movie: Option<String>,
-    pub native_compatibility: bool,
+    pub convert: Value,
 }
 
-/// The embedded projector's handlers (director64 recovery.report): each
-/// launcher script, parsed with its cast, member and type.
+impl Port {
+    /// The port as the conversion driver describes it: {slug, source_sha256,
+    /// launcher_movie, convert}.
+    pub fn from_json(value: &Value) -> R<Port> {
+        Ok(Port {
+            slug: value["slug"].as_str().ok_or("port without a slug")?.into(),
+            source_sha256: value["source_sha256"].as_str().unwrap_or("").into(),
+            launcher_movie: value["launcher_movie"].as_str().map(str::to_string),
+            convert: value.get("convert").cloned().unwrap_or(json!({})),
+        })
+    }
+}
+
+/// What the port reads besides the model: the substitute font, how many
+/// data files it ships, and its converted external media, one record per
+/// source file ({source, source_sha256, source_bytes, duration, video,
+/// audio[, frames, rate, channels, audioOnly]}).
+#[derive(Default)]
+pub struct PortFonts {
+    pub droid_sans: Option<Vec<u8>>,
+    pub data_files: usize,
+    pub external_media: Vec<Value>,
+}
+
+fn list(value: &Value) -> std::slice::Iter<'_, Value> {
+    value.as_array().map_or([].iter(), |a| a.iter())
+}
+fn text(value: &Value) -> &str {
+    value.as_str().unwrap_or("")
+}
+
+// ---- The program ----
+
+/// The embedded projector's handlers: each launcher script, parsed with its
+/// cast, member and type.
 pub fn launcher_handlers(source_manifest: &Value) -> R<Vec<Value>> {
     let launcher = &source_manifest["supplemental_projector"];
     let name = launcher["name"]
         .as_str()
         .ok_or("source manifest without a supplemental projector")?;
     let mut handlers = Vec::new();
-    for script in launcher["scripts"].as_array().into_iter().flatten() {
-        let member = launcher["members"]
-            .as_array()
-            .into_iter()
-            .flatten()
+    for script in list(&launcher["scripts"]) {
+        let member = list(&launcher["members"])
             .rfind(|m| m["id"] == script["member_id"])
             .ok_or("launcher script without its member")?;
-        let cast = launcher["libraries"]
-            .as_array()
-            .into_iter()
-            .flatten()
+        let cast = list(&launcher["libraries"])
             .rfind(|c| c["library_id"] == member["library_id"])
             .and_then(|c| c["name"].as_str())
             .ok_or("launcher member without its cast")?;
-        let text = format!(
+        let source = format!(
             "-- cast: {cast}; member: {}; type: {}; name: launcher\n{}",
             member["member_id"],
-            script["script_type"].as_str().unwrap_or(""),
-            script["lingo"].as_str().unwrap_or("")
+            text(&script["script_type"]),
+            text(&script["lingo"])
         );
-        handlers.extend(lingo::parse_movie(&text, name).map_err(|e| e.to_string())?);
+        handlers.extend(lingo::parse_movie(&source, name).map_err(|e| e.to_string())?);
     }
     Ok(handlers)
 }
 
-/// The program the runtime executes (director64 aot.executable_program): the
-/// recovered program with the port's compatibility fixes, then the
-/// launcher's handlers under the launcher movie's name.
+/// The program the runtime executes: the recovered program with the port's
+/// patches, then the launcher's handlers under the launcher movie's name.
 pub fn executable_program(program: &Value, port: &Port, source_manifest: &Value) -> R<Value> {
-    let mut program = program.clone();
-    if port.native_compatibility {
-        program = compatibility(&program, port)?;
-    }
+    let mut program = patch_program(program, &port.convert["patch"])?;
     if let Some(movie) = &port.launcher_movie {
         let handlers = program["handlers"]
             .as_array_mut()
@@ -80,861 +107,168 @@ pub fn executable_program(program: &Value, port: &Port, source_manifest: &Value)
     Ok(program)
 }
 
-fn compatibility(program: &Value, port: &Port) -> R<Value> {
-    match port.slug.as_str() {
-        "willy-werkel-cars" => willy::compatibility(program, &port.source_sha256),
-        "findus-mucklas" => mucklas_compatibility(program, &port.source_sha256),
-        "lernerfolg-deutsch-1-2" => deutsch_compatibility(program, &port.source_sha256),
-        "loewenzahn-1" => loewenzahn::compatibility(program, &port.source_sha256),
-        "findus-ghosts" => ghosts_compatibility(program, &port.source_sha256),
-        "findus-circus" => circus_compatibility(program, &port.source_sha256),
-        "loewenzahn-6" | "loewenzahn-7" | "loewenzahn-8" | "loewenzahn-optik"
-        | "loewenzahn-advent" => optgraph_compatibility(program),
-        other => Err(format!(
-            "{other}: its compatibility fixes are not in the converter yet"
-        )),
-    }
-}
-
-/// games/findus-mucklas/host/compatibility.py: BR's keyed spacing table at
-/// its two authored symbolic getAt sites takes getaProp. Bytecode extcall
-/// offsets 546/579 confirm getAt was authored; ScummVM's getAt accepts
-/// numeric indices only. A selected-port correction, not a claim that
-/// Director generally accepts symbolic getAt arguments.
-fn mucklas_compatibility(program: &Value, source: &str) -> R<Value> {
-    const SOURCE: &str = "ad4c7afb4b19339c45c2a69756b522b59ba4869199740fd528527f190a806925";
-    const SCRIPT: &str = "d2db226e23a14304b8953395fdbe7684f6109f2bdd386609d3db07ce1d49e906";
-    let mut result = program.clone();
-    let mut matches: Vec<&mut Value> = find_handlers(&mut result, "BR.DXR", 4, "ritabana")
-        .into_iter()
-        .filter(|h| h["cast"] == "Internal")
-        .collect();
-    if source != SOURCE || matches.len() != 1 || matches[0]["source_sha256"] != SCRIPT {
-        return Err("Mucklas BR compatibility source identity changed; review required".into());
-    }
-    fn replace(node: &mut Value, count: &mut u32) {
-        let target = json!([
-            "call",
-            "getat",
-            [["variable", "avstlist"], ["variable", "a"]]
-        ]);
-        if *node == target {
-            node[1] = json!("getaprop");
-            *count += 1;
-        } else if let Some(object) = node.as_object_mut() {
-            object.values_mut().for_each(|v| replace(v, count));
-        } else if let Some(array) = node.as_array_mut() {
-            array.iter_mut().for_each(|v| replace(v, count));
-        }
-    }
-    let mut count = 0;
-    replace(&mut matches[0]["body"], &mut count);
-    if count != 2 {
-        return Err("Mucklas BR compatibility call sites changed; review required".into());
-    }
-    result.as_object_mut().ok_or("program")?.insert(
-        "compatibility_fixes".into(),
-        json!([{"id": "br-symbolic-spacing", "movie": "BR.DXR", "member": 4, "handler": "ritabana",
-                "source_sha256": SCRIPT, "bytecode_offsets": [546, 579], "calls_changed": count,
-                "from": "getat", "to": "getaprop", "original_projector_verified": false}]),
-    );
-    Ok(result)
-}
-
-/// Findus Gespenster: the film-loop players' puppetAllSprites sweeps every
-/// score channel inside `tell sprite(loop)`, twice a frame per animated
-/// character, to puppet the told film loop's own channels. Flattened loops
-/// have none, and the sweep's 2,000 iterations a character outrun the
-/// target's service budget, so its three copies lower to an empty body.
-fn ghosts_compatibility(program: &Value, source: &str) -> R<Value> {
-    const SOURCE: &str = "05d7ad48350100e96d1deadb10f0dfd5f099dc19d7b63180647ca756239ed41b";
-    const SWEEP: &str = "85d9eb23db484959f0ebe059e3347249c150f9aadc9e1d64d964287386b7613f";
-    if source != SOURCE {
-        return Err("Ghosts compatibility source changed".into());
-    }
+/// Applies [[convert.patch]] entries. Each names a handler (movie, member,
+/// cast and handler; or `all` handlers of that name), pins it by
+/// `source_sha256` (or by `calls`, a call its body must make), and replaces
+/// its `body` with Lingo, sets its `parameters`, or renames a call
+/// (`rename_call = [from, to]`, `count` sites). The program records each
+/// patch under compatibility_fixes.
+pub fn patch_program(program: &Value, patches: &Value) -> R<Value> {
     let mut result = program.clone();
     let mut fixes = Vec::new();
-    for (movie, member) in [
-        ("GLOBPROG.CXT", 25),
-        ("HUEHNER.DXR", 15),
-        ("SCHATTEN.DXR", 37),
-    ] {
-        let mut matches = find_handlers(&mut result, movie, member, "puppetallsprites");
-        if matches.len() != 1 || matches[0]["source_sha256"] != SWEEP {
-            return Err(format!(
-                "Ghosts puppetAllSprites in {movie} changed; review required"
-            ));
+    for patch in list(patches) {
+        let name = text(&patch["handler"]).to_lowercase();
+        let handlers: Vec<&mut Value> = result["handlers"]
+            .as_array_mut()
+            .ok_or("program without handlers")?
+            .iter_mut()
+            .filter(|h| {
+                h["name"] == name.as_str()
+                    && (patch["all"] == true
+                        || (h["movie"] == patch["movie"]
+                            && h["member"] == patch["member"]
+                            && (patch["cast"].is_null() || h["cast"] == patch["cast"])))
+            })
+            .collect();
+        // `all` covers every handler of the name, if any (Optik has none).
+        if patch["all"] != true && handlers.len() != 1 {
+            return Err(format!("patch {}: {} handlers match; review required", patch, handlers.len()));
         }
-        matches[0]["body"] = json!([]);
-        fixes.push(json!({"id": "flattened-loop-puppet-sweep", "movie": movie, "member": member,
-                          "handler": "puppetallsprites", "source_sha256": SWEEP,
-                          "disposition": "no-channels-in-a-flattened-film-loop", "original_projector_verified": false}));
+        for handler in handlers {
+            if let Some(expected) = patch["source_sha256"].as_str()
+                && handler["source_sha256"] != expected
+            {
+                return Err(format!("{} {name} source changed; review required", handler["movie"]));
+            }
+            if let Some(call) = patch["calls"].as_str()
+                && !handler["body"].to_string().contains(&format!("\"{call}\""))
+            {
+                return Err(format!("{} {name} no longer calls {call}", handler["movie"]));
+            }
+            if let Some(parameters) = patch.get("parameters") {
+                handler["parameters"] = parameters.clone();
+            }
+            if let Some([from, to]) = patch["rename_call"].as_array().map(Vec::as_slice) {
+                let count = rename_calls(&mut handler["body"], text(from), text(to));
+                if Some(count as u64) != patch["count"].as_u64() {
+                    return Err(format!("{} {name}: {count} {from} calls; review required", handler["movie"]));
+                }
+            }
+            if let Some(body) = patch["body"].as_str() {
+                let line = list(&handler["body"])
+                    .next()
+                    .and_then(|s| s["line"].as_u64())
+                    .or_else(|| handler["line"].as_u64())
+                    .unwrap_or(0) as usize;
+                let lines: Vec<(usize, String)> = body
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(|l| (line, l.to_string()))
+                    .collect();
+                handler["body"] = Value::Array(lingo::block(&lines).map_err(|e| e.to_string())?);
+            }
+            fixes.push(json!({"id": patch["id"], "movie": handler["movie"], "member": handler["member"],
+                              "handler": name, "source_sha256": handler["source_sha256"]}));
+        }
     }
-    result
-        .as_object_mut()
-        .ok_or("program")?
-        .insert("compatibility_fixes".into(), Value::Array(fixes));
+    if !fixes.is_empty() {
+        result
+            .as_object_mut()
+            .ok_or("program")?
+            .insert("compatibility_fixes".into(), Value::Array(fixes));
+    }
     Ok(result)
 }
 
-/// Circus's linked sounds: the casts keep each voice line and effect as a
-/// member linked to "<name>.aif" in MOVIES\SOUNDS, which the recovery
-/// leaves empty; each takes the host's converted record of its file.
-fn circus_media(model: &mut Value, fonts: &PortFonts) -> R<()> {
-    let mut by_name = std::collections::HashMap::new();
-    for record in &fonts.external_media {
-        let source = record["source"].as_str().unwrap_or("");
-        let file = source.rsplit('/').next().unwrap_or(source).to_lowercase();
-        let stem = file
-            .strip_suffix(".aif")
-            .ok_or("Circus external media is not AIFF")?
-            .to_string();
-        if by_name.insert(stem, record.clone()).is_some() {
-            return Err("ambiguous Circus sound file".into());
-        }
-    }
-    let mut bound = 0;
-    for movie in model["movies"].as_array_mut().into_iter().flatten() {
-        for member in movie["members"].as_array_mut().into_iter().flatten() {
-            if member["type"] != 6 || member["empty"] != true {
-                continue;
+fn rename_calls(node: &mut Value, from: &str, to: &str) -> usize {
+    match node {
+        Value::Array(items) => {
+            let mut count = 0;
+            if items.len() == 3 && items[0] == "call" && items[1] == from {
+                items[1] = json!(to);
+                count += 1;
             }
-            let name = member["name"].as_str().unwrap_or("").to_lowercase();
-            let Some(record) = by_name.get(&name) else {
-                continue;
-            };
-            if record["audio"].as_str().unwrap_or("").is_empty() {
-                return Err(format!("Circus sound {name} did not convert"));
-            }
-            let m = member.as_object_mut().ok_or("member")?;
-            m.remove("empty");
-            m.insert("asset".into(), record["audio"].clone());
-            m.insert("rate".into(), record["rate"].clone());
-            m.insert("frames".into(), record["frames"].clone());
-            m.insert("channels".into(), record["channels"].clone());
-            m.insert("loopStart".into(), json!(0));
-            m.insert("loopEnd".into(), record["frames"].clone());
-            m.insert("looping".into(), json!(0));
-            m.insert("externalAudio".into(), record["source"].clone());
-            bound += 1;
+            count + items.iter_mut().map(|v| rename_calls(v, from, to)).sum::<usize>()
         }
-    }
-    if bound == 0 {
-        return Err("Circus linked sounds not found".into());
-    }
-    model["externalMedia"] = Value::Array(fonts.external_media.clone());
-    Ok(())
-}
-
-/// Circus's copy check: getCDCode calls initdisplay in the disc's
-/// optgraph.dll through the GLU32 Xtra and the engine quits unless it
-/// answers the authored Verification constant. The port answers that
-/// constant, as a stub optgraph.dll does under the original projector.
-fn circus_compatibility(program: &Value, source: &str) -> R<Value> {
-    const SOURCE: &str = "40d3f559158e8f606487563c0d9ad4712cbb6cd6836587d7fc555aaa872be9a9";
-    const CD_CODE: &str = "660e4add2b83a06e76279e7010676f44dc61fc03eb694bdeb9480cc29d209404";
-    const VERIFICATION: i64 = 50576302;
-    if source != SOURCE {
-        return Err("Circus compatibility source changed".into());
-    }
-    let mut result = program.clone();
-    let mut fixes = Vec::new();
-    for member in [12, 144] {
-        let mut matches = find_handlers(&mut result, "ENGINE.CXT", member, "getcdcode");
-        if matches.len() != 1 || matches[0]["source_sha256"] != CD_CODE {
-            return Err(format!(
-                "Circus getCDCode in ENGINE.CXT {member} changed; review required"
-            ));
-        }
-        let line = matches[0]["line"].clone();
-        matches[0]["body"] =
-            json!([{"op": "return", "line": line, "value": ["number", VERIFICATION]}]);
-        fixes.push(json!({"id": "optgraph-cd-code", "movie": "ENGINE.CXT", "member": member,
-                          "handler": "getcdcode", "source_sha256": CD_CODE,
-                          "disposition": "authored-verification-constant", "original_projector_verified": false}));
-    }
-    result
-        .as_object_mut()
-        .ok_or("program")?
-        .insert("compatibility_fixes".into(), Value::Array(fixes));
-    Ok(result)
-}
-
-/// The Löwenzahn 8.5 discs' copy check: getRegOptimal(serNum) asks
-/// initdisplay in the disc's optgraph.dll (through the GLU32 Xtra) and the
-/// start movie refuses to go on unless it answers the serial it was given.
-/// Each such handler answers its argument (Optik has none).
-fn optgraph_compatibility(program: &Value) -> R<Value> {
-    let mut result = program.clone();
-    let mut fixes = Vec::new();
-    for handler in result["handlers"].as_array_mut().into_iter().flatten() {
-        if handler["name"] != "getregoptimal" {
-            continue;
-        }
-        let calls_glu = handler["body"].to_string().contains("\"glunew\"");
-        if handler["parameters"] != json!(["sernum"]) || !calls_glu {
-            return Err(format!(
-                "getRegOptimal in {} changed; review required",
-                handler["movie"]
-            ));
-        }
-        let line = handler["body"][0]["line"].clone();
-        handler["body"] = json!([{"op": "return", "line": line, "value": ["variable", "sernum"]}]);
-        fixes.push(json!({"id": "optgraph-serial", "movie": handler["movie"], "member": handler["member"],
-                          "handler": "getregoptimal", "source_sha256": handler["source_sha256"],
-                          "disposition": "answers-its-serial", "original_projector_verified": false}));
-    }
-    result
-        .as_object_mut()
-        .ok_or("program")?
-        .insert("compatibility_fixes".into(), Value::Array(fixes));
-    Ok(result)
-}
-
-/// games/lernerfolg-deutsch-1-2/host/compatibility.py: the two MX 2004
-/// JavaScript-dialect handlers, recovered from their compiled payloads,
-/// lower to the runtime's js_* natives (int2hex's lowercase hex; clearGarbage's
-/// collection is automatic).
-fn deutsch_compatibility(program: &Value, source: &str) -> R<Value> {
-    const SOURCE: &str = "4c87e10dcc99dfb68882b51c9daceb7ce4761b482a2a43bf620093289353e0f4";
-    const INT2HEX: &str = "400f1d944fee13df345a3ccb97a597363c5edde995cd689359145e1e8185abac";
-    const CLEARGARBAGE: &str = "515abd3ad032882fdf3ff3d1d8e2468de62f28da773fa5cec0ae1b127a475822";
-    if source != SOURCE {
-        return Err("Deutsch compatibility source changed".into());
-    }
-    let specs = [
-        (
-            "javascript-int2hex",
-            "TASKSCRIPTS.CXT",
-            9,
-            "int2hex",
-            INT2HEX,
-            json!(["num"]),
-            json!([{"op": "return", "line": 30, "value": ["call", "js_int2hex", [["variable", "num"]]]}]),
-        ),
-        (
-            "javascript-cleargarbage",
-            "ZMSCRIPTS.CXT",
-            58,
-            "cleargarbage",
-            CLEARGARBAGE,
-            json!([]),
-            json!([{"op": "call", "line": 7405, "value": ["call", "js_cleargarbage", []]}]),
-        ),
-    ];
-    let mut result = program.clone();
-    let mut fixes = Vec::new();
-    for (id, movie, member, name, sha, parameters, body) in specs {
-        let mut matches = find_handlers(&mut result, movie, member, name);
-        if matches.len() != 1 || matches[0]["source_sha256"] != sha {
-            return Err(format!("Deutsch {name} source changed"));
-        }
-        let handler = &mut matches[0];
-        let old = handler["body"].as_array().cloned().unwrap_or_default();
-        if old.len() != 1
-            || old[0].get("op") != Some(&json!("unrecovered"))
-            || old[0].get("opcode") != Some(&json!("unk26"))
-        {
-            return Err(format!("Deutsch {name} bytecode shape changed"));
-        }
-        if handler["parameters"]
-            .as_array()
-            .is_some_and(|p| !p.is_empty())
-        {
-            return Err(format!("Deutsch {name} parameters changed"));
-        }
-        handler["parameters"] = parameters;
-        handler["body"] = body;
-        fixes.push(json!({"id": id, "movie": movie, "member": member, "handler": name, "source_sha256": sha,
-                          "disposition": "recovered-javascript-function", "original_projector_verified": false}));
-    }
-    result
-        .as_object_mut()
-        .ok_or("program")?
-        .insert("compatibility_fixes".into(), Value::Array(fixes));
-    Ok(result)
-}
-
-/// The port's model corrections after conversion. `measure(key)` returns the
-/// font64 mkfont packed for one of plan()'s measurement requests, as the
-/// port hosts' text_metrics measure it.
-pub fn postprocess_model(
-    model: &mut Value,
-    port: &Port,
-    fonts: &PortFonts,
-    measure: &mut dyn FnMut(&str) -> R<Vec<u8>>,
-) -> R<()> {
-    match port.slug.as_str() {
-        "willy-werkel-cars" => willy::media(model, fonts, measure),
-        "findus-christmas" => christmas_media(model, fonts),
-        "lernerfolg-deutsch-1-2" => deutsch_media(model, fonts, measure),
-        "loewenzahn-1" => loewenzahn::media(model, fonts),
-        "findus-circus" => circus_media(model, fonts),
-        "loewenzahn-6" | "loewenzahn-7" | "loewenzahn-8" | "loewenzahn-optik"
-        | "loewenzahn-advent" => directmedia_media(model, fonts),
-        _ => Ok(()),
+        Value::Object(object) => object.values_mut().map(|v| rename_calls(v, from, to)).sum(),
+        _ => 0,
     }
 }
 
-/// Bind both authored video Xtras to converted MPEG streams. The candidate
-/// paths were derived from the cast's directory and verified disc aliases;
-/// never manufacture a DOS filename or silently create an ended movie.
-fn directmedia_media(model: &mut Value, fonts: &PortFonts) -> R<()> {
-    let mut by_path = std::collections::HashMap::new();
-    for record in &fonts.external_media {
-        let source = record["source"]
-            .as_str()
-            .unwrap_or("")
-            .replace('\\', "/")
-            .to_uppercase();
-        if by_path.insert(source, record).is_some() {
-            return Err("ambiguous external movie path".into());
-        }
-    }
-    for movie in model["movies"].as_array_mut().into_iter().flatten() {
-        for member in movie["members"].as_array_mut().into_iter().flatten() {
-            let symbol = member["xtra"]["symbol"].as_str().unwrap_or("");
-            if symbol != "TBDIRECTMEDIA" && symbol != "quickTimeMedia" {
-                continue;
-            }
-            let quicktime = symbol == "quickTimeMedia";
-            let candidates = member["linkedSourceCandidates"]
-                .as_array()
-                .ok_or("video member has no verified media candidates")?;
-            let record = candidates
-                .iter()
-                .filter_map(Value::as_str)
-                .find_map(|p| by_path.get(&p.to_uppercase()))
-                .ok_or_else(|| {
-                    format!(
-                        "unresolved external video {} (candidates: {candidates:?})",
-                        member["linkedFile"]
-                    )
-                })?;
-            if record["video"].as_str().unwrap_or("").is_empty() {
-                return Err(format!(
-                    "external video was not converted: {}",
-                    record["source"]
-                ));
-            }
-            let audio = record["audio"].as_str().unwrap_or("");
-            let milliseconds = member["videoDurationMs"].as_i64().unwrap_or(0);
-            let duration = if milliseconds > 0 {
-                milliseconds as f64 / 1000.0
-            } else {
-                record["duration"].as_f64().unwrap_or(0.0)
-            };
-            if !duration.is_finite() || duration <= 0.0 || duration * 600.0 > u32::MAX as f64 {
-                return Err(format!(
-                    "invalid external video duration: {}",
-                    record["source"]
-                ));
-            }
-            let mut flags = if quicktime {
-                member["videoFlags"].as_u64().unwrap_or(0)
-            } else {
-                8
-            };
-            if audio.is_empty() {
-                flags &= !8;
-            }
-            let m = member.as_object_mut().ok_or("member")?;
-            m.insert("type".into(), json!(10));
-            m.insert("sourceType".into(), json!(15));
-            m.insert("asset".into(), record["video"].clone());
-            m.insert("videoAudio".into(), json!(audio));
-            m.insert("videoFlags".into(), json!(flags));
-            m.insert("frames".into(), json!((duration * 600.0).round() as u32));
-            m.insert("rate".into(), json!(600));
-            m.insert("videoSource".into(), record["source"].clone());
-            if let Some(fps) = record.get("videoFrameRate") {
-                m.insert("videoFrameRate".into(), fps.clone());
-            }
-        }
-    }
-    model["externalMediaUnbound"] = json!([]);
-    model["externalMedia"] = Value::Array(fonts.external_media.clone());
-    Ok(())
-}
+// ---- The plan ----
 
-/// What the importer does for a port around postprocess_model: whether the
-/// model changes at all; the mkfont runs it measures first, each
-/// {key, font ("substitute" or a converted font asset), size, ranges}, packed
-/// with `--size SIZE --range R... -c 0`; the disc folders whose files the
-/// runtime streams as sound (playFile) or reads as data (read_data).
-pub fn plan(slug: &str, model: &Value) -> R<Value> {
-    let (changes, measure, streams, data): (bool, Vec<Value>, Vec<String>, Vec<&str>) = match slug {
-        "willy-werkel-cars" => (
-            true,
-            vec![
-                json!({"key": "substitute:24", "font": "substitute", "size": 24, "ranges": ["0x20-0x7e"]}),
-            ],
-            vec![],
-            vec![],
-        ),
-        "findus-christmas" => (true, vec![], vec![], vec![]),
-        "lernerfolg-deutsch-1-2" => (
-            true,
-            deutsch_measure(model)?,
-            vec!["voc".into(), "sfx".into()],
-            vec!["tests_db"],
-        ),
-        "loewenzahn-1" => (true, vec![], vec![], vec![]),
-        "findus-circus" => (true, vec![], vec![], vec![]),
-        "loewenzahn-6" | "loewenzahn-7" | "loewenzahn-8" | "loewenzahn-optik"
-        | "loewenzahn-advent" => (true, vec![], vec![], vec![]),
-        // The string tables and room descriptions FileIO reads as XML.
-        "findus-birthday" => (false, vec![], vec![], vec!["SPIEL/XML"]),
-        // Each scene streams its speech from its own folder's SOUNDS, which
-        // Lingo addresses as "@/sounds/NAME": one "sounds" namespace, as
-        // NAME=FOLDER.
-        "findus-ghosts" => (
-            false,
-            vec![],
-            [
-                "ABSPANN", "BAUMHOEH", "DACHBODE", "FINALE", "HOF", "HUEGEL", "HUEHNER", "INTRO",
-                "KUECHENA", "KUECHETA", "LOGIN", "SCHATTEN", "SCHIESSB", "SCHWARZE",
-            ]
-            .iter()
-            .map(|scene| format!("sounds=DATA/{scene}/SOUNDS"))
-            .collect(),
-            vec![],
-        ),
-        _ => (false, vec![], vec![], vec![]),
-    };
-    let mut plan = json!({"model": changes, "measure": measure, "streams": streams, "data": data});
-    if slug == "loewenzahn-1" {
-        // Linked QuickTime movies and external AIFF sounds under the media
-        // root, converted by the host before the model step; and the print
-        // documents' artwork folder.
-        plan["external_media"] = json!({"root": "MEDIA", "extensions": ["MOV", "AIF"]});
-        plan["print"] = json!("MEDIA/PRINT");
+/// What the conversion driver does for a port around postprocess_model: the
+/// mkfont runs it measures first, each {key, font ("substitute" or a
+/// converted font asset), size, ranges}, packed with `--size SIZE --range
+/// R... -c 0`; the disc folders the runtime streams as sound (playFile) or
+/// reads as data (read_data); the print folder; and the external media to
+/// convert ({root, extensions}).
+pub fn plan(port: &Port, model: &Value) -> R<Value> {
+    let convert = &port.convert;
+    let mut measure = Vec::new();
+    if let Some(size) = convert["substitute_font"]["controller"]["size"].as_i64() {
+        measure.push(json!({"key": format!("substitute:{size}"), "font": "substitute",
+                            "size": size, "ranges": ["0x20-0x7e"]}));
     }
-    if matches!(
-        slug,
-        "loewenzahn-6" | "loewenzahn-7" | "loewenzahn-8" | "loewenzahn-optik" | "loewenzahn-advent"
-    ) {
-        // DirectMedia's MPEG-1 movies, wherever the disc keeps them.
-        plan["external_media"] = json!({"root": "DATA", "extensions": ["MPG"]});
+    if convert["measure_fonts"] == true {
+        measure.extend(measure_requests(model)?);
     }
-    if slug == "findus-circus" {
-        // The voice and effect members link AIFF files beside the movies.
-        plan["external_media"] = json!({"root": "PF2/MOVIES/SOUNDS", "extensions": ["AIF"]});
+    let mut plan = json!({"measure": measure,
+        "streams": convert.get("streams").cloned().unwrap_or(json!([])),
+        "data": convert.get("data").cloned().unwrap_or(json!([]))});
+    for key in ["print", "external_media"] {
+        if let Some(value) = convert.get(key) {
+            plan[key] = value.clone();
+        }
     }
     Ok(plan)
 }
 
-/// Fonts a port supplies itself: a pinned substitute for unembedded system
-/// fonts, and the file its model names for it.
-#[derive(Default)]
-pub struct PortFonts {
-    pub droid_sans: Option<Vec<u8>>,
-    /// How many data files the port ships (plan's `data` folders).
-    pub data_files: usize,
-    /// The port's converted external media (plan's `external_media`), one
-    /// record per source file: {source, source_sha256, source_bytes,
-    /// duration, video, audio[, frames, rate, channels]}.
-    pub external_media: Vec<Value>,
-}
-
-/// The substitute font's asset name in the converted model, if the port has one.
-pub fn substitute_asset(slug: &str) -> Option<&'static str> {
-    match slug {
-        "willy-werkel-cars" => Some("fonts/willy-system.ttf"),
-        "findus-christmas" => Some("fonts/christmas-system.ttf"),
-        "loewenzahn-1" => Some("fonts/d5-system.ttf"),
-        _ => None,
-    }
-}
-
-fn find_handlers<'a>(
-    program: &'a mut Value,
-    movie: &str,
-    member: i64,
-    name: &str,
-) -> Vec<&'a mut Value> {
-    program["handlers"]
-        .as_array_mut()
-        .into_iter()
-        .flatten()
-        .filter(|h| h["movie"] == movie && h["member"] == member && h["name"] == name)
-        .collect()
-}
-
-fn text_sha(member: &Value) -> String {
-    sha256(member["text"].as_str().unwrap_or("").as_bytes())
-}
-
-/// Python json.dumps's ordering for the fixes list and approximations.
-fn object(pairs: Vec<(&str, Value)>) -> Value {
-    Value::Object(
-        pairs
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect::<Map<_, _>>(),
-    )
-}
-
-mod willy {
-    use super::*;
-
-    const SOURCE: &str = "938be20a50e2825f5acf4788aabfdc145b94d1a1fb61b7264a4a81156428afac";
-    const WINDOW: &str = "9cb4f829e9e23a5271fd9568ca2e71bd5f0eee9d18368bc95c1437a710e7ec0d";
-    const OPENER: &str = "b8cdef14b9e36e5fb60da419e8af19c7fc6841c965fa318a7eda2bb109224500";
-    const PRINT: &str = "408f357aa657c52dfd018fbd3759b070f44a55ba66a9dbb86ae33d2677d388ac";
-    const TEMPLATE: &str = "ac7f41cbf12bfe707ef1d0f284ebfd363e1a1272abe9a5ebe2ac69788287bb36";
-    const CHARTS: [(i64, &str); 2] = [
-        (
-            170,
-            "4926eca66bc61a7a708afbf2bcc2780c553da3005e6af0dcb8e485fb69daeaf1",
-        ),
-        (
-            173,
-            "2b3f97edade776b90c18901c4a1fdd4bf583bc5723519a00b371eed46f1deb1c",
-        ),
-    ];
-
-    /// games/willy-werkel-cars/host/compatibility.py
-    pub fn compatibility(program: &Value, source: &str) -> R<Value> {
-        if source != SOURCE {
-            return Err("Willy compatibility source changed".into());
-        }
-        let mut result = program.clone();
-        {
-            let mut handlers = find_handlers(&mut result, "06.DXR", 2, "closewindow");
-            if handlers.len() != 1 || handlers[0]["source_sha256"] != WINDOW {
-                return Err("Willy external chooser source changed".into());
-            }
-            let body = handlers[0]["body"]
-                .as_array_mut()
-                .and_then(|b| b.iter_mut().find(|n| n["op"] == "if"))
-                .and_then(|n| n["yes"].as_array_mut())
-                .ok_or("Willy external chooser context changed")?;
-            let tell = body.first().cloned().unwrap_or(Value::Null);
-            if tell["op"] != "tell" || tell["target"] != json!(["variable", "mymiaw"]) {
-                return Err("Willy external chooser context changed".into());
-            }
-            // A fail-closed native trap for external PC file selection.
-            let mut replacement = vec![
-                json!({"op": "call", "line": tell["line"], "value": ["call", "tell_window", [tell["target"]]]}),
-            ];
-            replacement.extend(tell["body"].as_array().cloned().unwrap_or_default());
-            body.splice(0..1, replacement);
-        }
-        {
-            let mut openers = find_handlers(&mut result, "06.DXR", 2, "openwindow");
-            if openers.len() != 1 || openers[0]["source_sha256"] != OPENER {
-                return Err("Willy external chooser opener changed".into());
-            }
-            let line = openers[0]["body"][1]["line"].clone();
-            openers[0]["body"] =
-                json!([{"op": "call", "line": line, "value": ["call", "open_window_trap", []]}]);
-        }
-        {
-            let mut printers = find_handlers(&mut result, "08.DXR", 38, "print");
-            if printers.len() != 1 || printers[0]["source_sha256"] != PRINT {
-                return Err("Willy certificate print source changed".into());
-            }
-            let line = printers[0]["body"][0]["line"].clone();
-            printers[0]["body"] = json!([{"op": "call", "line": line, "value": ["call", "certificate_print_notice", []]}]);
-        }
-        result.as_object_mut().ok_or("program")?.insert(
-            "compatibility_fixes".into(),
-            json!([
-                {"id": "certificate-print-notice", "movie": "08.DXR", "member": 38, "handler": "print",
-                 "source_sha256": PRINT, "disposition": "dismissible-platform-notice",
-                 "original_projector_verified": false},
-                {"id": "external-file-chooser-trap", "movie": "06.DXR", "member": 2, "handler": "closewindow",
-                 "source_sha256": WINDOW, "disposition": "explicit-runtime-trap",
-                 "original_projector_verified": false},
-                {"id": "external-file-chooser-opener-trap", "movie": "06.DXR", "member": 2,
-                 "handler": "openwindow", "source_sha256": OPENER,
-                 "disposition": "recoverable-runtime-trap", "original_projector_verified": false},
-            ]),
-        );
-        Ok(result)
-    }
-
-    fn member_mut<'a>(model: &'a mut Value, file: &str, number: i64) -> R<&'a mut Value> {
-        model["movies"]
-            .as_array_mut()
-            .into_iter()
-            .flatten()
-            .filter(|f| f["name"] == file)
-            .flat_map(|f| f["members"].as_array_mut().into_iter().flatten())
-            .find(|m| m["number"] == number)
-            .ok_or_else(|| format!("{file} member {number} missing"))
-    }
-
-    /// games/willy-werkel-cars/host/full_media.py: Droid Sans for the
-    /// unembedded system fonts, measured controller fields, and two
-    /// source-data corrections.
-    pub fn media(
-        model: &mut Value,
-        fonts: &PortFonts,
-        measure: &mut dyn FnMut(&str) -> R<Vec<u8>>,
-    ) -> R<()> {
-        let source = fonts
-            .droid_sans
-            .as_ref()
-            .ok_or("Willy needs the Droid Sans substitute")?;
-        let asset = "fonts/willy-system.ttf";
-        // These fields take controller text entry and source width checks.
-        let controller_metrics = font64_ascii_metrics(&measure("substitute:24")?)?;
-        let used = substitute_styles(model, |name, size| {
-            ((name == "SavedCarName" || name == "EnterField") && size == 24)
-                .then(|| controller_metrics.clone())
-        })?;
-        let template = member_mut(model, "CDDATA.CXT", 1)?;
-        if text_sha(template) != TEMPLATE {
-            return Err("new-player template source changed".into());
-        }
-        let mut text = template["text"].as_str().unwrap_or("").to_string();
-        text.pop();
-        template["text"] = json!(text);
-        template["compatibility"] = object(vec![
-            ("id", json!("new-player-template-unmatched-bracket")),
-            ("source_text_sha256", json!(TEMPLATE)),
-            (
-                "change",
-                json!("remove the final unmatched closing bracket"),
-            ),
-            ("original_projector_verified", json!(false)),
-        ]);
-        for (number, expected) in CHARTS {
-            let member = member_mut(model, "00.CXT", number)?;
-            if text_sha(member) != expected {
-                return Err("animation chart source changed".into());
-            }
-            let mut text = member["text"].as_str().unwrap_or("").to_string();
-            for _ in 0..3 {
-                text.pop();
-            }
-            member["text"] = json!(text);
-            member["compatibility"] = object(vec![
-                ("id", json!("animation-chart-trailing-digits")),
-                ("source_text_sha256", json!(expected)),
-                ("change", json!("remove 333 after the closed property list")),
-                ("original_projector_verified", json!(false)),
-            ]);
-        }
-        let mut notes = Vec::new();
-        for f in model["movies"].as_array().into_iter().flatten() {
-            for m in f["members"].as_array().into_iter().flatten() {
-                if let Some(fix) = m.get("compatibility").and_then(Value::as_object) {
-                    let mut note = object(vec![
-                        ("kind", json!("source-data-correction")),
-                        ("movie", f["name"].clone()),
-                        ("member", m["number"].clone()),
-                    ]);
-                    for (k, v) in fix {
-                        note[k] = v.clone();
-                    }
-                    notes.push(note);
-                }
-            }
-        }
-        let approximations = model["approximations"]
-            .as_array_mut()
-            .ok_or("model without approximations")?;
-        approximations.extend(notes);
-        substitute_font(model, asset, source, used);
-        Ok(())
-    }
-}
-
-/// The system-font substitute the ports' full_media.py hosts apply: every
-/// member with source text styles takes Droid Sans (font 1) at its first
-/// run's size and metrics. `controller(name, size)` adds measured metrics to
-/// fields that take controller entry. Returns the sizes and source font ids
-/// in use.
-struct Substituted {
-    sizes: std::collections::BTreeSet<i64>,
-    source_fonts: std::collections::BTreeSet<i64>,
-}
-fn substitute_styles(
-    model: &mut Value,
-    controller: impl Fn(&str, i64) -> Option<Value>,
-) -> R<Substituted> {
-    let mut used = Substituted {
-        sizes: Default::default(),
-        source_fonts: Default::default(),
-    };
-    for movie in model["movies"].as_array_mut().into_iter().flatten() {
-        for member in movie["members"].as_array_mut().into_iter().flatten() {
-            let Some(style) = member
-                .get("sourceTextStyles")
-                .and_then(Value::as_array)
-                .and_then(|s| s.first())
-                .cloned()
-            else {
-                continue;
-            };
-            used.source_fonts
-                .insert(style["sourceFontId"].as_i64().unwrap_or(0));
-            let size = style["size"].as_i64().unwrap_or(0);
-            used.sizes.insert(size);
-            let align = match member.get("textAlign").and_then(Value::as_i64).unwrap_or(0) {
-                -1 => 2,
-                1 => 1,
-                _ => 0,
-            };
-            let line_height = style["lineHeight"].as_i64().unwrap_or(0);
-            let ascent = style["ascent"].as_i64().unwrap_or(0);
-            let mut text_style = object(vec![
-                (
-                    "fontName",
-                    json!(format!("Director system font {}", style["sourceFontId"])),
-                ),
-                ("fontId", json!(1)),
-                ("size", style["size"].clone()),
-                ("align", json!(align)),
-                ("ascent", style["ascent"].clone()),
-                ("descent", json!((line_height - ascent).max(0))),
-                ("leading", json!(0)),
-                ("lineHeight", json!(line_height.max(1))),
-                ("color", style["color"].clone()),
-            ]);
-            if let Some(metrics) = controller(member["name"].as_str().unwrap_or(""), size) {
-                text_style["controllerMetrics"] = metrics;
-            }
-            let m = member.as_object_mut().ok_or("member")?;
-            m.insert("textStyle".into(), text_style);
-            m.insert(
-                "textPresentation".into(),
-                json!("explicit-system-font-substitute"),
-            );
-        }
-    }
-    Ok(used)
-}
-
-/// The substitute's font entry, one font64 variant per size, and its note.
-fn substitute_font(model: &mut Value, asset: &str, source: &[u8], used: Substituted) {
-    model["fonts"] = json!([object(vec![
-        ("number", json!(1)),
-        ("asset", json!(asset)),
-        ("sha256", json!(sha256(source))),
-        ("kind", json!("system-font-substitute")),
-        ("sourceFontIds", json!(used.source_fonts)),
-        ("targetFont", json!("Droid Sans")),
-        ("license", json!("Apache-2.0")),
-        (
-            "provenance",
-            json!("third_party/libdragon/examples/fontgallery/assets/droid-sans.ttf")
-        ),
-        (
-            "variants",
-            Value::Array(
-                used.sizes
-                    .iter()
-                    .map(|s| json!({"size": s, "asset": format!("fonts/f1-{s}.font64")}))
-                    .collect()
-            )
-        ),
-    ])]);
-    if let Some(approximations) = model["approximations"].as_array_mut() {
-        approximations.push(object(vec![
-            ("kind", json!("system-font-substitute")),
-            (
-                "description",
-                json!("Source STXT metrics and Mac Roman text use regular Droid Sans; mixed fonts and faces use the first source run."),
-            ),
-            ("implemented", json!(true)),
-        ]));
-    }
-}
-
-/// games/findus-christmas/host/full_media.py: the substitute alone.
-fn christmas_media(model: &mut Value, fonts: &PortFonts) -> R<()> {
-    let source = fonts
-        .droid_sans
-        .as_ref()
-        .ok_or("Christmas needs the Droid Sans substitute")?;
-    let used = substitute_styles(model, |_, _| None)?;
-    substitute_font(model, "fonts/christmas-system.ttf", source, used);
-    Ok(())
-}
-
-/// The (font, size) variants whose advances Lernerfolg's layout reads
-/// (games/lernerfolg-deutsch-1-2/host/full_media.py font_metrics): every
-/// text style's, and every Flash edit field's by its font alias, measured
-/// over the font's own codepoints in 32..=255 as dense runs.
-fn deutsch_measure(model: &Value) -> R<Vec<Value>> {
-    let fonts: std::collections::BTreeMap<i64, &Value> = model["fonts"]
-        .as_array()
-        .into_iter()
-        .flatten()
+/// The (font, size) variants a port's layout reads advances for: every text
+/// style's, and every Flash edit field's by its font alias, measured over
+/// the font's own codepoints in 32..=255 as dense runs.
+fn measure_requests(model: &Value) -> R<Vec<Value>> {
+    let fonts: BTreeMap<i64, &Value> = list(&model["fonts"])
         .filter_map(|f| f["number"].as_i64().map(|n| (n, f)))
         .collect();
-    let mut aliases = std::collections::HashMap::new();
+    let mut aliases = HashMap::new();
     for (&number, font) in &fonts {
-        for alias in font["aliases"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-        {
+        for alias in list(&font["aliases"]).filter_map(Value::as_str) {
             aliases.insert(alias.to_lowercase(), number);
         }
     }
-    let mut pairs = std::collections::BTreeSet::new();
-    for movie in model["movies"].as_array().into_iter().flatten() {
-        for member in movie["members"].as_array().into_iter().flatten() {
-            for key in ["textStyle", "textInsertStyle"] {
-                let style = &member[key];
-                if let (Some(font), Some(size)) = (style["fontId"].as_i64(), style["size"].as_i64())
-                    && font != 0
-                {
-                    pairs.insert((font, size));
-                }
-            }
-            for field in member["flashFields"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .chain(member["flashFontUses"].as_array().into_iter().flatten())
+    let mut pairs = BTreeSet::new();
+    for member in list(&model["movies"]).flat_map(|m| list(&m["members"])) {
+        for key in ["textStyle", "textInsertStyle"] {
+            let style = &member[key];
+            if let (Some(font), Some(size)) = (style["fontId"].as_i64(), style["size"].as_i64())
+                && font != 0
             {
-                let name = field["fontName"].as_str().unwrap_or("").to_lowercase();
-                if let Some(&number) = aliases.get(&name) {
-                    // Python's round: half to even.
-                    let height = field["fontHeight"]
-                        .as_f64()
-                        .filter(|h| *h != 0.0)
-                        .unwrap_or(12.0);
-                    pairs.insert((number, (height.round_ties_even() as i64).max(1)));
-                }
+                pairs.insert((font, size));
+            }
+        }
+        for field in list(&member["flashFields"]).chain(list(&member["flashFontUses"])) {
+            if let Some(&number) = aliases.get(&text(&field["fontName"]).to_lowercase()) {
+                let height = field["fontHeight"].as_f64().filter(|h| *h != 0.0).unwrap_or(12.0);
+                pairs.insert((number, (height.round_ties_even() as i64).max(1)));
             }
         }
     }
     pairs
         .into_iter()
         .map(|(number, size)| {
-            let font = fonts
-                .get(&number)
-                .ok_or(format!("font {number} not in the model"))?;
-            let codepoints: Vec<i64> = font["codepoints"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_i64)
-                .collect();
-            Ok(
-                json!({"key": format!("{number}:{size}"), "font": font["asset"], "size": size,
-                      "ranges": metric_ranges(&codepoints)?}),
-            )
+            let font = fonts.get(&number).ok_or(format!("font {number} not in the model"))?;
+            let codepoints: Vec<i64> =
+                list(&font["codepoints"]).filter_map(Value::as_i64).collect();
+            Ok(json!({"key": format!("{number}:{size}"), "font": font["asset"], "size": size,
+                      "ranges": metric_ranges(&codepoints)?}))
         })
         .collect()
 }
 
-/// text_metrics._ranges: contiguous --range arguments over a font's own
-/// codepoints within 32..=255.
+/// Contiguous --range arguments over a font's own codepoints within 32..=255.
 fn metric_ranges(codepoints: &[i64]) -> R<Vec<String>> {
-    let mut covered: Vec<i64> = codepoints
-        .iter()
-        .copied()
-        .filter(|c| (32..=255).contains(c))
-        .collect();
+    let mut covered: Vec<i64> = codepoints.iter().copied().filter(|c| (32..=255).contains(c)).collect();
     covered.sort_unstable();
     covered.dedup();
     let Some(&first) = covered.first() else {
@@ -952,748 +286,494 @@ fn metric_ranges(codepoints: &[i64]) -> R<Vec<String>> {
     Ok(runs)
 }
 
-/// games/lernerfolg-deutsch-1-2/host/full_media.py, the model half: the
-/// measured advance tables and the port's notes. The speech streams and task
-/// databases are files, not model entries; the importer ships them as packs.
-fn deutsch_media(
+// ---- The model ----
+
+/// The port's model corrections after conversion. `measure(key)` returns the
+/// font64 mkfont packed for one of plan()'s measurement requests.
+pub fn postprocess_model(
     model: &mut Value,
+    port: &Port,
     fonts: &PortFonts,
     measure: &mut dyn FnMut(&str) -> R<Vec<u8>>,
 ) -> R<()> {
-    let mut metrics = Map::new();
-    for request in deutsch_measure(model)? {
-        let key = request["key"].as_str().unwrap_or("").to_string();
-        let packed = measure(&key)?;
-        metrics.insert(key, font64_metrics(&packed)?);
+    let convert = &port.convert;
+    match convert["external_media"]["bind"].as_str() {
+        None => {}
+        Some("linked-movies") => linked_movies(model, fonts, text(&convert["external_media"]["sounds_movie"]))?,
+        Some("linked-sounds") => linked_sounds(model, fonts)?,
+        Some("directmedia") => directmedia(model, fonts)?,
+        Some(other) => return Err(format!("unknown external media binding {other}")),
     }
-    let count = metrics.len();
-    model["fontMetrics"] = Value::Object(metrics);
-    let notes = [
-        object(vec![
-            ("kind", json!("external-speech-ulc-stream")),
-            (
-                "description",
-                json!(
-                    "voc/ and sfx/ files stream as ULC wav64 through sound playFile; the codec is selected by measured size against VADPCM and Opus."
-                ),
-            ),
-            ("implemented", json!(true)),
-        ]),
-        object(vec![
-            ("kind", json!("exercise-task-databases")),
-            (
-                "description",
-                json!(format!(
-                    "{} tests_db/ task databases ship verbatim and are read through baReadBinFile; the authored Lingo parses them unchanged.",
-                    fonts.data_files
-                )),
-            ),
-            ("implemented", json!(true)),
-        ]),
-        object(vec![
-            ("kind", json!("measured-text-metrics")),
-            (
-                "description",
-                json!(format!(
-                    "{count} authored font variants carry mkfont-measured advance tables for charPosOf and Flash prompt layout."
-                )),
-            ),
-            ("implemented", json!(true)),
-        ]),
-    ];
-    let approximations = model["approximations"]
-        .as_array_mut()
-        .ok_or("model without approximations")?;
-    for note in notes {
-        if !approximations.contains(&note) {
-            approximations.push(note);
+    if convert["substitute_font"].is_object() {
+        substitute(model, &convert["substitute_font"], fonts, measure)?;
+    }
+    if convert["measure_fonts"] == true {
+        let mut metrics = Map::new();
+        for request in measure_requests(model)? {
+            let key = text(&request["key"]).to_string();
+            let packed = measure(&key)?;
+            metrics.insert(key, font64_metrics(&packed)?);
         }
+        model["fontMetrics"] = Value::Object(metrics);
+    }
+    for fix in list(&convert["text_fix"]) {
+        let member = member_mut(model, text(&fix["movie"]), fix["member"].as_i64().unwrap_or(0))?;
+        if sha256(text(&member["text"]).as_bytes()) != text(&fix["text_sha256"]) {
+            return Err(format!("{} member {} text changed; review required", fix["movie"], fix["member"]));
+        }
+        let mut chars: Vec<char> = text(&member["text"]).chars().collect();
+        chars.truncate(chars.len().saturating_sub(fix["trim"].as_u64().unwrap_or(0) as usize));
+        member["text"] = json!(chars.into_iter().collect::<String>());
+    }
+    for fix in list(&convert["tempo_fix"]) {
+        tempo_fix(model, fix)?;
     }
     Ok(())
 }
 
-/// text_metrics.decode: advances for 32..=255 (0 where the font has no
-/// glyph), kerning among them, point size, ascent and descent.
-pub fn font64_metrics(font: &[u8]) -> R<Value> {
-    if font.len() < 100 || &font[..4] != b"FNT\x0b" {
-        return Err("unsupported font64 metrics header".into());
+fn member_mut<'a>(model: &'a mut Value, file: &str, number: i64) -> R<&'a mut Value> {
+    model["movies"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .filter(|f| f["name"] == file)
+        .flat_map(|f| f["members"].as_array_mut().into_iter().flatten())
+        .find(|m| m["number"] == number)
+        .ok_or_else(|| format!("{file} member {number} missing"))
+}
+
+/// A score frame's tempo set to `to` where the source has `from`
+/// ([[convert.tempo_fix]] {movie, frame, from, to}); repeatable.
+fn tempo_fix(model: &mut Value, fix: &Value) -> R<()> {
+    let invalid = || format!("tempo fix {fix} no longer matches the recovered score");
+    let movie = model["movies"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .find(|m| m["name"] == fix["movie"])
+        .ok_or_else(invalid)?;
+    let frame = movie["score"]["frames"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .find(|f| f["number"] == fix["frame"])
+        .ok_or_else(invalid)?;
+    let tempo = frame["channels"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .find(|c| c["channel"] == 1)
+        .ok_or_else(invalid)?;
+    if !(tempo["tempoRaw"] == fix["from"] || tempo["tempoRaw"] == fix["to"]) || tempo["changed"][6] != 1 {
+        return Err(invalid());
     }
-    let u32_at = |at: usize| -> R<usize> {
-        font.get(at..at + 4)
+    tempo["tempoRaw"] = fix["to"].clone();
+    tempo["bytes"][6] = fix["to"].clone();
+    Ok(())
+}
+
+/// [convert.substitute_font]: every member with source text styles sets in
+/// the pinned Droid Sans (font 1) at its first run's size and metrics, under
+/// `asset`. `names` maps source font ids to the names scripts see (default
+/// "Director system font N"); `sizes` adds variants; `controller` {members,
+/// size} gives those fields the measured metrics of controller entry.
+fn substitute(
+    model: &mut Value,
+    spec: &Value,
+    fonts: &PortFonts,
+    measure: &mut dyn FnMut(&str) -> R<Vec<u8>>,
+) -> R<()> {
+    let source = fonts.droid_sans.as_ref().ok_or("the substitute font is missing")?;
+    let controller = match spec["controller"]["size"].as_i64() {
+        Some(size) => Some((size, font64_ascii_metrics(&measure(&format!("substitute:{size}"))?)?)),
+        None => None,
+    };
+    let controller_members: Vec<&str> = list(&spec["controller"]["members"]).map(text).collect();
+    let mut sizes: BTreeSet<i64> = list(&spec["sizes"]).filter_map(Value::as_i64).collect();
+    let mut source_fonts = BTreeSet::new();
+    for member in model["movies"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .flat_map(|m| m["members"].as_array_mut().into_iter().flatten())
+    {
+        let Some(style) = member.get("sourceTextStyles").and_then(|s| s.get(0)).cloned() else {
+            continue;
+        };
+        let font = style["sourceFontId"].as_i64().unwrap_or(0);
+        source_fonts.insert(font);
+        let size = style["size"].as_i64().unwrap_or(0);
+        sizes.insert(size);
+        let align = match member.get("textAlign").and_then(Value::as_i64).unwrap_or(0) {
+            -1 => 2,
+            1 => 1,
+            _ => 0,
+        };
+        let line_height = style["lineHeight"].as_i64().unwrap_or(0);
+        let ascent = style["ascent"].as_i64().unwrap_or(0);
+        let name = spec["names"][font.to_string()]
+            .as_str()
+            .map_or(format!("Director system font {font}"), str::to_string);
+        let mut text_style = json!({"fontName": name, "fontId": 1, "size": style["size"],
+            "align": align, "ascent": style["ascent"], "descent": (line_height - ascent).max(0),
+            "leading": 0, "lineHeight": line_height.max(1), "color": style["color"]});
+        if let Some((controller_size, metrics)) = &controller
+            && size == *controller_size
+            && controller_members.contains(&text(&member["name"]))
+        {
+            text_style["controllerMetrics"] = metrics.clone();
+        }
+        let m = member.as_object_mut().ok_or("member")?;
+        m.insert("textStyle".into(), text_style);
+        m.insert("textPresentation".into(), json!("explicit-system-font-substitute"));
+    }
+    model["fonts"] = json!([{
+        "number": 1, "asset": spec["asset"], "sha256": sha256(source),
+        "kind": "system-font-substitute", "sourceFontIds": source_fonts,
+        "targetFont": "Droid Sans", "license": "Apache-2.0",
+        "variants": sizes.iter().map(|s| json!({"size": s, "asset": format!("fonts/f1-{s}.font64")}))
+            .collect::<Vec<_>>(),
+    }]);
+    Ok(())
+}
+
+fn base_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Löwenzahn 1's linked QuickTime movies and external AIFF sounds: each
+/// video member takes its file's record; the sounds join `sounds_movie`'s
+/// cast as members numbered from 1000.
+fn linked_movies(model: &mut Value, fonts: &PortFonts, sounds_movie: &str) -> R<()> {
+    if list(&model["problems"]).any(|p| p["error"] != "digital video requires target conversion") {
+        return Err("unresolved non-video resources".into());
+    }
+    let mut records = fonts.external_media.clone();
+    records.sort_by(|a, b| {
+        let parts = |v: &Value| text(&v["source"]).split('/').map(str::to_string).collect::<Vec<_>>();
+        parts(a).cmp(&parts(b))
+    });
+    let mut by_name = HashMap::new();
+    for record in &records {
+        if by_name.insert(base_name(text(&record["source"])).to_lowercase(), record.clone()).is_some() {
+            return Err("ambiguous external filename".into());
+        }
+    }
+    for member in model["movies"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .flat_map(|m| m["members"].as_array_mut().into_iter().flatten())
+    {
+        if member["type"] != 10 {
+            continue;
+        }
+        let linked = text(&member["linkedFile"]).to_lowercase();
+        let record = by_name.get(&linked).ok_or(format!("unresolved linked video: {}", member["linkedFile"]))?;
+        let flags = member["videoFlags"].as_i64().unwrap_or(0);
+        let duration = record["duration"].as_f64().unwrap_or(0.0);
+        let audio_only = record["audioOnly"] == true;
+        let has = |key: &str| !text(&record[key]).is_empty();
+        if !has("video") && !(audio_only && has("audio")) {
+            return Err(format!("linked video was not converted: {}", member["linkedFile"]));
+        }
+        if audio_only && has("video") {
+            return Err(format!("audio-only movie has a picture asset: {}", member["linkedFile"]));
+        }
+        if !duration.is_finite() || duration <= 0.0 || duration * 600.0 > u32::MAX as f64 {
+            return Err(format!("invalid linked video duration: {}", member["linkedFile"]));
+        }
+        let m = member.as_object_mut().ok_or("member")?;
+        m.insert("asset".into(), record["video"].clone());
+        m.insert("videoAudio".into(), record["audio"].clone());
+        m.insert("videoAudioOnly".into(), json!(audio_only));
+        m.insert("frames".into(), json!((duration * 600.0).round_ties_even() as i64));
+        m.insert("rate".into(), json!(600));
+        m.insert("videoSource".into(), record["source"].clone());
+        m.insert("videoFrameRate".into(), json!(15));
+        m.insert("videoLoop".into(), json!(flags & 16 != 0));
+        m.insert("videoPaused".into(), json!(flags & 256 != 0));
+    }
+    let shared = model["movies"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .find(|m| m["name"] == sounds_movie)
+        .ok_or(format!("{sounds_movie} missing"))?;
+    let members = shared["members"].as_array_mut().ok_or("sound movie members")?;
+    members.retain(|m| !m.get("externalAudio").is_some_and(|v| !v.is_null() && v != "" && v != &json!(false)));
+    for (n, record) in records.iter().filter(|r| text(&r["source"]).ends_with(".AIF")).enumerate() {
+        members.push(json!({"number": 1000 + n, "cast": 1, "type": 6,
+            "name": base_name(text(&record["source"])), "asset": record["audio"],
+            "rate": record["rate"], "frames": record["frames"], "channels": record["channels"],
+            "loopStart": 0, "loopEnd": record["frames"], "looping": 0,
+            "externalAudio": record["source"]}));
+    }
+    model["problems"] = json!([]);
+    model["externalMedia"] = Value::Array(records);
+    Ok(())
+}
+
+/// Linked sounds (Findus' Circus): empty sound members named after an
+/// external "<name>.aif" take that file's converted record.
+fn linked_sounds(model: &mut Value, fonts: &PortFonts) -> R<()> {
+    let mut by_name = HashMap::new();
+    for record in &fonts.external_media {
+        let file = base_name(text(&record["source"])).to_lowercase();
+        let stem = file.strip_suffix(".aif").ok_or("external sound is not AIFF")?.to_string();
+        if by_name.insert(stem, record.clone()).is_some() {
+            return Err("ambiguous external sound file".into());
+        }
+    }
+    let mut bound = 0;
+    for member in model["movies"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .flat_map(|m| m["members"].as_array_mut().into_iter().flatten())
+    {
+        if member["type"] != 6 || member["empty"] != true {
+            continue;
+        }
+        let Some(record) = by_name.get(&text(&member["name"]).to_lowercase()) else {
+            continue;
+        };
+        if text(&record["audio"]).is_empty() {
+            return Err(format!("sound {} did not convert", member["name"]));
+        }
+        let m = member.as_object_mut().ok_or("member")?;
+        m.remove("empty");
+        for key in ["rate", "frames", "channels"] {
+            m.insert(key.into(), record[key].clone());
+        }
+        m.insert("asset".into(), record["audio"].clone());
+        m.insert("loopStart".into(), json!(0));
+        m.insert("loopEnd".into(), record["frames"].clone());
+        m.insert("looping".into(), json!(0));
+        m.insert("externalAudio".into(), record["source"].clone());
+        bound += 1;
+    }
+    if bound == 0 {
+        return Err("linked sounds not found".into());
+    }
+    model["externalMedia"] = Value::Array(fonts.external_media.clone());
+    Ok(())
+}
+
+/// DirectMedia and QuickTime video Xtra members (the Löwenzahn 8.5 titles)
+/// bound to their converted MPEG streams, found among the paths the
+/// recovery verified for them; never a manufactured DOS filename.
+fn directmedia(model: &mut Value, fonts: &PortFonts) -> R<()> {
+    let mut by_path = HashMap::new();
+    for record in &fonts.external_media {
+        let source = text(&record["source"]).replace('\\', "/").to_uppercase();
+        if by_path.insert(source, record).is_some() {
+            return Err("ambiguous external movie path".into());
+        }
+    }
+    for member in model["movies"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .flat_map(|m| m["members"].as_array_mut().into_iter().flatten())
+    {
+        let symbol = text(&member["xtra"]["symbol"]);
+        if symbol != "TBDIRECTMEDIA" && symbol != "quickTimeMedia" {
+            continue;
+        }
+        let quicktime = symbol == "quickTimeMedia";
+        let candidates = member["linkedSourceCandidates"]
+            .as_array()
+            .ok_or("video member has no verified media candidates")?;
+        let record = candidates
+            .iter()
+            .filter_map(Value::as_str)
+            .find_map(|p| by_path.get(&p.to_uppercase()))
+            .ok_or_else(|| format!("unresolved external video {} (candidates: {candidates:?})", member["linkedFile"]))?;
+        if text(&record["video"]).is_empty() {
+            return Err(format!("external video was not converted: {}", record["source"]));
+        }
+        let audio = text(&record["audio"]);
+        let milliseconds = member["videoDurationMs"].as_i64().unwrap_or(0);
+        let duration = if milliseconds > 0 {
+            milliseconds as f64 / 1000.0
+        } else {
+            record["duration"].as_f64().unwrap_or(0.0)
+        };
+        if !duration.is_finite() || duration <= 0.0 || duration * 600.0 > u32::MAX as f64 {
+            return Err(format!("invalid external video duration: {}", record["source"]));
+        }
+        let mut flags = if quicktime { member["videoFlags"].as_u64().unwrap_or(0) } else { 8 };
+        if audio.is_empty() {
+            flags &= !8;
+        }
+        let m = member.as_object_mut().ok_or("member")?;
+        m.insert("type".into(), json!(10));
+        m.insert("sourceType".into(), json!(15));
+        m.insert("asset".into(), record["video"].clone());
+        m.insert("videoAudio".into(), json!(audio));
+        m.insert("videoFlags".into(), json!(flags));
+        m.insert("frames".into(), json!((duration * 600.0).round() as u32));
+        m.insert("rate".into(), json!(600));
+        m.insert("videoSource".into(), record["source"].clone());
+        if let Some(fps) = record.get("videoFrameRate") {
+            m.insert("videoFrameRate".into(), fps.clone());
+        }
+    }
+    model["externalMediaUnbound"] = json!([]);
+    model["externalMedia"] = Value::Array(fonts.external_media.clone());
+    Ok(())
+}
+
+// ---- mkfont's font64 ----
+
+struct Font64<'a>(&'a [u8]);
+
+impl Font64<'_> {
+    fn new(font: &[u8]) -> R<Font64<'_>> {
+        if font.len() < 100 || &font[..4] != b"FNT\x0b" {
+            return Err("unsupported font64 metrics header".into());
+        }
+        Ok(Font64(font))
+    }
+    fn u32_at(&self, at: usize) -> R<usize> {
+        self.0
+            .get(at..at + 4)
             .map(|b| u32::from_be_bytes(b.try_into().unwrap()) as usize)
             .ok_or_else(|| "truncated font64".to_string())
-    };
-    let byte = |at: usize| {
-        font.get(at)
-            .copied()
-            .ok_or_else(|| "truncated font64".to_string())
-    };
-    let (ranges, glyphs, kranges, kern) = (u32_at(72)?, u32_at(80)?, u32_at(84)?, u32_at(92)?);
-    // Python dict semantics: first insertion fixes the order, later ranges
-    // overwrite the glyph.
-    let mut order: Vec<i64> = Vec::new();
-    let mut indices = std::collections::HashMap::new();
-    for i in 0..u32_at(36)? {
-        let at = ranges + i * 12;
-        let (start, count, glyph) = (
-            u32_at(at)? as i64,
-            u32_at(at + 4)? as i64,
-            u32_at(at + 8)? as i32 as i64,
-        );
-        if glyph < 0 {
-            return Err("sparse metrics font range".into());
-        }
-        for c in start.max(32)..(start + count).min(256) {
-            if indices.insert(c, glyph + c - start).is_none() {
-                order.push(c);
+    }
+    fn byte(&self, at: usize) -> R<u8> {
+        self.0.get(at).copied().ok_or_else(|| "truncated font64".to_string())
+    }
+    /// Glyph indices of the codepoints in `range`, in first-seen order.
+    fn glyphs(&self, range: std::ops::Range<i64>) -> R<Vec<(i64, i64)>> {
+        let ranges = self.u32_at(72)?;
+        let mut order: Vec<(i64, i64)> = Vec::new();
+        for i in 0..self.u32_at(36)? {
+            let at = ranges + i * 12;
+            let (start, count) = (self.u32_at(at)? as i64, self.u32_at(at + 4)? as i64);
+            let glyph = self.u32_at(at + 8)? as i32 as i64;
+            if glyph < 0 {
+                return Err("sparse metrics font range".into());
+            }
+            for c in start.max(range.start)..(start + count).min(range.end) {
+                match order.iter_mut().find(|(code, _)| *code == c) {
+                    Some(entry) => entry.1 = glyph + c - start,
+                    None => order.push((c, glyph + c - start)),
+                }
             }
         }
+        Ok(order)
     }
-    if !(0x20..0x7f).all(|c| indices.contains_key(&c)) {
+    fn advance(&self, glyph: i64) -> R<u8> {
+        self.byte(self.u32_at(80)? + glyph as usize * 8)
+    }
+    fn kerning(&self, glyphs: &[(i64, i64)]) -> R<Vec<Value>> {
+        let (kranges, kern) = (self.u32_at(84)?, self.u32_at(92)?);
+        let reverse: HashMap<i64, i64> = glyphs.iter().map(|&(c, g)| (g, c)).collect();
+        let mut pairs = Vec::new();
+        if kranges == 0 {
+            return Ok(pairs);
+        }
+        for &(c, g) in glyphs {
+            let at = kranges + g as usize * 4;
+            let lo = u16::from_be_bytes([self.byte(at)?, self.byte(at + 1)?]) as usize;
+            let hi = u16::from_be_bytes([self.byte(at + 2)?, self.byte(at + 3)?]) as usize;
+            if lo == 0 {
+                continue;
+            }
+            for i in lo..=hi {
+                let at = kern + i * 3;
+                let second = i16::from_be_bytes([self.byte(at)?, self.byte(at + 1)?]) as i64;
+                let amount = self.byte(at + 2)? as i8 as i64;
+                if let Some(&other) = reverse.get(&second) {
+                    pairs.push(json!([c, other, amount]));
+                }
+            }
+        }
+        Ok(pairs)
+    }
+}
+
+/// Advances for 32..=255 (0 where the font has no glyph), kerning among
+/// them, point size, ascent and descent.
+pub fn font64_metrics(font: &[u8]) -> R<Value> {
+    let font = Font64::new(font)?;
+    let glyphs = font.glyphs(32..256)?;
+    if !(0x20..0x7f).all(|c| glyphs.iter().any(|&(code, _)| code == c)) {
         return Err("metrics font lacks printable ASCII".into());
     }
     let advances = (32..=255)
-        .map(|c| {
-            indices
-                .get(&c)
-                .map_or(Ok(0), |&g| byte(glyphs + g as usize * 8))
-        })
+        .map(|c| glyphs.iter().find(|&&(code, _)| code == c).map_or(Ok(0), |&(_, g)| font.advance(g)))
         .collect::<R<Vec<u8>>>()?;
-    let mut reverse = std::collections::HashMap::new();
-    for &c in &order {
-        reverse.insert(indices[&c], c);
-    }
-    let mut pairs = Vec::new();
-    if kranges != 0 {
-        for &c in &order {
-            let g = indices[&c] as usize;
-            let at = kranges + g * 4;
-            let lo = u16::from_be_bytes([byte(at)?, byte(at + 1)?]) as usize;
-            let hi = u16::from_be_bytes([byte(at + 2)?, byte(at + 3)?]) as usize;
-            if lo == 0 {
-                continue;
-            }
-            for i in lo..=hi {
-                let at = kern + i * 3;
-                let second = i16::from_be_bytes([byte(at)?, byte(at + 1)?]) as i64;
-                let amount = byte(at + 2)? as i8 as i64;
-                if let Some(&other) = reverse.get(&second) {
-                    pairs.push(json!([c, other, amount]));
-                }
-            }
-        }
-    }
-    let i32_at = |at: usize| -> R<i64> { Ok(u32_at(at)? as u32 as i32 as i64) };
-    Ok(object(vec![
-        ("advances", json!(advances)),
-        ("kerning", Value::Array(pairs)),
-        ("size", json!(u32_at(8)?)),
-        ("ascent", json!(i32_at(12)?)),
-        ("descent", json!(-i32_at(16)?)),
-    ]))
+    let i32_at = |at| -> R<i64> { Ok(font.u32_at(at)? as u32 as i32 as i64) };
+    Ok(json!({"advances": advances, "kerning": font.kerning(&glyphs)?, "size": font.u32_at(8)?,
+              "ascent": i32_at(12)?, "descent": -i32_at(16)?}))
 }
 
-mod loewenzahn {
-    use super::*;
-
-    const SOURCE: &str = "f31970b980f096a343a9aec5f10d52931709fbdda3cf09e5a80023791e402af2";
-    const PRINT: &str = "0687160c839bd70d5c6a07c1ddb955f06de6b93c23bc24f2b499f8bcf9724901";
-
-    /// games/loewenzahn-1/host/compatibility.py: the print handler hands its
-    /// book and chapter to the platform's fixed-document printing.
-    pub fn compatibility(program: &Value, source: &str) -> R<Value> {
-        let mut result = program.clone();
-        {
-            let mut matches: Vec<&mut Value> =
-                find_handlers(&mut result, "CURSOR.CXT", 90, "drucken")
-                    .into_iter()
-                    .filter(|h| h["cast"] == "External")
-                    .collect();
-            if source != SOURCE || matches.len() != 1 || matches[0]["source_sha256"] != PRINT {
-                return Err("Löwenzahn print source identity changed; review required".into());
-            }
-            let handler = &mut matches[0];
-            if handler["parameters"] != json!(["me", "logobreite"]) {
-                return Err("Löwenzahn print parameters changed".into());
-            }
-            let line = handler["line"].clone();
-            handler["body"] = json!([{"op": "call", "line": line,
-                "value": ["call", "director64_print", [["variable", "mbuch"], ["variable", "mkapitel"]]]}]);
-        }
-        result.as_object_mut().ok_or("program")?.insert(
-            "compatibility_fixes".into(),
-            json!([{"id": "phone-printing", "movie": "CURSOR.CXT", "member": 90, "handler": "drucken",
-                    "source_sha256": PRINT, "from": "PrintOMatic page composition",
-                    "to": "fixed PDF QR handoff", "original_projector_verified": false}]),
-        );
-        Ok(result)
-    }
-
-    fn base_name(path: &str) -> &str {
-        path.rsplit('/').next().unwrap_or(path)
-    }
-
-    /// games/loewenzahn-1/host/full_media.py, the model half: linked videos
-    /// and external sounds from the host's converted records, the Geneva and
-    /// Monaco substitute, the target limits and FIL's speed correction.
-    pub fn media(model: &mut Value, fonts: &PortFonts) -> R<()> {
-        if model["problems"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .any(|p| p["error"] != "digital video requires target conversion")
-        {
-            return Err("unresolved non-video resources".into());
-        }
-        let mut records = fonts.external_media.clone();
-        // pathlib order: by path components.
-        records.sort_by(|a, b| {
-            let parts = |v: &Value| {
-                v["source"]
-                    .as_str()
-                    .unwrap_or("")
-                    .split('/')
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            };
-            parts(a).cmp(&parts(b))
-        });
-        let count = |ext: &str| {
-            records
-                .iter()
-                .filter(|r| r["source"].as_str().unwrap_or("").ends_with(ext))
-                .count()
-        };
-        if count(".MOV") != 66 || count(".AIF") != 219 {
-            return Err("external media denominator changed".into());
-        }
-        let mut by_name = std::collections::HashMap::new();
-        for record in &records {
-            let name = base_name(record["source"].as_str().unwrap_or("")).to_lowercase();
-            if by_name.insert(name, record.clone()).is_some() {
-                return Err("ambiguous external filename".into());
-            }
-        }
-        for movie in model["movies"].as_array_mut().into_iter().flatten() {
-            for member in movie["members"].as_array_mut().into_iter().flatten() {
-                if member["type"] != 10 {
-                    continue;
-                }
-                let linked = member["linkedFile"].as_str().unwrap_or("").to_lowercase();
-                let record = by_name
-                    .get(&linked)
-                    .ok_or(format!("unresolved linked video: {}", member["linkedFile"]))?;
-                let flags = member["videoFlags"].as_i64().unwrap_or(0);
-                let duration = record["duration"].as_f64().unwrap_or(0.0);
-                let audio_only = record["audioOnly"] == true;
-                if record["video"].as_str().is_none_or(str::is_empty)
-                    && !(audio_only && record["audio"].as_str().is_some_and(|s| !s.is_empty()))
-                {
-                    return Err(format!(
-                        "linked video was not converted: {}",
-                        member["linkedFile"]
-                    ));
-                }
-                if audio_only && record["video"].as_str().is_some_and(|s| !s.is_empty()) {
-                    return Err(format!(
-                        "audio-only movie has a picture asset: {}",
-                        member["linkedFile"]
-                    ));
-                }
-                if !duration.is_finite() || duration <= 0.0 || duration * 600.0 > u32::MAX as f64 {
-                    return Err(format!(
-                        "invalid linked video duration: {}",
-                        member["linkedFile"]
-                    ));
-                }
-                let m = member.as_object_mut().ok_or("member")?;
-                m.insert("asset".into(), record["video"].clone());
-                m.insert("videoAudio".into(), record["audio"].clone());
-                m.insert("videoAudioOnly".into(), json!(audio_only));
-                m.insert(
-                    "frames".into(),
-                    json!((duration * 600.0).round_ties_even() as i64),
-                );
-                m.insert("rate".into(), json!(600));
-                m.insert("videoSource".into(), record["source"].clone());
-                m.insert("videoFrameRate".into(), json!(15));
-                m.insert("videoLoop".into(), json!(flags & 16 != 0));
-                m.insert("videoPaused".into(), json!(flags & 256 != 0));
-            }
-        }
-        let shared = model["movies"]
-            .as_array_mut()
-            .into_iter()
-            .flatten()
-            .find(|m| m["name"] == "CURSOR.CXT")
-            .ok_or("CURSOR.CXT missing")?;
-        let members = shared["members"]
-            .as_array_mut()
-            .ok_or("CURSOR.CXT members")?;
-        members.retain(|m| {
-            !m.get("externalAudio")
-                .is_some_and(|v| !v.is_null() && v != "" && v != &json!(false))
-        });
-        for (n, record) in records
-            .iter()
-            .filter(|r| r["source"].as_str().unwrap_or("").ends_with(".AIF"))
-            .enumerate()
-        {
-            members.push(object(vec![
-                ("number", json!(1000 + n)),
-                ("cast", json!(1)),
-                ("type", json!(6)),
-                (
-                    "name",
-                    json!(base_name(record["source"].as_str().unwrap_or(""))),
-                ),
-                ("asset", record["audio"].clone()),
-                ("rate", record["rate"].clone()),
-                ("frames", record["frames"].clone()),
-                ("channels", record["channels"].clone()),
-                ("loopStart", json!(0)),
-                ("loopEnd", record["frames"].clone()),
-                ("looping", json!(0)),
-                ("externalAudio", record["source"].clone()),
-            ]));
-        }
-        model["problems"] = json!([]);
-        model["externalMedia"] = Value::Array(records);
-        // Geneva is a source system font, absent from the disc: a deliberate
-        // substitute from the pinned SDK, keeping the source STXT metrics.
-        let source = fonts
-            .droid_sans
-            .as_ref()
-            .ok_or("Löwenzahn needs the Droid Sans substitute")?;
-        let mut sizes: std::collections::BTreeSet<i64> = [18, 24].into();
-        for movie in model["movies"].as_array_mut().into_iter().flatten() {
-            for member in movie["members"].as_array_mut().into_iter().flatten() {
-                let Some(styles) = member
-                    .get("sourceTextStyles")
-                    .and_then(Value::as_array)
-                    .cloned()
-                else {
-                    continue;
-                };
-                let style = styles.first().cloned().unwrap_or(Value::Null);
-                let font = style["sourceFontId"].as_i64().unwrap_or(0);
-                if styles.len() != 1
-                    || !(font == 3 || font == 4)
-                    || !(style["face"] == 0 || style["face"] == 1)
-                {
-                    return Err("unhandled source STXT font/style".into());
-                }
-                let size = style["size"].as_i64().unwrap_or(0);
-                if !(1..=255).contains(&size) {
-                    return Err("invalid source font size".into());
-                }
-                sizes.insert(size);
-                let ascent = style["ascent"].as_i64().unwrap_or(0);
-                let line_height = style["lineHeight"].as_i64().unwrap_or(0);
-                let m = member.as_object_mut().ok_or("member")?;
-                m.insert(
-                    "textStyle".into(),
-                    object(vec![
-                        (
-                            "fontName",
-                            json!(if font == 3 { "Geneva" } else { "Monaco" }),
-                        ),
-                        ("fontId", json!(1)),
-                        ("size", style["size"].clone()),
-                        ("align", json!(0)),
-                        ("ascent", style["ascent"].clone()),
-                        ("descent", json!(line_height - ascent)),
-                        ("leading", json!(0)),
-                        ("lineHeight", style["lineHeight"].clone()),
-                        ("color", style["color"].clone()),
-                    ]),
-                );
-                m.insert(
-                    "textPresentation".into(),
-                    json!("explicit-system-font-substitute"),
-                );
-            }
-        }
-        model["fonts"] = json!([object(vec![
-            ("number", json!(1)),
-            ("asset", json!("fonts/d5-system.ttf")),
-            ("sha256", json!(sha256(source))),
-            ("kind", json!("system-font-substitute")),
-            ("sourceFonts", json!(["Geneva", "Monaco"])),
-            ("targetFont", json!("Droid Sans")),
-            ("license", json!("Apache-2.0")),
-            (
-                "provenance",
-                json!("third_party/libdragon/examples/fontgallery/assets/droid-sans.ttf")
-            ),
-            (
-                "variants",
-                Value::Array(
-                    sizes
-                        .iter()
-                        .map(|s| json!({"size": s, "asset": format!("fonts/f1-{s}.font64")}))
-                        .collect()
-                )
-            ),
-        ])]);
-        let limits = [
-            (
-                "system-font-substitute",
-                "Geneva and Monaco are not embedded; regular Droid Sans renders Mac Roman STXT as UTF-8 with word wrapping. The single bold source style is rendered regular.",
-            ),
-            (
-                "builtin-cursor-glyphs",
-                "Standard OS cursor roles use target glyphs. Authored monochrome bitmap/mask cursors retain their original artwork and registration points.",
-            ),
-            (
-                "transition-cut",
-                "Authored transitions use cuts; source score timing and navigation are retained.",
-            ),
-            (
-                "movie-window",
-                "One centered 416x240 source DIALOG window with suspended stage state.",
-            ),
-            (
-                "phone-printing",
-                "The print stamp opens a QR link to a hosted PDF. Documents use recovered text and original print artwork, A4 flow layout and Liberation Sans.",
-            ),
-        ];
-        let approximations = model["approximations"]
-            .as_array_mut()
-            .ok_or("model without approximations")?;
-        approximations.retain(|a| {
-            let kind = a["kind"].as_str().unwrap_or("");
-            !limits.iter().any(|(k, _)| *k == kind)
-                && kind != "video-conversion"
-                && kind != "cursor-substitute"
-        });
-        for (kind, detail) in limits {
-            approximations.push(json!({"kind": kind, "detail": detail}));
-        }
-        approximations.push(
-            json!({"kind": "video-conversion", "codec": "h264", "width": 160, "fps": 15,
-            "quality": 25, "seek_seconds": 2, "audio": "source rates/channels; ULC packing"}),
-        );
-        correct_film_speed(model)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        fn film_score() -> Value {
-            let mut bytes = vec![0; 24];
-            bytes[6] = 30;
-            let mut changed = vec![0; 24];
-            changed[6] = 1;
-            json!({"movies": [{"name": "FIL.DXR", "directorVersion": 500, "score": {
-                "labels": [{"name": "3", "frame": 31}],
-                "frames": [{"number": 33, "channels": [
-                    {"channel": 0, "behaviors": [{"cast": 1, "member": 84}]},
-                    {"channel": 1, "tempoRaw": 30, "bytes": bytes, "changed": changed}]}]}}],
-                "approximations": []})
-        }
-
-        #[test]
-        fn film_speed_correction_is_scoped_recorded_and_repeatable() {
-            let original = film_score();
-            let mut model = original.clone();
-            correct_film_speed(&mut model).unwrap();
-            let tempo = &model["movies"][0]["score"]["frames"][0]["channels"][1];
-            assert_eq!(
-                (tempo["tempoRaw"].clone(), tempo["bytes"][6].clone()),
-                (json!(0), json!(0))
-            );
-            assert_eq!(model["approximations"][0]["source_tempo"], 30);
-            assert_eq!(
-                model["approximations"][0]["original_projector_compared"],
-                false
-            );
-            let corrected = model.clone();
-            correct_film_speed(&mut model).unwrap();
-            assert_eq!(model, corrected);
-            let tempo = &mut model["movies"][0]["score"]["frames"][0]["channels"][1];
-            tempo["tempoRaw"] = json!(30);
-            tempo["bytes"][6] = json!(30);
-            model["approximations"] = json!([]);
-            assert_eq!(model, original);
-        }
-
-        #[test]
-        fn film_speed_correction_rejects_changed_source() {
-            let changes: [fn(&mut Value); 4] = [
-                |m| m["movies"][0]["directorVersion"] = json!(600),
-                |m| m["movies"][0]["score"]["frames"][0]["number"] = json!(34),
-                |m| {
-                    m["movies"][0]["score"]["frames"][0]["channels"][0]["behaviors"][0]["member"] =
-                        json!(85)
-                },
-                |m| m["movies"][0]["score"]["frames"][0]["channels"][1]["tempoRaw"] = json!(24),
-            ];
-            for change in changes {
-                let mut model = film_score();
-                change(&mut model);
-                assert!(
-                    correct_film_speed(&mut model)
-                        .unwrap_err()
-                        .contains("no longer matches")
-                );
-            }
-        }
-
-        #[test]
-        fn deferred_d5_video_materializes_before_shared_package_preflight() {
-            let mut model = film_score();
-            model["problems"] = json!([{"error":"digital video requires target conversion"}]);
-            model["movies"][0]["id"] = json!(1);
-            model["movies"][0]["casts"] = json!([{"number":1,"name":"Internal","file":"FIL.DXR"}]);
-            model["movies"][0]["members"] = json!([
-                {"number":1,"cast":1,"type":10,"linkedFile":"CLIP0.MOV","width":2,"height":2},
-                {"number":84,"cast":1,"type":11}
-            ]);
-            model["movies"][0]["score"]["frames"][0]["channels"][0]["bytes"] = json!(vec![0u8; 24]);
-            model["movies"][0]["score"]["frames"][0]["channels"][0]["changed"] =
-                json!(vec![true; 24]);
-            let last = model["movies"][0]["score"]["frames"][0].clone();
-            let mut frames: Vec<Value> =
-                (1..33).map(|n| json!({"number":n,"channels":[]})).collect();
-            let mut sprite = vec![0u8; 24];
-            sprite[0] = 16;
-            sprite[5] = 1;
-            sprite[7] = 1;
-            sprite[17] = 2;
-            sprite[19] = 2;
-            frames[0]["channels"] = json!([{"channel":6,"bytes":sprite,"changed":vec![true;24]}]);
-            frames.push(last);
-            model["movies"][0]["score"]["frames"] = json!(frames);
-            model["movies"].as_array_mut().unwrap().push(json!({"id":2,"name":"CURSOR.CXT",
-                "directorVersion":500,"casts":[{"number":1,"name":"Internal","file":"CURSOR.CXT"}],"members":[]}));
-            let mut records: Vec<Value> = (0..66)
-                .map(|n| {
-                    json!({"source":format!("CLIP{n}.MOV"),
-                "video":format!("clip{n}.h264"),"audio":"clip.wav64","duration":2.0})
-                })
-                .collect();
-            records.extend((0..219).map(|n| {
-                json!({"source":format!("SOUND{n}.AIF"),
-                "audio":format!("sound{n}.wav64"),"rate":22050,"frames":22050,"channels":1})
-            }));
-            let fonts = PortFonts {
-                droid_sans: Some(b"synthetic font identity".to_vec()),
-                external_media: records,
-                ..Default::default()
-            };
-            let program =
-                r#"{"files":[{"name":"FIL.DXR.lingo"},{"name":"CURSOR.CXT.lingo"}],"handlers":[]}"#;
-            let meta = r#"{"director_version":500,"game":"loewenzahn-1"}"#;
-            assert!(
-                crate::build_package(program, &model.to_string(), "go\n", b"opcodes", meta)
-                    .is_err()
-            );
-            let unbound = model.clone();
-            let mut missing = PortFonts {
-                droid_sans: fonts.droid_sans.clone(),
-                external_media: fonts.external_media.clone(),
-                ..Default::default()
-            };
-            missing.external_media[0]["video"] = json!("");
-            assert!(
-                media(&mut unbound.clone(), &missing)
-                    .unwrap_err()
-                    .contains("was not converted")
-            );
-            missing.external_media[0]["video"] = json!("clip0.h264");
-            missing.external_media[0]["duration"] = json!(0);
-            assert!(
-                media(&mut unbound.clone(), &missing)
-                    .unwrap_err()
-                    .contains("duration")
-            );
-            postprocess_model(
-                &mut model,
-                &Port {
-                    slug: "loewenzahn-1".into(),
-                    ..Default::default()
-                },
-                &fonts,
-                &mut |_| unreachable!(),
-            )
-            .unwrap();
-            assert_eq!(model["problems"], json!([]));
-            assert_eq!(model["movies"][0]["members"][0]["asset"], "clip0.h264");
-            assert_eq!(model["movies"][0]["members"][0]["frames"], 1200);
-            for target in [
-                crate::capabilities::Target::Web,
-                crate::capabilities::Target::Android,
-            ] {
-                let report = crate::capabilities::audit(&model, target, None).unwrap();
-                crate::capabilities::require(&report, "synthetic converted D5 video").unwrap();
-            }
-            let package =
-                crate::build_package(program, &model.to_string(), "go\n", b"opcodes", meta)
-                    .unwrap();
-            assert_eq!(
-                u16::from_le_bytes(package[4..6].try_into().unwrap()),
-                crate::package::FORMAT
-            );
-            // A QuickTime movie can carry sound without a picture track.
-            // Only the source parser's explicit audio-only fact permits an
-            // absent picture; a missing conversion remains an error above.
-            let mut audio_fonts = PortFonts {
-                droid_sans: fonts.droid_sans.clone(),
-                external_media: fonts.external_media.clone(),
-                ..Default::default()
-            };
-            audio_fonts.external_media[0]["video"] = json!("");
-            audio_fonts.external_media[0]["audioOnly"] = json!(true);
-            audio_fonts.external_media[0]["duration"] = json!(20.37);
-            let mut audio_model = unbound.clone();
-            media(&mut audio_model, &audio_fonts).unwrap();
-            let audio_member = &audio_model["movies"][0]["members"][0];
-            assert_eq!(audio_member["videoAudioOnly"], true);
-            assert_eq!(audio_member["videoAudio"], "clip.wav64");
-            assert_eq!(audio_member["asset"], "");
-            assert_eq!(audio_member["frames"], 12222);
-            for target in [
-                crate::capabilities::Target::Web,
-                crate::capabilities::Target::Android,
-            ] {
-                crate::capabilities::require(
-                    &crate::capabilities::audit(&audio_model, target, None).unwrap(),
-                    "source-confirmed audio-only QuickTime",
-                )
-                .unwrap();
-            }
-            crate::build_package(program, &audio_model.to_string(), "go\n", b"opcodes", meta)
-                .unwrap();
-            audio_fonts.external_media[0]["audio"] = json!("");
-            assert!(
-                media(&mut unbound.clone(), &audio_fonts)
-                    .unwrap_err()
-                    .contains("was not converted")
-            );
-        }
-    }
-
-    /// full_media.py correct_film_speed: FILMSPIEL's slider owns tempo on its
-    /// animation loop, without the score's 30 fps override on FIL frame 33.
-    fn correct_film_speed(model: &mut Value) -> R<()> {
-        let correction = json!({"kind": "film-speed-score-correction", "movie": "FIL.DXR", "frame": 33,
-            "source_tempo": 30, "target_tempo": 0,
-            "detail": "Remove the loop's 30 fps override so FILMSPIEL's slider controls tempo.",
-            "original_projector_compared": false});
-        let applied = model["approximations"]
-            .as_array()
-            .is_some_and(|a| a.contains(&correction));
-        let expected = if applied { 0 } else { 30 };
-        let invalid = || "FIL speed correction no longer matches the recovered score".to_string();
-        let movie = model["movies"]
-            .as_array_mut()
-            .into_iter()
-            .flatten()
-            .find(|m| m["name"] == "FIL.DXR")
-            .ok_or_else(invalid)?;
-        let labelled = movie["score"]["labels"]
-            .as_array()
-            .is_some_and(|l| l.contains(&json!({"name": "3", "frame": 31})));
-        let version = movie["directorVersion"] == 500;
-        let frame = movie["score"]["frames"]
-            .as_array_mut()
-            .into_iter()
-            .flatten()
-            .find(|f| f["number"] == 33)
-            .ok_or_else(invalid)?;
-        let channels = frame["channels"].as_array_mut().ok_or_else(invalid)?;
-        let script_ok = channels
-            .iter()
-            .find(|c| c["channel"] == 0)
-            .is_some_and(|c| c["behaviors"] == json!([{"cast": 1, "member": 84}]));
-        let tempo = channels
-            .iter_mut()
-            .find(|c| c["channel"] == 1)
-            .ok_or_else(invalid)?;
-        let valid = version
-            && labelled
-            && script_ok
-            && tempo["tempoRaw"] == expected
-            && tempo["bytes"][6] == expected
-            && tempo["changed"][6] == 1;
-        if !valid {
-            return Err(invalid());
-        }
-        tempo["bytes"][6] = json!(0);
-        tempo["tempoRaw"] = json!(0);
-        if !applied {
-            model["approximations"]
-                .as_array_mut()
-                .ok_or_else(invalid)?
-                .push(correction);
-        }
-        Ok(())
-    }
-}
-
-/// libdragon font64 metrics for printable ASCII (the port hosts'
-/// text_metrics.decode): advances, kerning pairs among printable
-/// characters, and the point size.
+/// Advances and kerning for printable ASCII, and the point size.
 pub fn font64_ascii_metrics(font: &[u8]) -> R<Value> {
-    if font.len() < 100 || &font[..4] != b"FNT\x0b" {
-        return Err("unsupported font64 metrics header".into());
-    }
-    let u32_at = |at: usize| -> R<usize> {
-        font.get(at..at + 4)
-            .map(|b| u32::from_be_bytes(b.try_into().unwrap()) as usize)
-            .ok_or_else(|| "truncated font64".to_string())
-    };
-    let (ranges, glyphs, kranges, kern) = (u32_at(72)?, u32_at(80)?, u32_at(84)?, u32_at(92)?);
-    let mut indices = std::collections::BTreeMap::new();
-    for i in 0..u32_at(36)? {
-        let at = ranges + i * 12;
-        let first = u32_at(at)? as i64;
-        let count = u32_at(at + 4)? as i64;
-        let glyph = u32_at(at + 8)? as i32 as i64;
-        if glyph < 0 {
-            return Err("sparse controller font range".into());
-        }
-        for c in first.max(32)..(first + count).min(127) {
-            indices.insert(c, glyph + c - first);
-        }
-    }
-    if indices.len() != 95 {
+    let font = Font64::new(font)?;
+    let mut glyphs = font.glyphs(32..127)?;
+    glyphs.sort();
+    if glyphs.len() != 95 {
         return Err("controller font lacks printable ASCII".into());
     }
-    let byte = |at: usize| {
-        font.get(at)
-            .copied()
-            .ok_or_else(|| "truncated font64".to_string())
-    };
-    let advances = (32..127)
-        .map(|c| byte(glyphs + indices[&c] as usize * 8))
-        .collect::<R<Vec<u8>>>()?;
-    let reverse: std::collections::HashMap<i64, i64> =
-        indices.iter().map(|(&c, &g)| (g, c)).collect();
-    let mut pairs = Vec::new();
-    if kranges != 0 {
-        for (&c, &g) in &indices {
-            let at = kranges + g as usize * 4;
-            let lo = u16::from_be_bytes([byte(at)?, byte(at + 1)?]) as usize;
-            let hi = u16::from_be_bytes([byte(at + 2)?, byte(at + 3)?]) as usize;
-            if lo == 0 {
-                continue;
-            }
-            for i in lo..=hi {
-                let at = kern + i * 3;
-                let second = i16::from_be_bytes([byte(at)?, byte(at + 1)?]) as i64;
-                let amount = byte(at + 2)? as i8 as i64;
-                if let Some(&other) = reverse.get(&second) {
-                    pairs.push(json!([c, other, amount]));
-                }
-            }
+    let advances = glyphs.iter().map(|&(_, g)| font.advance(g)).collect::<R<Vec<u8>>>()?;
+    Ok(json!({"advances": advances, "kerning": font.kerning(&glyphs)?, "size": font.u32_at(8)?}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn program() -> Value {
+        json!({"files": [], "handlers": [
+            {"movie": "A.DXR", "cast": "Internal", "member": 4, "name": "check", "line": 7,
+             "parameters": ["sernum"], "source_sha256": "pinned",
+             "body": [{"op": "call", "line": 8, "value": ["call", "getat", [["variable", "list"], ["variable", "a"]]]},
+                      {"op": "call", "line": 9, "value": ["call", "getat", [["variable", "list"], ["variable", "b"]]]}]},
+            {"movie": "B.DXR", "cast": "Internal", "member": 2, "name": "check", "line": 3,
+             "parameters": ["sernum"], "source_sha256": "other", "body": []}]})
+    }
+
+    #[test]
+    fn patches_replace_bodies_rename_calls_and_record_themselves() {
+        let patched = patch_program(&program(), &json!([
+            {"id": "rename", "movie": "A.DXR", "member": 4, "handler": "check",
+             "source_sha256": "pinned", "rename_call": ["getat", "getaprop"], "count": 2},
+            {"id": "answer", "movie": "B.DXR", "member": 2, "handler": "check", "body": "return sernum"}]))
+        .unwrap();
+        assert_eq!(patched["handlers"][0]["body"][1]["value"][1], "getaprop");
+        assert_eq!(patched["handlers"][1]["body"][0]["op"], "return");
+        assert_eq!(patched["compatibility_fixes"].as_array().unwrap().len(), 2);
+        let all = patch_program(&program(), &json!([{"id": "all", "handler": "check", "all": true,
+                                                     "body": "return 1"}]))
+        .unwrap();
+        assert_eq!(all["compatibility_fixes"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn patches_refuse_changed_sources() {
+        for patch in [
+            json!({"movie": "A.DXR", "member": 4, "handler": "check", "source_sha256": "changed", "body": ""}),
+            json!({"movie": "A.DXR", "member": 4, "handler": "check", "rename_call": ["getat", "x"], "count": 3}),
+            json!({"movie": "A.DXR", "member": 5, "handler": "check", "body": ""}),
+            json!({"handler": "check", "all": true, "calls": "glunew", "body": ""}),
+            json!({"handler": "missing", "movie": "A.DXR", "member": 4, "body": ""}),
+        ] {
+            assert!(patch_program(&program(), &json!([patch])).is_err());
         }
     }
-    Ok(object(vec![
-        ("advances", json!(advances)),
-        ("kerning", Value::Array(pairs)),
-        ("size", json!(u32_at(8)?)),
-    ]))
+
+    #[test]
+    fn tempo_fixes_are_pinned_and_repeatable() {
+        let mut model = json!({"movies": [{"name": "FIL.DXR", "score": {"frames": [{"number": 33,
+            "channels": [{"channel": 1, "tempoRaw": 30, "bytes": [0, 0, 0, 0, 0, 0, 30], "changed": [0, 0, 0, 0, 0, 0, 1]}]}]}}]});
+        let fix = json!({"movie": "FIL.DXR", "frame": 33, "from": 30, "to": 0});
+        tempo_fix(&mut model, &fix).unwrap();
+        tempo_fix(&mut model, &fix).unwrap();
+        assert_eq!(model["movies"][0]["score"]["frames"][0]["channels"][0]["tempoRaw"], 0);
+        assert!(tempo_fix(&mut model, &json!({"movie": "FIL.DXR", "frame": 33, "from": 24, "to": 12})).is_err());
+    }
 }

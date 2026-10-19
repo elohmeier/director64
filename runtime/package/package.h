@@ -1,10 +1,7 @@
 #ifndef DIRECTOR64_PACKAGE_H
 #define DIRECTOR64_PACKAGE_H
-// Loads a game package (docs/package-format.md) into the structures the
-// generated C would otherwise link: every movie's handler table and scene
-// tables, the corpus symbols and the global slots. Built with
-// DIRECTOR64_PACKAGE, which is also what makes the runtime's symbol table
-// loadable.
+// Loads a game package (docs/package-format.md): every movie's handler table
+// and scene tables, the corpus symbols and the global slots.
 #include "director.h"
 #include <stddef.h>
 #include <stdint.h>

@@ -256,17 +256,11 @@ static lv_t allocate(lv_runtime_t *r, unsigned type, unsigned count) {
   r->allocations_since_gc++;
   return lv_make(type, (int32_t)handle);
 }
-// The empty table a hand-written program links against; symbols.c, which
-// the converter writes per game, defines the real one.
-#ifdef DIRECTOR64_PACKAGE
-// A package-loaded runtime reads the corpus symbols its game package brought
-// (runtime/package/package.c); the generated table is not linked.
+// The corpus symbols the game package brought (runtime/package/package.c);
+// empty until it is loaded.
 static lb_symbol_table_t package_symbols;
 void lv_use_symbols(lb_symbol_table_t table) { package_symbols = table; }
 #define lb_symbols package_symbols
-#else
-__attribute__((weak)) const lb_symbol_table_t lb_symbols = {NULL, 0, NULL, 0};
-#endif
 lv_t lv_symbol(lv_runtime_t *r, const char *text) {
   if (r->symbol_for == text && r->symbol != LV_NO_SYMBOL)
     return lv_make(LV_SYMBOL, (int32_t)r->symbol);

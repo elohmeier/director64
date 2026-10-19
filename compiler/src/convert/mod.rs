@@ -1,8 +1,6 @@
-//! The asset converter: recovery, accountability and cast conversion,
-//! ported from the JavaScript tools under tools/director and
-//! tools/projectorrays. ProjectorRays parses the Director files (dump.rs);
-//! every stage after it is here, run by the command line and by the browser
-//! importer alike, writing what the JavaScript stages wrote byte for byte.
+//! The asset converter: recovery, accountability and cast conversion.
+//! ProjectorRays parses the Director files (dump.rs); every stage after it
+//! is here, run by src/director64/convert.py through `director64-aot`.
 
 pub mod analyze;
 pub mod audit;

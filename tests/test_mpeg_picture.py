@@ -6,8 +6,8 @@ from dataclasses import replace
 
 import pytest
 
-from director64.aot import repository_root
 from director64.mpeg_picture import HoldPicture, reconstruct_hold
+from director64.project import repository
 
 PREFIX = b"\0\0\1"
 SPEC = HoldPicture(3, 2, 2, 16, 16, 25)
@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
   d64m_close(x); d64m_close(y); free(a); free(b); return 0;
 }
 ''')
-    root = repository_root()
+    root = repository()
     executable = tmp_path / "verify"
     subprocess.run(["cc", "-std=c17", "-Wall", "-Wextra", "-Werror", "-O2", f"-I{root}",
                     f"-I{root / 'third_party/pl_mpeg'}", str(harness), "-lm", "-o", executable],

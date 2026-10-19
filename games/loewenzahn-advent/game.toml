@@ -22,8 +22,20 @@ extended_d6 = true
 director_version = 850
 media_root = "DATA"
 entry_movie = "START"
-native_compatibility = true
 
 [player]
 # The preferences file, whatever its spelling ("Löwenzahn 7.usr").
 saves = ["*.usr"]
+
+[convert]
+# DirectMedia's MPEG-1 movies, wherever the disc keeps them.
+external_media = { root = "DATA", extensions = ["MPG"], bind = "directmedia" }
+
+# The copy check: getRegOptimal(serNum) asks optgraph.dll and the start
+# movie goes on only when it answers the serial; it answers it.
+[[convert.patch]]
+id = "optgraph-serial"
+handler = "getregoptimal"
+all = true
+calls = "glunew"
+body = "return serNum"

@@ -31,7 +31,6 @@
 #ifdef DIRECTOR64_PRINTING
 #include "printing.h"
 #endif
-#ifdef DIRECTOR64_PACKAGE
 // The game arrives as a package (docs/package-format.md); this build links
 // no game data, only the engine and the game profile's adapter.
 #include "package.h"
@@ -42,14 +41,6 @@ static const dg_movie_t *const *dg_registry;
 static unsigned dg_registry_count;
 static const char *const *global_names;
 static unsigned global_count;
-#else
-extern const dg_movie_t *const dg_registry[];
-extern const unsigned dg_registry_count;
-static const char *const global_names[] = {
-#include "globals.inc"
-};
-static const unsigned global_count = sizeof(global_names) / sizeof(*global_names);
-#endif
 
 static lv_runtime_t values;
 static dg_runtime_t director;
@@ -418,7 +409,6 @@ void web_runtime_host(web_host_t h) { host = h; }
 EMSCRIPTEN_KEEPALIVE uint8_t *d64_flash(void) { return flash; }
 EMSCRIPTEN_KEEPALIVE unsigned d64_flash_bytes(void) { return sizeof(flash); }
 
-#ifdef DIRECTOR64_PACKAGE
 // Loads the game package the runtime then boots. Returns false with
 // d64_package_error() naming the check that rejected it.
 EMSCRIPTEN_KEEPALIVE int d64_load_package(const uint8_t *data, size_t length) {
@@ -438,7 +428,6 @@ EMSCRIPTEN_KEEPALIVE int d64_load_package(const uint8_t *data, size_t length) {
   return 1;
 }
 EMSCRIPTEN_KEEPALIVE const char *d64_package_error(void) { return package_error; }
-#endif
 
 #if DG_D5 || DG_D10
 #include "video.inc"
@@ -451,12 +440,10 @@ EMSCRIPTEN_KEEPALIVE const char *d64_package_error(void) { return package_error;
 // Returns the save status; anything but valid or blank has already failed the
 // runtime without touching the flash image.
 EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
-#ifdef DIRECTOR64_PACKAGE
   if (!dg_registry_count) {
     lv_fail(&values, "no game package loaded");
     return -1;
   }
-#endif
   release_runtime();
   booted = true;
   seed = random_seed;

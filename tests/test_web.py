@@ -35,7 +35,7 @@ def test_runtime_is_built_for_the_family_switches_and_package():
                                          "-DDIRECTOR64_EXTENDED_D6=1"]
     assert web.game_defines(willy) == ["-DDIRECTOR64_WILLY=1", "-DDIRECTOR64_GAME_PROBE=1"]
     command = web.compile_command(willy, willy.work / "web")
-    assert command[0] == "emcc" and "-DDIRECTOR64_PACKAGE" in command
+    assert command[0] == "emcc"
     for source in ("runtime/storage/saves.c", "runtime/package/package.c",
                    "games/willy-werkel-cars/runtime/willy_input.c"):
         assert source in command

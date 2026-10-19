@@ -85,7 +85,7 @@ def layout_inventory(handle: BinaryIO) -> tuple[Layout, list[Entry]]:
 
 def inventory_report(handle: BinaryIO) -> dict:
     """Primary entries plus verified Joliet aliases, without duplicating files."""
-    from .aot import generator_command, repository_root
+    from .project import converter
 
     name = getattr(handle, "name", None)
     with tempfile.TemporaryDirectory(prefix="director64-iso-") as scratch:
@@ -96,7 +96,7 @@ def inventory_report(handle: BinaryIO) -> dict:
             handle.seek(0)
             path.write_bytes(handle.read())
         completed = subprocess.run(
-            [generator_command(repository_root())[0], "iso-inventory", path],
+            [converter()[0], "iso-inventory", path],
             capture_output=True,
             text=True,
             check=False,

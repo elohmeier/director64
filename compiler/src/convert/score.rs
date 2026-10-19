@@ -1,12 +1,10 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. See https://mozilla.org/MPL/2.0/. It is a port of
-// tools/projectorrays/score_recovery.cpp, which carries the same license.
+// License, v. 2.0. See https://mozilla.org/MPL/2.0/. It is a port of a
+// ProjectorRays score-recovery extension, which carries the same license.
 
-//! Structural score recovery: the Rust port of
-//! tools/projectorrays/score_recovery.cpp (the pinned ProjectorRays
-//! extension). Bounded decoding of VWSC score streams, VWLB labels and VWFI
-//! file info; the JSON is the probe's, byte for byte. The output is
-//! deliberately not a frozen runtime IR or a semantic certification.
+//! Structural score recovery: bounded decoding of VWSC score streams, VWLB
+//! labels and VWFI file info. The output is deliberately not a frozen
+//! runtime IR or a semantic certification.
 
 use std::collections::BTreeMap;
 

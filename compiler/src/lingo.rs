@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::pyfmt::float_repr;
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -1017,73 +1016,6 @@ pub fn program(files: &[(String, String)]) -> Result<Value> {
         "calls": calls,
         "native_execution_verified": false,
     }))
-}
-
-/// `json.dumps(value, separators=(",", ":"), ensure_ascii=True)`.
-pub fn dumps_compact(value: &Value) -> String {
-    let mut out = String::new();
-    compact(value, &mut out);
-    out
-}
-
-fn compact(value: &Value, out: &mut String) {
-    match value {
-        Value::Null => out.push_str("null"),
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                out.push_str(&i.to_string());
-            } else if let Some(u) = n.as_u64() {
-                out.push_str(&u.to_string());
-            } else {
-                out.push_str(&float_repr(n.as_f64().unwrap_or(0.0)));
-            }
-        }
-        Value::String(s) => {
-            out.push('"');
-            for c in s.chars() {
-                match c {
-                    '"' => out.push_str("\\\""),
-                    '\\' => out.push_str("\\\\"),
-                    '\n' => out.push_str("\\n"),
-                    '\r' => out.push_str("\\r"),
-                    '\t' => out.push_str("\\t"),
-                    '\u{8}' => out.push_str("\\b"),
-                    '\u{c}' => out.push_str("\\f"),
-                    c if (c as u32) < 0x20 || (c as u32) > 0x7e => {
-                        let mut units = [0u16; 2];
-                        for unit in c.encode_utf16(&mut units) {
-                            out.push_str(&format!("\\u{unit:04x}"));
-                        }
-                    }
-                    c => out.push(c),
-                }
-            }
-            out.push('"');
-        }
-        Value::Array(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                compact(item, out);
-            }
-            out.push(']');
-        }
-        Value::Object(map) => {
-            out.push('{');
-            for (i, (key, item)) in map.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                compact(&Value::String(key.clone()), out);
-                out.push(':');
-                compact(item, out);
-            }
-            out.push('}');
-        }
-    }
 }
 
 #[cfg(test)]
