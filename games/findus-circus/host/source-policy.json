@@ -53,5 +53,5 @@
   "source_sha256": "40d3f559158e8f606487563c0d9ad4712cbb6cd6836587d7fc555aaa872be9a9",
   "startup_movie": "PF2.DXR",
   "extended_d6": true,
-  "stage_prescale": true
+  "native_stage": true
 }

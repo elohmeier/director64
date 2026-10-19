@@ -5,8 +5,8 @@ This recovers bounded structures from `VWSC`, `VWLB` and
 `reference_verified` false. It does not resolve the source obligation ledger or
 qualify a source scene.
 
-`uv run --locked director64 recover --game <slug>` verifies/extracts the user's disc
-image and writes ignored results to `build/<game>/<source-id>/analysis/score-recovery`
+`uv run --locked director64 convert --game <slug>` verifies/extracts the user's disc
+image and writes ignored results to `build/<game>/<source-id>/conversion/analysis/score-recovery`
 with the Rust port of this decoder (below). The manifest records source and output
 hashes, implementation hashes and the exact parser extension commit. Labels keep their source bytes; no text encoding
 is assumed. Channel reconstruction includes a byte-validity mask, so absent initial

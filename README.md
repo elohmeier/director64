@@ -42,8 +42,8 @@ as a raw CloneCD `.img`, each pinned by its own SHA-256;
 ## Setup
 
 Requirements: Linux (x86-64), Docker or a compatible engine,
-[mise](https://mise.jdx.dev/), a Rust toolchain with the
-`wasm32-unknown-unknown` target, and FFmpeg with libvpx and libopus. Place
+[mise](https://mise.jdx.dev/), a Rust toolchain, a C and C++ compiler, and
+FFmpeg with libvpx and libopus. Place
 your disc image under the ignored `media/` directory at
 `media/<game>/<source-id>/<filename>`; each `games/<game>/game.toml` names
 the source id, original filename and SHA-256 it expects.
@@ -97,15 +97,15 @@ mise run test-native           # portable runtime and adapter C contracts
 mise run test-android-host     # Android keyboard and JNI contracts (JDK 11+)
 uv run --locked director64 fuzz --game loewenzahn-1 --duration 900
 uv run --locked director64 journey --game findus-workshop
-uv run --locked director64 recover --game findus-mucklas
+uv run --locked director64 convert --game findus-mucklas
 ```
 
 `fuzz` floods the web build's probe with randomized input aimed at live
 sprites and deduplicates Lingo failures, crashes and hangs into minimized
 repros; `parity` compares two probes state by state; `journey` runs a game's
-scripted journeys ([docs/fuzzing.md](docs/fuzzing.md)). `recover` verifies and
-extracts the selected media, recovers scores and Lingo, and writes an audit
-report for inspection. `extract`, `repair-media` and `reference` cover disc
+scripted journeys ([docs/fuzzing.md](docs/fuzzing.md)). `convert` converts
+the game on its own and keeps the recovered Lingo, scores and source audit
+under `build/<game>/<source>/conversion/analysis/` for inspection. `extract`, `repair-media` and `reference` cover disc
 extraction, audited media repairs ([docs/video.md](docs/video.md)) and
 original-projector reference captures under Wine
 ([docs/reference-capture.md](docs/reference-capture.md)).

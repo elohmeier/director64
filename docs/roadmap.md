@@ -47,10 +47,10 @@ semantics, ink compositing, audio, video and a compacting collector.
    gain is claimed only after that. The fuzz seed baseline (4130993319) stays
    pinned.
 3. **Rust on the host, C on the device.** All converter stages after the
-   ProjectorRays parse are Rust under `compiler/`, built natively for
-   recovery and to WebAssembly for the conversion
-   (`compiler/wasm`). The runtime stays portable C that compiles unchanged
-   for Android (NDK) and the browser (Emscripten).
+   ProjectorRays parse are Rust under `compiler/`, run natively by the
+   conversion driver (`src/director64/convert.py`). The runtime stays
+   portable C that compiles unchanged for Android (NDK) and the browser
+   (Emscripten).
 4. **Keep ProjectorRays as the parser.** It connects to the converter
    through the JSON dumps that already exist.
 5. **Disc images stay local.** Each port pins one edition by SHA-256 (plus
@@ -73,6 +73,7 @@ The first converter-first round, mostly in September 2026, is complete:
 | Evaluator | Closed by measurement: the evaluator stays, and nothing is lowered at conversion time. |
 | Game package | D64P ([package-format.md](package-format.md)). The web and Android runtimes load it and validate every record before building anything. |
 | Rust converter | Every stage after the ProjectorRays parse is Rust, including PFR1 fonts through a clean-room decoder. |
+| Native conversion driver | October 2026: the Node/WebAssembly driver left over from the in-browser importer was replaced by `convert.py` over the native converter. Packages are identical apart from the converter revision; packs are identical apart from ±1 numeric differences in a few decoded JPEG/MP3 members of the 8.5 titles. |
 
 Two parity rules learned on the way still hold. The oracle compares symbols
 case-folded, because a symbol's identity ignores case and its spelling is
@@ -80,19 +81,6 @@ whichever spelling the first script used. It also renumbers instances by first
 appearance in the state stream.
 
 ## Open work
-
-### Native conversion driver
-
-Today a conversion runs under Node. `platforms/android/export/export.mjs`
-drives `platforms/web/import/pipeline.mjs`, which loads the Rust converter
-compiled to WebAssembly alongside the ProjectorRays parser, the font tools,
-libwebp and FFmpeg. That driver is left over from the in-browser importer.
-Now that conversion only runs on the command line, the plan is a native Rust
-driver: the converter running as a host binary that calls the same stages
-directly. The goals are one fewer runtime (Node and the wasm tool builds), a
-simpler cache identity (`build/web/tools/manifest.json` and the import source
-digest), and faster conversions. The gate is a byte-identical `game.d64p` and
-identical asset packs for every port.
 
 ### Per-game converter code into data
 
@@ -119,11 +107,10 @@ hosted target:
   time (`runtime/lingo/lingo_runtime.h`), and D8.5 already needs 4 MiB and
   32,768 objects. Pools that grow on demand on hosted builds would remove a
   class of overrun alerts.
-- **The 640x480 prescale path.** `runtime/director/ink.h` and the converter
-  still carry the rule that prescales an authored 800x600 stage to 640x480.
-  Android and the web build run with `native_stage` (`DIRECTOR64_NATIVE_STAGE`)
-  and draw the authored stage unscaled, so the prescale branch and the
-  policy's `stage_prescale` can go once nothing depends on them.
+
+The 640x480 prescale path, the console's stack sizes, the cache-tuned
+`lv_runtime_t` layout and the software bit scan are gone (October 2026). A
+policy's `native_stage` now only says that the authored stage is 800x600.
 
 Each simplification is a parity change: identical probe state streams on
 every port before and after.

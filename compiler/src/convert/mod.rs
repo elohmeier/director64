@@ -34,7 +34,6 @@ pub mod projector;
 pub mod quicktime;
 pub mod quicktime_xtra;
 pub mod recover;
-pub mod resample;
 pub mod richtext;
 pub mod score;
 pub mod source;

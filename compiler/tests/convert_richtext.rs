@@ -1,5 +1,5 @@
 use director64_aot::convert::{
-    fdi::{FdiMeta, fdi_image, fdi_pixel, prescale_image},
+    fdi::{FdiMeta, fdi_image, fdi_pixel},
     richtext::decode,
 };
 
@@ -55,7 +55,7 @@ fn coverage_runs_color_commands_and_end_of_row_preserve_authored_pixels() {
 }
 
 #[test]
-fn rich_text_coverage_and_background_survive_resampling() {
+fn rich_text_records_its_background() {
     let data = fdi_image(
         &FdiMeta {
             width: 20,
@@ -68,11 +68,7 @@ fn rich_text_coverage_and_background_survive_resampling() {
         &[255, 255, 255, 119].repeat(400),
     )
     .unwrap();
-    let smaller = prescale_image(&data).unwrap().unwrap();
-    assert_eq!(smaller[16] & 3, 3);
-    assert_eq!(&smaller[24..27], &[0, 0, 255]);
-    assert_eq!(fdi_pixel(&smaller, 0, 36), [255, 255, 255, 119]);
-    assert_eq!(fdi_pixel(&smaller, 0, 0), [119, 119, 255, 255]);
+    assert_eq!(&data[24..27], &[0, 0, 255]);
 }
 
 #[test]

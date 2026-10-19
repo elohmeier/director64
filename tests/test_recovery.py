@@ -2,8 +2,8 @@ from copy import deepcopy
 
 import pytest
 
+from director64.convert import check_handlers
 from director64.lingo import parse_movie
-from director64.recovery import validate_handlers
 
 
 def fixture():
@@ -29,7 +29,7 @@ def fixture():
 
 def test_script_identity_agreement_accepts_native_object_lowering():
     source, program = fixture()
-    assert validate_handlers(source, program) == []
+    check_handlers(source, program)
 
 
 @pytest.mark.parametrize(
@@ -46,11 +46,11 @@ def test_same_handler_count_cannot_hide_changed_bindings(field, value):
     modified = deepcopy(program)
     modified["handlers"][0][field] = value
     with pytest.raises(ValueError, match="identities"):
-        validate_handlers(source, modified)
+        check_handlers(source, modified)
 
 
 def test_missing_or_duplicated_handlers_are_rejected():
     source, program = fixture()
     for handlers in ([], program["handlers"] * 2):
         with pytest.raises(ValueError, match="identities"):
-            validate_handlers(source, {"handlers": handlers})
+            check_handlers(source, {"handlers": handlers})

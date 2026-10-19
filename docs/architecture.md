@@ -7,11 +7,9 @@ standalone per-game web app ([web.md](web.md)).
 
 | Directory | Responsibility |
 | --- | --- |
-| `src/director64/` | CLI, game and source manifests, disc extraction, Lingo recovery for inspection, media repair, the Android and web builds, fuzz/parity/journey drivers |
+| `src/director64/` | CLI, game and source manifests, disc extraction, the conversion driver (`convert.py`), media repair, the Android and web builds, fuzz/parity/journey drivers |
 | `compiler/` | The Rust converter (`director64-aot`): ISO and ZIP reading, the Director stages (plan, analyze, audit, score recovery, conversion), the Lingo parser and bytecode compiler, the package writer, per-port corrections (`ports.rs`) |
-| `compiler/wasm/` | The converter compiled to WebAssembly for the conversion driver |
-| `platforms/web/import/` | The conversion driver: pipeline, in-memory file system, worker pool |
-| `platforms/android/export/` | Runs the pipeline under Node and encodes video, long sounds and images |
+| `tools/convert/` | The converter's C host tools: the lossless WebP image packer, mksprite's build stub |
 | `tools/director/` | ProjectorRays dump driver and format, the package validator |
 | `tools/projectorrays/` | Pinned versioned Director structural score recovery extension |
 | `tools/fonts/` | Isolated host PFR1 recovery and original-outline OpenType export |
@@ -30,30 +28,33 @@ The direction of travel is in [roadmap.md](roadmap.md).
 
 ## Conversion
 
-`director64 android build` and `director64 web` convert a game the same way
-(`android.convert`) into `build/<slug>/<source>/converted/`:
+`director64 convert`, `director64 android build` and `director64 web` convert
+a game the same way (`src/director64/convert.py`) into
+`build/<slug>/<source>/converted/`:
 
 1. The disc image (a cooked ISO, a raw 2352-byte rip, or a ZIP) is verified
-   against the edition's SHA-256 and extracted into memory.
-2. ProjectorRays parses each Director file once into a dump.
-3. The Rust converter, as WebAssembly, runs every later stage over those
-   dumps: analysis and source audit, score recovery, conversion of bitmaps,
-   sounds, film loops, Flash and vector shapes, text and fonts (including
-   embedded PFR1 fonts), the Lingo compiler, and packaging into `game.d64p`
-   and asset packs.
-4. `platforms/android/export/` encodes video as VP9 and long sounds as Ogg
-   Opus with FFmpeg, and images as lossless WebP where that is smaller.
+   against the edition's SHA-256 and extracted into the conversion's work
+   directory, where the policy's original system fonts are installed.
+2. ProjectorRays parses each Director file once into a dump
+   (`tools/director/dump.mjs` under Node, the files spread over parallel
+   processes).
+3. The Rust converter (`compiler/target/release/director64-aot`) runs every
+   later stage over those dumps: analysis and source audit, score recovery,
+   conversion of bitmaps, sounds, film loops, Flash and vector shapes, text
+   and fonts (including embedded PFR1 fonts), the port's corrections
+   (`compiler/src/ports.rs`, with libdragon's mkfont measuring a substitute
+   font where a port needs it), the Lingo compiler, and packaging into
+   `game.d64p`.
+4. The driver packs the assets: images as lossless WebP where that is
+   smaller than deflate (`tools/convert/webp_tool.c`), sounds of eight
+   seconds or more as Ogg Opus and video as VP9 with FFmpeg.
 5. The production C loader validates the package against the runtime ABI.
 
-Node drives the stages (`platforms/android/export/export.mjs` with
-`platforms/web/import/pipeline.mjs`), with independent work (parsing each
-file, converting each movie, encoding each sound and video) on a pool of
-worker threads; the merged output is the one-thread output byte for byte.
-A conversion is reused while the converter, ABI, source and profile match.
-
-`director64 recover` runs the same Rust stages natively for inspection: it
-writes the recovered Lingo, score records and an audit report under
-`build/<slug>/<source>/analysis/`.
+The host tools build on first use under `build/tools/`. A conversion is
+reused while the converter's sources and toolchain, the runtime ABI, the
+source image and the game's profile match. The recovered Lingo, score
+records and source audit stay under `build/<slug>/<source>/conversion/analysis/`
+for inspection.
 
 ## Runtime hosts
 

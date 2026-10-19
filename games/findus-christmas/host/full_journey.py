@@ -77,7 +77,7 @@ def open_day(command, x, y, day):
 
 
 def doors(game):
-    source = (game.work / "analysis/lingo/KALENDER.DXR.lingo").read_text()
+    source = (game.work / "conversion/analysis/lingo/KALENDER.DXR.lingo").read_text()
     found = re.findall(r'pos = point\((\d+), (\d+)\)\s+dag = "dag(\d+)"', source)
     result = [(int(x), int(y), int(day)) for x, y, day in found]
     assert [day for _, _, day in result] == list(range(1, 25))

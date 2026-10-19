@@ -79,8 +79,8 @@ def extract_zip(source: Path, output: Path, expected_sha256: str):
     return output
 
 
-def extract_source(game):
-    output = game.work / "extracted"
+def extract_source(game, output: Path | None = None):
+    output = output or game.work / "extracted"
     if game.source["kind"] == "iso9660":
         extract(game.media, output, expected_sha256=game.image["sha256"])
     elif game.source["kind"] == "zip":

@@ -23,13 +23,13 @@ uv run --locked director64 web --game findus-workshop --serve
 A game can be built once it has a port and a browser profile,
 `games/<slug>/web.toml` (its save archive's file names, or `saves = false`).
 The build needs Docker or a compatible engine (Emscripten 6.0.10, pinned by
-digest in `src/director64/web.py` and run without network), Rust with the
-`wasm32-unknown-unknown` target, Node with the locked dependencies, and FFmpeg
-for the conversion.
+digest in `src/director64/web.py` and run without network) for the runtime,
+and what the conversion needs: Rust, a host C and C++ compiler, Node with the
+locked dependencies and FFmpeg.
 
 The steps:
 
-1. **Convert** (`android.convert`, shared with the APK) the disc image under
+1. **Convert** (`src/director64/convert.py`, shared with the APK) the disc image under
    `media/<slug>/<source>/` into `build/<slug>/<source>/converted/`, unless a
    conversion by the same converter revision, runtime ABI and game profile is
    already there. The converter is described in

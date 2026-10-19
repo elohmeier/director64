@@ -39,5 +39,5 @@
   "projector": "PFSTART.EXE",
   "startup_movie": "START.DXR",
   "extended_d6": true,
-  "stage_prescale": true
+  "native_stage": true
 }

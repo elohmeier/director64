@@ -42,6 +42,6 @@
     "HUNDEQUI/HUNDEQU1.DCR": "hundequiz_lexikon.dcr"
   },
   "extended_d6": true,
-  "stage_prescale": true,
+  "native_stage": true,
   "deferred_conversions": []
 }

@@ -22,7 +22,7 @@
   "projector": "Deutsch.dat",
   "source_sha256": "4c87e10dcc99dfb68882b51c9daceb7ce4761b482a2a43bf620093289353e0f4",
   "deferred_conversions": [],
-  "stage_prescale": true,
+  "native_stage": true,
   "system_font_resources": [
     {
       "path": "director64-system-fonts/arial32.exe",

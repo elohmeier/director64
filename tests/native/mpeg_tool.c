@@ -1,5 +1,5 @@
-// Browser import adapter for the pinned, MIT-licensed PL_MPEG decoder.
-// Each import owns a decoder; concurrent encodes never share frame buffers.
+// The pinned, MIT-licensed PL_MPEG decoder behind a small decoder handle, for
+// the media-repair tests (tests/test_mpeg_picture.py) to decode MPEG-1 movies.
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>

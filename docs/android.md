@@ -79,11 +79,10 @@ on the device as well.
 
 ## Building
 
-Requirements: Node with the locked dependencies, Rust with the
-`wasm32-unknown-unknown` target, a host C17 compiler, Docker or a compatible
-engine (Emscripten for the converter's tools, and the Android toolchain
-image), and FFmpeg with libvpx and libopus (video and long sounds; MPEG-1
-decoding for Löwenzahn 6–8, Optik and the Adventskalender).
+Requirements: Node with the locked dependencies (ProjectorRays), Rust, a
+host C17 and C++17 compiler, Docker or a compatible engine (the Android
+toolchain image), and FFmpeg with libvpx and libopus (video and long sounds;
+MPEG-1 decoding for Löwenzahn 6–8, Optik and the Adventskalender).
 
 ```sh
 docker build --target sdk -t director64-android:local docker/android
@@ -101,28 +100,25 @@ the title alone.
 
 A build:
 
-1. **Converts the disc** (`android.convert`) into
-   `build/<game>/<source>/converted/`, shared with the web app
-   ([web.md](web.md)). `platforms/android/export/export.mjs` runs the
-   conversion pipeline (`platforms/web/import/pipeline.mjs`, the Rust
-   converter compiled to WebAssembly, on a pool of worker threads) under
-   Node; see [architecture.md](architecture.md#conversion). Three encodings
-   keep the APK small:
+1. **Converts the disc** (`src/director64/convert.py`, also
+   `director64 convert`) into `build/<game>/<source>/converted/`, shared with
+   the web app ([web.md](web.md)); see
+   [architecture.md](architecture.md#conversion). Three encodings keep the
+   APK small:
    - **Video:** FFmpeg encodes video as VP9 (CRF 30, at most 600 kbit/s) in
      the player's video container. Löwenzahn 1's Cinepak frames go in as the
-     converter decodes them, the 8.5 titles' MPEG-1 files whole
-     (`platforms/android/export/video.mjs`).
+     converter decodes them, the 8.5 titles' MPEG-1 files whole.
    - **Sound:** a sound of 8 seconds or more becomes Ogg Opus, 96 kbit/s
      stereo or 64 kbit/s mono. Shorter ones stay PCM WAV, so they start at
      once.
    - **Images:** each image is stored as lossless WebP (`D64W`, the vendored
      libwebp) where that is smaller than deflate and the round trip is exact.
 
-   A conversion is reused only when the converter tools, runtime ABI,
-   selected source, repaired-image selection, profile and policy and the
-   exporter match, and every packed asset has its recorded size and SHA-256.
-   `--reconvert` forces a new one. The converter's tools are rebuilt when
-   their source fingerprint or any tool hash changes. Every package, fresh or
+   A conversion is reused only when the converter's sources and toolchain,
+   runtime ABI, selected source, repaired-image selection, profile and policy
+   match, and every packed asset has its recorded size and SHA-256.
+   `--reconvert` forces a new one. The host tools under `build/tools/` are
+   rebuilt when their sources change. Every package, fresh or
    reused, must load with the profile-specific C package loader before APK
    assembly.
 2. **Compiles the game's runtime** with the NDK: the web runtime's sources

@@ -51,6 +51,6 @@
     "LEXIKONT/LEXIKONO.DCR": "lexikon_o_farbiges_licht.dcr"
   },
   "extended_d6": true,
-  "stage_prescale": true,
+  "native_stage": true,
   "deferred_conversions": []
 }

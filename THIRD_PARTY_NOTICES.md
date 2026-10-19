@@ -13,25 +13,25 @@ them stay with the user.
 
 ## Converter and players
 
-The converter runs locally as WebAssembly tools built into `build/web/tools/`
-(`convert.wasm`, `projectorrays.wasm`, `mkfont.wasm`, `mksprite.wasm`,
-`webp.wasm`). The players ship the runtime (`director64.wasm` in the web app,
+The converter runs locally: the Rust converter `director64-aot`, ProjectorRays
+under Node, and host tools built into `build/tools/` (the WebP packer `d64-webp`
+and libdragon's `mkfont` and `mksprite`). The players ship the runtime (`director64.wasm` in the web app,
 `lib<game>.so` in the APK) and the builtin font.
 
 | Component | Used for | License |
 | --- | --- | --- |
-| [ProjectorRays](https://github.com/ProjectorRays/ProjectorRays) 1.1.1 (npm `projectorrays`), unmodified | Director file parser in the converter (`projectorrays.wasm`) | MPL-2.0 — [licenses/MPL-2.0.txt](licenses/MPL-2.0.txt) |
+| [ProjectorRays](https://github.com/ProjectorRays/ProjectorRays) 1.1.1 (npm `projectorrays`), unmodified | Director file parser in the converter (`node_modules/projectorrays`) | MPL-2.0 — [licenses/MPL-2.0.txt](licenses/MPL-2.0.txt) |
 | [mpg123](https://www.mpg123.de/) (libmpg123), linked into the ProjectorRays build | MP3 decoding inside the parser | LGPL-2.1 — [licenses/LGPL-2.1.txt](licenses/LGPL-2.1.txt); source at https://www.mpg123.de/, build recipe in the ProjectorRays repository |
 | [zlib](https://zlib.net/) 1.3.1, linked into the ProjectorRays build | Decompression inside the parser | zlib (below); Copyright (C) 1995-2024 Jean-loup Gailly and Mark Adler |
-| Director64 score decoder (`compiler/src/convert/score.rs`, from `tools/projectorrays/`) | Score recovery in the converter (`convert.wasm`) | MPL-2.0; source in this repository |
-| Director64 Cinepak decoder (`compiler/src/convert/cinepak.rs`), derived from [FFmpeg](https://ffmpeg.org/)'s `libavcodec/cinepak.c`, Copyright (C) 2003 The FFmpeg project | Video conversion in the converter (`convert.wasm`) | LGPL-2.1-or-later — [licenses/LGPL-2.1.txt](licenses/LGPL-2.1.txt); source in this repository |
-| [Symphonia](https://github.com/pdeljanov/Symphonia/tree/v0.5.5) 0.5.5 (core, metadata and MP3 bundle) | MP3 cast decoding in the converter (`convert.wasm`) | MPL-2.0 — [licenses/MPL-2.0.txt](licenses/MPL-2.0.txt); corresponding source at the versioned upstream link |
+| Director64 score decoder (`compiler/src/convert/score.rs`, from `tools/projectorrays/`) | Score recovery in the converter (`director64-aot`) | MPL-2.0; source in this repository |
+| Director64 Cinepak decoder (`compiler/src/convert/cinepak.rs`), derived from [FFmpeg](https://ffmpeg.org/)'s `libavcodec/cinepak.c`, Copyright (C) 2003 The FFmpeg project | Video conversion in the converter (`director64-aot`) | LGPL-2.1-or-later — [licenses/LGPL-2.1.txt](licenses/LGPL-2.1.txt); source in this repository |
+| [Symphonia](https://github.com/pdeljanov/Symphonia/tree/v0.5.5) 0.5.5 (core, metadata and MP3 bundle) | MP3 cast decoding in the converter (`director64-aot`) | MPL-2.0 — [licenses/MPL-2.0.txt](licenses/MPL-2.0.txt); corresponding source at the versioned upstream link |
 | [Ruffle NihAV VP6 subset](https://github.com/ruffle-rs/nihav-vp6/tree/12d0bdf10a85641dc2de3d6900c747894431ed77), nihav_core, nihav_codec_support, nihav_duck | Embedded SWF VP6 decoding in native and Wasm conversion | MIT — [licenses/nihav-vp6.txt](licenses/nihav-vp6.txt); Copyright (c) 2021 Kostya Shishkov |
-| Rust crates: serde_json, serde_core, indexmap, hashbrown, equivalent, itoa, sha2, digest, block-buffer, crypto-common, typenum, cfg-if, miniz_oxide, adler2, jpeg-decoder | The converter (`convert.wasm`) | Used under Apache-2.0 (each also offers MIT) — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
-| Rust crates: generic-array (Copyright (c) 2015 Bartłomiej Kamiński), zmij (Copyright (c) David Tolnay) | The converter (`convert.wasm`) | MIT (below) |
-| Rust crate: memchr | The converter (`convert.wasm`) | Used under the Unlicense |
-| Rust crates: arrayvec, bitflags, bytemuck, core_detect, lazy_static, log, multiversion_no_op, rustversion, scopeguard, simdutf8 | MP3 conversion dependencies in `convert.wasm` | Used under Apache-2.0 (each also offers MIT) — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
-| Rust crate: encoding_rs | MP3 metadata in `convert.wasm` | Apache-2.0 and BSD-3-Clause — [licenses/encoding_rs.txt](licenses/encoding_rs.txt), [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
+| Rust crates: serde_json, serde_core, indexmap, hashbrown, equivalent, itoa, sha2, digest, block-buffer, crypto-common, typenum, cfg-if, miniz_oxide, adler2, jpeg-decoder | The converter (`director64-aot`) | Used under Apache-2.0 (each also offers MIT) — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
+| Rust crates: generic-array (Copyright (c) 2015 Bartłomiej Kamiński), zmij (Copyright (c) David Tolnay) | The converter (`director64-aot`) | MIT (below) |
+| Rust crate: memchr | The converter (`director64-aot`) | Used under the Unlicense |
+| Rust crates: arrayvec, bitflags, bytemuck, core_detect, lazy_static, log, multiversion_no_op, rustversion, scopeguard, simdutf8 | MP3 conversion dependencies in `director64-aot` | Used under Apache-2.0 (each also offers MIT) — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
+| Rust crate: encoding_rs | MP3 metadata in `director64-aot` | Apache-2.0 and BSD-3-Clause — [licenses/encoding_rs.txt](licenses/encoding_rs.txt), [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
 | Rust crate: cab 0.6.0 | Read original system-font installer cabinets as data | MIT — [licenses/cab.txt](licenses/cab.txt); Copyright (c) 2017 Matthew D. Steele |
 | Rust crates: flate2, crc32fast, lzxd, time, time-core, deranged, num-conv, powerfmt | Cabinet decoding dependencies | Used under Apache-2.0 (each also offers MIT) — [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt) |
 | Rust crate: byteorder | Cabinet decoding dependency | Used under the Unlicense |

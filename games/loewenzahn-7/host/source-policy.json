@@ -43,7 +43,7 @@
     "FOTOLABO/FOTOLADE.DCR": "fotoladen.dcr"
   },
   "extended_d6": true,
-  "stage_prescale": true,
+  "native_stage": true,
   "shape_pattern_library": {
     "path": "../SETUP/WINROOT/TERZIO/LWENZAHN/XTRAS/DIRAPI.DLL",
     "sha256": "b355ec36769ab2375c060cfe9797c1398bfbb340b5032c7dab0e10139b35d777"

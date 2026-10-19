@@ -4,8 +4,7 @@ engine compiled for Android and the game converted from your own disc.
     director64 android build --game SLUG     dist/<slug>/<source>/director64-<slug>.apk
     director64 android install --game SLUG   adb install it
 
-The game is converted from its disc image by the conversion pipeline under
-Node (platforms/android/export, with FFmpeg encoding video and audio) into
+The game is converted from its disc image (src/director64/convert.py) into
 build/<slug>/<source>/converted/, which the web build shares, and ships
 uncompressed in the APK's assets. The APK contains the converted game and
 must not be redistributed.
@@ -19,14 +18,13 @@ import os
 import shlex
 import shutil
 import subprocess
-import sys
 import time
 import zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 from . import web
-from .iso import file_sha256
+from .convert import GAME_FILES, convert, source_digest
 from .project import GameSpec, container_engine
 
 IMAGE = "director64-android:local"
@@ -51,8 +49,6 @@ HOST_SOURCES = (
     "platforms/android/jni/video.c",
 )
 LIBS = ("-landroid", "-llog", "-lz", "-laaudio", "-lmediandk", "-lm")
-PACKS = ("images", "audio", "fonts", "streams", "data", "video", "print")
-GAME_FILES = ("game.d64p", *(f"{kind}.{ext}" for kind in PACKS for ext in ("bin", "json")))
 KEYSTORE = (
     Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "director64/android.keystore"
 )
@@ -146,113 +142,6 @@ def makefile(game: GameSpec, output: Path, abis: list[str]) -> Path:
     if not path.is_file() or path.read_text() != text:
         path.write_text(text)
     return path
-
-
-# ---- The game's data ----
-
-
-def converter_revision(root: Path) -> str:
-    """Rebuild missing, stale or modified converter tools before reusing packages."""
-    folder = root / "build/web/tools"
-    try:
-        tools = json.loads((folder / "manifest.json").read_text())
-        current = tools["source_sha256"] == web.import_source_digest(root) and all(
-            web.sha256(folder / name) == tools["sha256"][key]
-            for key, name in tools["files"].items()
-        )
-    except (OSError, KeyError, ValueError):
-        current = False
-    if not current:
-        tools = web.build_tools(root, container_engine())
-    return tools["revision"]
-
-
-def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
-    """The game converted from its disc image into `out`, unless a complete
-    conversion by the same converter and runtime ABI is there already."""
-    root = game.root
-    media = game.media
-    if not media.is_file():
-        raise ValueError(f"{media}: place the game's disc image there first")
-    image_identity = game.image_identity
-    if image_identity:
-        image = image_identity["source_image"]
-        if media.stat().st_size != image["bytes"] or file_sha256(media) != image["sha256"]:
-            raise ValueError(f"{media}: source image differs from the selected repair edition")
-    revision = converter_revision(root)
-    abi = web.abi_digest(root).hex()
-    profile = web.profile_entry(game, web.web_profile(game))
-    import hashlib
-
-    profile_hash = hashlib.sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()
-    export_hash = hashlib.sha256("".join(
-        web.sha256(p) for p in sorted((root / "platforms/android/export").glob("*.mjs"))
-    ).encode()).hexdigest()
-    try:
-        existing = json.loads((out / "manifest.json").read_text())
-        current = (
-            existing["converter"] == revision
-            and existing["abi"] == abi
-            and existing["source_sha256"] == game.source["sha256"]
-            and all(existing.get(key) == value for key, value in image_identity.items())
-            and existing["profile_sha256"] == profile_hash
-            and existing["export_sha256"] == export_hash
-            and all((out / n).stat().st_size == existing["bytes"][n]
-                    and web.sha256(out / n) == existing["sha256"][n] for n in GAME_FILES)
-        )
-    except OSError, KeyError, ValueError:
-        current = False
-    if current and not force:
-        web.validate_package(game, out.parent, out / "game.d64p")
-        return out
-    gen = out.parent / "gen"
-    gen.mkdir(parents=True, exist_ok=True)
-    (gen / "profile.json").write_text(
-        json.dumps(profile) + "\n"
-    )
-    meta = {
-        "converter": revision,
-        "director_version": game.data["port"]["director_version"],
-        "game": game.slug,
-        "renderer_target": "android",
-        "schema_version": 1,
-        "source_sha256": game.source["sha256"],
-        **image_identity,
-    }
-    (gen / "meta.json").write_text(json.dumps(meta, sort_keys=True, separators=(",", ":")) + "\n")
-    (gen / "manifest.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "slug": game.slug,
-                "source_sha256": game.source["sha256"],
-                **image_identity,
-                "abi": abi,
-                "converter": revision,
-                "profile_sha256": profile_hash,
-                "export_sha256": export_hash,
-            }
-        )
-        + "\n"
-    )
-    print(f"converting {media.name}", file=sys.stderr)
-    subprocess.run(
-        [
-            "node",
-            root / "platforms/android/export/export.mjs",
-            root / "build/web/tools",
-            media,
-            gen / "profile.json",
-            gen / "meta.json",
-            gen / "manifest.json",
-            out,
-        ],
-        check=True,
-    )
-    if game.image_identity != image_identity:
-        raise ValueError("selected source image changed during conversion; retry conversion")
-    web.validate_package(game, out.parent, out / "game.d64p")
-    return out
 
 
 def cover(game: GameSpec) -> Path | None:
@@ -422,7 +311,7 @@ def apk_input_digest(game: GameSpec, abis: list[str]) -> str:
         "source": game.source["sha256"], "abis": abis,
         **game.image_identity,
         "profile": web.profile_entry(game, web.web_profile(game)),
-        "importer": web.import_source_digest(root),
+        "converter": source_digest(root),
     }, sort_keys=True).encode())
     for path in sorted(paths):
         digest.update(path.relative_to(root).as_posix().encode() + b"\0")
@@ -455,7 +344,7 @@ def build(game: GameSpec, jobs: int, abis: list[str], reconvert: bool) -> Path:
     apk_receipt_path(game).unlink(missing_ok=True)
     identity = apk_input_digest(game, abis)
     work = root / "build/android" / game.slug / game.source["id"]
-    data = convert(game, game.work / "converted", reconvert)
+    data = convert(game, force=reconvert)
     make = makefile(game, work, abis)
 
     # Assets: the game under game/, its profile, and the builtin font.

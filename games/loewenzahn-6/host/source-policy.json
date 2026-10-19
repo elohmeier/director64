@@ -38,7 +38,7 @@
     800
   ],
   "extended_d6": true,
-  "stage_prescale": true,
+  "native_stage": true,
   "deferred_conversions": [],
   "folder_aliases": {
     "ECHTHAAR": "ECHTHAARIG",

@@ -3,7 +3,7 @@ image, as a static site (docs/web.md).
 
     director64 web --game SLUG [--serve]   dist/<slug>/<source>/web/
 
-The game is converted as for its Android TV APK (android.convert); the engine
+The game is converted as for its Android TV APK (convert.py); the engine
 is the same runtime built with Emscripten, and the page is the player under
 platforms/web/site. Like an APK, the site contains the converted game and must
 not be redistributed.
@@ -92,11 +92,6 @@ SITE_FILES = (
 )
 # CC0 (datagoblin): the builtin font unstyled text prints with.
 FONT = Path("third_party/libdragon/examples/fontgallery/assets/monogram.ttf")
-PARSER = Path("node_modules/projectorrays/dist")
-PARSER_WASM_SHA256 = "e4d7ab15a9cb20586d0e5afc54ad4d48412254d98b78a0c834b5adc8e2e3983e"
-CONVERTER_WASM = Path(
-    "compiler/wasm/target/wasm32-unknown-unknown/release/director64_convert_wasm.wasm"
-)
 
 
 def sha256(path: Path) -> str:
@@ -273,106 +268,9 @@ def build_runtime(game: GameSpec, web: dict, output: Path, engine: str) -> list[
     return command
 
 
-DROID_SANS = Path("third_party/libdragon/examples/fontgallery/assets/droid-sans.ttf")
-
-
-def import_source_digest(root: Path) -> str:
-    """Inputs that can change converter output, including tool and package schemas."""
-    paths = set()
-    for directory in (
-        "compiler/src", "compiler/wasm/src", "platforms/web/import", "platforms/web/tools",
-        "third_party/libdragon/tools", "third_party/libdragon/include", "third_party/libwebp/src",
-        "tools/projectorrays",
-    ):
-        paths.update(p for p in (root / directory).rglob("*") if p.is_file())
-    for name in (
-        "compiler/Cargo.toml", "compiler/Cargo.lock", "compiler/wasm/Cargo.toml",
-        "compiler/wasm/Cargo.lock", "package.json", "package-lock.json",
-        "src/director64/web.py", "src/director64/system_fonts.py",
-        "runtime/director/director.h", "runtime/package/package.h",
-        "runtime/lingo/names.txt", "runtime/lingo/lingo_bytecode.h",
-        str(DROID_SANS), str(PARSER / "projectorrays.js"), str(PARSER / "projectorrays.wasm"),
-    ):
-        paths.add(root / name)
-    digest = hashlib.sha256()
-    for path in sorted(paths):
-        digest.update(path.relative_to(root).as_posix().encode() + b"\0")
-        digest.update(bytes.fromhex(sha256(path)))
-    return digest.hexdigest()
-
-
-def build_tools(root: Path, engine: str) -> dict:
-    """The converter's tools under build/web/tools/, and their identities."""
-    tools = root / "build/web/tools"
-    tools.mkdir(parents=True, exist_ok=True)
-    source = import_source_digest(root)
-    rustc = subprocess.run(["rustc", "-V"], capture_output=True, text=True, check=True).stdout
-    subprocess.run(
-        [
-            "cargo",
-            "build",
-            "--release",
-            "--locked",
-            "--target",
-            "wasm32-unknown-unknown",
-            "--manifest-path",
-            root / "compiler/wasm/Cargo.toml",
-        ],
-        check=True,
-    )
-    shutil.copyfile(root / CONVERTER_WASM, tools / "convert.wasm")
-    emscripten(root, engine, ["sh", "platforms/web/tools/build-fonttools.sh", "build/web/tools"])
-    emscripten(root, engine, ["sh", "platforms/web/tools/build-webp.sh", "build/web/tools"])
-    if sha256(root / PARSER / "projectorrays.wasm") != PARSER_WASM_SHA256:
-        raise ValueError("unsupported ProjectorRays WASM; restore the locked npm dependency")
-    shutil.copyfile(root / PARSER / "projectorrays.js", tools / "projectorrays.js")
-    shutil.copyfile(root / PARSER / "projectorrays.wasm", tools / "projectorrays.wasm")
-    shutil.copyfile(root / "runtime/lingo/names.txt", tools / "names.txt")
-    # The ports' pinned substitute for unembedded system fonts (Apache-2.0).
-    shutil.copyfile(root / DROID_SANS, tools / "droid-sans.ttf")
-    shutil.copyfile(root / "runtime/lingo/lingo_bytecode.h", tools / "lingo_bytecode.h")
-    files = {
-        "converter": "convert.wasm",
-        "mkfont": "mkfont.js",
-        "mkfontWasm": "mkfont.wasm",
-        "mksprite": "mksprite.js",
-        "mkspriteWasm": "mksprite.wasm",
-        "webp": "webp.js",
-        "webpWasm": "webp.wasm",
-        "parserGlue": "projectorrays.js",
-        "parserWasm": "projectorrays.wasm",
-        "names": "names.txt",
-        "substituteFont": "droid-sans.ttf",
-        "bytecodeHeader": "lingo_bytecode.h",
-    }
-    from .system_fonts import INSTALLERS, installer
-
-    for digest, spec in INSTALLERS.items():
-        # The original redistributable includes its license; keep its name
-        # and bytes intact. The shared Rust converter reads its CAB as data.
-        shutil.copyfile(installer(root, digest), tools / spec["file"])
-        files[f"systemFont{digest}"] = spec["file"]
-    digests = {key: sha256(tools / name) for key, name in files.items()}
-    revision = hashlib.sha256(
-        json.dumps(digests, sort_keys=True).encode() + abi_digest(root)
-    ).hexdigest()
-    if import_source_digest(root) != source:
-        raise ValueError("importer source changed during build; rebuild the tools")
-    result = {"files": files, "sha256": digests, "revision": revision,
-              "rustc": rustc.strip(), "source_sha256": source}
-    (tools / "manifest.json").write_text(json.dumps(result, indent=2) + "\n")
-    return result
-
-
 def web_policy(game: GameSpec) -> dict:
-    """The conversion policy as the Android TV and web conversion applies it:
-    an 800x600 stage keeps its images unscaled (native_stage), and flattened
-    film-loop frames keep only the rectangle they cover."""
-    policy = json.loads((game.directory / "host/source-policy.json").read_text())
-    if policy.get("stage_prescale"):
-        policy["stage_prescale"] = False
-        policy["native_stage"] = True
-    return policy
+    """The game's conversion policy (games/<slug>/host/source-policy.json)."""
+    return json.loads((game.directory / "host/source-policy.json").read_text())
 
 
 def profile_entry(game: GameSpec, web: dict) -> dict:
@@ -459,11 +357,10 @@ def family_defines(game: GameSpec) -> list[str]:
 
 
 def native_stage(game: GameSpec) -> bool:
-    """Whether the browser and Android TV draw the game's authored 800x600
-    stage as it is, where the console's conversion prescales it to 640x480
-    (the policy's `stage_prescale`)."""
-    policy = json.loads((game.directory / "host/source-policy.json").read_text())
-    return bool(policy.get("stage_prescale"))
+    """Whether the game's authored stage is 800x600 (the policy's
+    `native_stage`), which the players draw unscaled; otherwise it is
+    640x480."""
+    return bool(web_policy(game).get("native_stage"))
 
 
 # Per-game runtime switches.

@@ -1,10 +1,14 @@
-// The importer's image packer (platforms/web/import, "image" jobs): a stored
-// image as lossless WebP in a "D64W" container (platforms/web/webp_image.h).
-// Kept only when the runtime's decoder gives back exactly the stored bytes.
+// The converter's image packer (src/director64/convert.py): a stored image as
+// lossless WebP in a "D64W" container (platforms/web/webp_image.h), kept only
+// when the runtime's decoder gives back exactly the stored bytes.
+//   d64-webp pack METHOD QUALITY   then "IN<TAB>OUT" lines on stdin: writes
+//                                  OUT for each image that packs, no OUT for
+//                                  one that does not
+//   d64-webp unpack IN OUT         a D64W image's stored bytes
 #include "bitmap_tiles.h"
 #include "src/webp/encode.h"
 #include "webp_image.h"
-#include <emscripten.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,8 +19,8 @@ static unsigned be16(const uint8_t *p) { return (unsigned)p[0] << 8 | p[1]; }
 
 // The packed image, malloc'd, its length in `*out_length`; NULL when the
 // image is no FDI1/FDIA/FDI2 or would not come back exactly.
-EMSCRIPTEN_KEEPALIVE uint8_t *d64w_encode(const uint8_t *fdi, uint32_t length, int method,
-                                          int quality, uint32_t *out_length) {
+static uint8_t *d64w_encode(const uint8_t *fdi, uint32_t length, int method, int quality,
+                            uint32_t *out_length) {
   *out_length = 0;
   if (length < 32 || be32(fdi + 4) != length)
     return NULL;
@@ -97,4 +101,69 @@ EMSCRIPTEN_KEEPALIVE uint8_t *d64w_encode(const uint8_t *fdi, uint32_t length, i
   WebPMemoryWriterClear(&writer);
   return out;
 }
-EMSCRIPTEN_KEEPALIVE void d64w_free(void *p) { free(p); }
+static uint8_t *read_file(const char *path, uint32_t *length) {
+  FILE *file = fopen(path, "rb");
+  if (!file) return NULL;
+  uint8_t *data = NULL;
+  long size = fseek(file, 0, SEEK_END) ? -1 : ftell(file);
+  if (size >= 0 && size <= UINT32_MAX && !fseek(file, 0, SEEK_SET)) {
+    data = malloc(size ? (size_t)size : 1);
+    if (data && fread(data, 1, (size_t)size, file) != (size_t)size) {
+      free(data);
+      data = NULL;
+    }
+  }
+  fclose(file);
+  *length = (uint32_t)size;
+  return data;
+}
+static int write_file(const char *path, const uint8_t *data, uint32_t length) {
+  FILE *file = fopen(path, "wb");
+  if (!file) return 0;
+  int ok = fwrite(data, 1, length, file) == length;
+  return fclose(file) == 0 && ok;
+}
+
+int main(int argc, char **argv) {
+  if (argc == 4 && !strcmp(argv[1], "unpack")) {
+    uint32_t length, out_length;
+    uint8_t *data = read_file(argv[2], &length);
+    uint8_t *fdi = data && dg_webp_packed(data, length) ? dg_webp_fdi(data, length, &out_length)
+                                                        : NULL;
+    if (!fdi || !write_file(argv[3], fdi, out_length)) {
+      fprintf(stderr, "d64-webp: %s: not a valid D64W image\n", argv[2]);
+      return 1;
+    }
+    return 0;
+  }
+  if (argc != 4 || strcmp(argv[1], "pack")) {
+    fprintf(stderr, "usage: d64-webp pack METHOD QUALITY < IN<TAB>OUT lines\n"
+                    "       d64-webp unpack IN OUT\n");
+    return 2;
+  }
+  int method = atoi(argv[2]), quality = atoi(argv[3]);
+  char line[8192];
+  while (fgets(line, sizeof(line), stdin)) {
+    line[strcspn(line, "\r\n")] = 0;
+    char *out_path = strchr(line, '\t');
+    if (!out_path) {
+      fprintf(stderr, "d64-webp: expected IN<TAB>OUT\n");
+      return 2;
+    }
+    *out_path++ = 0;
+    uint32_t length, out_length;
+    uint8_t *fdi = read_file(line, &length);
+    if (!fdi) {
+      fprintf(stderr, "d64-webp: %s: cannot read\n", line);
+      return 1;
+    }
+    uint8_t *packed = d64w_encode(fdi, length, method, quality, &out_length);
+    free(fdi);
+    if (packed && !write_file(out_path, packed, out_length)) {
+      fprintf(stderr, "d64-webp: %s: cannot write\n", out_path);
+      return 1;
+    }
+    free(packed);
+  }
+  return 0;
+}

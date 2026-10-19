@@ -47,6 +47,6 @@
   "projector": "../SETUP/WINROOT/TERZIO/LOEWENZA/LZADVENT.EXE",
   "source_sha256": "00ae07ac7e3cfba27bcc76e76c62cec73b3ab33c614652b9786795c3b1b5a980",
   "extended_d6": true,
-  "stage_prescale": true,
+  "native_stage": true,
   "deferred_conversions": []
 }

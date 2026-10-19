@@ -15,74 +15,6 @@ def run(*args):
     subprocess.run([str(a) for a in args], check=True)
 
 
-def director_stage(game, *args):
-    """One stage of the Rust converter (`director64-aot director ...`)."""
-    from .aot import RUST_GENERATOR
-
-    binary = game.root / RUST_GENERATOR
-    if not binary.is_file():
-        raise ValueError(f"{binary} is not built; run mise run compiler")
-    run(binary, "director", *args)
-
-
-def prepared_policy(game):
-    """Carry disc-proven long names into conversion without changing IDs."""
-    from .iso import inventory_report
-
-    policy = json.loads((game.directory / "host/source-policy.json").read_text())
-    aliases = {}
-    if game.source["kind"] == "iso9660":
-        with game.media.open("rb") as handle:
-            aliases = inventory_report(handle).get("aliases", {})
-    recovery = game.data.get("recovery", game.data.get("port"))
-    root = recovery["media_root"].strip("/")
-    prefix = root + "/" if root else ""
-    depth = len(root.split("/")) if root else 0
-    policy["source_path_aliases"] = {
-        "/".join(long.split("/")[depth:]): short[len(prefix):]
-        for long, short in aliases.items() if short.startswith(prefix)
-    }
-    if policy.get("system_font_resources"):
-        from .system_fonts import prepare
-
-        prepare(game.root, game.work / "extracted" / root, policy)
-    output = game.work / "source-policy.json"
-    output.write_text(json.dumps(policy, indent=2) + "\n")
-    return output
-
-
-def recover(game):
-    from .iso import file_sha256
-    from .media import extract_source
-
-    recovery = game.data.get("recovery", game.data.get("port"))
-    if not recovery:
-        raise ValueError(f"{game.slug} has no audited recovery policy")
-    policy = json.loads((game.directory / "host/source-policy.json").read_text())
-    if policy.get("director_version", recovery["director_version"]) != recovery["director_version"]:
-        raise ValueError("manifest and recovery policy Director versions differ")
-    game.work.mkdir(parents=True, exist_ok=True)
-    extract_source(game)
-    analysis = game.work / "analysis"
-    media = game.work / "extracted" / recovery["media_root"]
-    policy = prepared_policy(game)
-    dumps = analysis / "dumps"
-    # ProjectorRays parses every Director file once (tools/director/dump.mjs);
-    # every stage after it is the Rust converter reading those dumps.
-    director_stage(game, "plan", media, policy, dumps)
-    run("node", "tools/director/dump.mjs", dumps / "plan.json")
-    director_stage(game, "analyze", media, dumps, analysis, policy)
-    parser = file_sha256(game.root / "node_modules/projectorrays/dist/projectorrays.wasm")
-    director_stage(game, "audit", media, dumps, analysis / "source", policy, parser)
-    director_stage(game, "recover", analysis / "source/manifest.json", analysis / "score-recovery")
-    run(
-        sys.executable, "-m", "director64.lingo", analysis / "lingo", game.work / "aot/program.json"
-    )
-    from .recovery import report
-
-    report(game)
-
-
 # The workshop's journeys (games/findus-workshop/tests/full_probe.py) that
 # start at its entry movie, which is where the web probe starts.
 WORKSHOP_JOURNEYS = ("routes", "hubs", "treasure", "exit", "garden", "profiles")
@@ -133,6 +65,7 @@ def main(argv=None):
         "--movie NAME --output DIR (side A defaults to parity/probe-a)",
         "journey": "Arguments: [NAME] --activity",
         "reference": "Adapter options: --replay PATH --output PATH --windows-version VERSION",
+        "convert": "Options: --force --output DIR (default build/<slug>/<source>/converted)",
         "web": "Options: --reconvert --serve --port N (default 18064) --no-build (docs/web.md)",
     }
     sub.add_parser("games", help="list ports and catalogued sources")
@@ -142,9 +75,9 @@ def main(argv=None):
         add_help=False,
     )
     for name in (
+        "convert",
         "web",
         "extract",
-        "recover",
         "repair-media",
         "fuzz",
         "parity",
@@ -168,7 +101,7 @@ def main(argv=None):
                 game = GameSpec.load(path.parent.name)
                 print(f"{game.slug:22} {game.data['status']:10} {game.data['title']}")
             return 0
-        if args.command in {"extract", "recover"} and remaining:
+        if args.command == "extract" and remaining:
             parser.error("unexpected arguments: " + " ".join(remaining))
         game = GameSpec.load(args.game, args.source)
         game.activate()
@@ -177,15 +110,16 @@ def main(argv=None):
 
             print(extract_source(game))
             return 0
-        if args.command == "recover":
-            recover(game)
-            return 0
         if args.command == "repair-media":
             from .media_repair import main as repair_media
 
             return repair_media(game, remaining)
         game.require_port()
         sys.argv = [f"director64 {args.command}", *remaining]
+        if args.command == "convert":
+            from .convert import main as convert
+
+            return convert(remaining)
         if args.command == "web":
             from .web import main as web
 

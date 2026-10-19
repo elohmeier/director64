@@ -33,8 +33,7 @@ requests, pause, seek, resume, exact end, stop time and voice cleanup.
 ## Conversion and playback
 
 The web and Android players share one conversion
-(`platforms/android/export/export.mjs` driving
-`platforms/web/import/pipeline.mjs`). The Rust converter parses MPEG program
+(`src/director64/convert.py`). The Rust converter parses MPEG program
 streams and decodes Cinepak frames; the host's FFmpeg encodes each linked
 movie's picture as VP9 (profile 0, CRF 30 capped at 600 kbit/s, one coded
 frame per input frame) into an indexed pack, and its MPEG sound as WAV, or as

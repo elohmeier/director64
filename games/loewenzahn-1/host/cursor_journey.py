@@ -3,7 +3,11 @@
 import hashlib
 import json
 import struct
+import subprocess
+import tempfile
+from pathlib import Path
 
+from director64.convert import webp_tool
 from director64.project import selected_game
 from director64.web import inflated
 
@@ -19,7 +23,12 @@ def converted_image(root, name):
         pack.seek(at)
         data = inflated(pack.read(length))
     if data[:4] == b"D64W":
-        raise ValueError(f"{name} is packed as WebP; the cursor check reads stored FDI1")
+        # Lossless WebP of the stored image; the packer gives it back exactly.
+        with tempfile.TemporaryDirectory() as folder:
+            packed, stored = Path(folder, "packed"), Path(folder, "stored")
+            packed.write_bytes(data)
+            subprocess.run([webp_tool(root.parents[2]), "unpack", packed, stored], check=True)
+            data = stored.read_bytes()
     return data
 
 

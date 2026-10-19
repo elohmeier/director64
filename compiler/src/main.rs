@@ -289,7 +289,8 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
         }
         // director port-plan SLUG MODEL
         "port-plan" => Ok(director64_aot::ports::plan(&text(1)?, &json_file(2)?)?.to_string()),
-        // director port-model MODEL SLUG SUBSTITUTE-TTF DATA-FILES [KEY=FONT64 ...] [external=RECORDS.json]
+        // director port-model MODEL SLUG SUBSTITUTE-TTF DATA-FILES [KEY=FONT64 ...] [external=RECORDS.json]:
+        // prints the model; a port's substitute font lands beside it.
         "port-model" => {
             let mut model = json_file(1)?;
             let port = director64_aot::ports::Port {
@@ -325,6 +326,14 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                 std::fs::read(path).map_err(|e| format!("{path}: {e}"))
             };
             director64_aot::ports::postprocess_model(&mut model, &port, &fonts, &mut measure)?;
+            // The model names its substitute as a converted font asset beside it.
+            if let (Some(asset), Some(bytes)) = (
+                director64_aot::ports::substitute_asset(&port.slug),
+                fonts.droid_sans.as_ref(),
+            ) {
+                let path = args[1].parent().unwrap_or(std::path::Path::new(".")).join(asset);
+                std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+            }
             Ok(model.to_string())
         }
         // director stream-pack OUT.bin FOLDER=DIR...: the browser's streams
@@ -418,6 +427,24 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             let wav = director64_aot::convert::quicktime::aiff_wav(&read_bytes(&args[1])?)?;
             std::fs::write(text(2)?, &wav).map_err(|e| e.to_string())?;
             Ok(format!("{}", wav.len()))
+        }
+        // director cinepak-frames FILE OUT: the video track's frames in
+        // presentation order as RGBX into OUT, for the video encoder; prints
+        // {"width", "height", "times": [microseconds per frame]}.
+        "cinepak-frames" => {
+            use std::io::Write;
+            let bytes = read_bytes(&args[1])?;
+            let mut frames = director64_aot::convert::cinepak::Frames::new(&bytes)?;
+            let out = std::fs::File::create(&args[2]).map_err(|e| e.to_string())?;
+            let mut out = std::io::BufWriter::new(out);
+            let mut times = Vec::new();
+            while let Some((time, pixels)) = frames.next_frame()? {
+                out.write_all(&pixels).map_err(|e| e.to_string())?;
+                times.push(time);
+            }
+            out.flush().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({"width": frames.width(), "height": frames.height(), "times": times})
+                .to_string())
         }
         // director cinepak-hash FILE [OUT]: the SHA-256 of every RGB24 frame the
         // video track outputs, one per line (ffmpeg -f framehash -hash sha256

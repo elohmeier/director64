@@ -134,7 +134,7 @@ def test_current_decoder_proves_held_pixels_and_unaffected_frames(tmp_path):
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "platforms/web/tools/mpeg_tool.c"
+#include "tests/native/mpeg_tool.c"
 static uint8_t *read_file(const char *path, unsigned *length) {
   FILE *f = fopen(path, "rb"); assert(f);
   assert(fseek(f, 0, SEEK_END) == 0); *length = (unsigned)ftell(f); rewind(f);

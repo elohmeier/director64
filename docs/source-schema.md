@@ -1,7 +1,7 @@
 # Source-accountability schema version 1
 
-`director64 recover --game <slug>` verifies the supported disc image and every
-extracted ISO 9660 file; its audit stage then writes ignored `build/<game>/<source-id>/analysis/source/manifest.json`,
+`director64 convert --game <slug>` verifies the supported disc image and every
+extracted ISO 9660 file; its audit stage then writes ignored `build/<game>/<source-id>/conversion/analysis/source/manifest.json`,
 `obligations.json`, `summary.json` and content-addressed raw score chunks.
 This recovery schema is separate from the runtime IR. `runtime_ir_frozen` is false;
 raw score recovery is not runtime implementation or reference matching.
