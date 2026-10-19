@@ -377,7 +377,7 @@ static bool d6_call(dg_runtime_t *d, const char *name, unsigned argc, const lv_t
   unsigned ln = lv_name_id(d->values, name);
   if ((ln == LN_CERTIFICATE_PRINT_NOTICE) && !argc) {
     snprintf(d->notice, sizeof(d->notice),
-             "Drucken ist auf dem N64 nicht verfuegbar.\nDeine Urkunde bleibt hier sichtbar.");
+             "Drucken ist hier nicht verfuegbar.\nDeine Urkunde bleibt hier sichtbar.");
     d->notice_armed = false;
     if (d->platform.trace) d->platform.trace(d->context, "CERTIFICATE_PRINT_NOTICE");
     return true;

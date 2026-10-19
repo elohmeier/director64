@@ -226,7 +226,7 @@ static bool d5_call(dg_runtime_t *d, const char *name, unsigned argc,
   if ((ln == LN_ALERT) && argc == 1) {
     const char *message = lv_cstr(r, a[0]);
     if (strstr(message, "Drucker"))
-      message = "Drucken ist auf Nintendo 64 nicht verfuegbar.";
+      message = "Drucken ist hier nicht verfuegbar.";
     snprintf(d->alert_text, sizeof(d->alert_text), "%s", message);
     d->alert_until = d->ticks + 240;
     return true;
