@@ -1,13 +1,14 @@
 # Löwenzahn 8
 
 Experimental Director 8.5 port of the locally supplied German disc, for the
-browser player and Android TV (no N64 build). Director 8.5 runs as the D10
+Android TV player and the standalone web app. Director 8.5 runs as the D10
 runtime family with extended behaviors and `-DDIRECTOR64_D85`
 (`runtime/lingo/family.h`). The movies are Shockwave (Afterburner) files.
 
 ```sh
 uv run --locked director64 android build --game loewenzahn-8 --abi armeabi-v7a
 uv run --locked director64 android install --game loewenzahn-8 --serial <device>
+uv run --locked director64 web --game loewenzahn-8 --serve
 ```
 
 There is no launcher projector to convert: `START` is the entry movie. The
@@ -15,9 +16,9 @@ preferences file saves as `LZ8.usr` in the save archive.
 
 Videos are MPEG-1 movies played through Tabuleiro's DirectMedia Xtra. Each
 member names its file by the authoring machine's path; the port binds it to
-the disc's 8.3 file (`compiler/src/ports.rs`). The Android export transcodes
-them with FFmpeg to VP8 and WAV; the browser importer has no MPEG-1 decoder,
-so there the clips have no length and the game skips them. The Mac QuickTime
+the disc's 8.3 file (`compiler/src/ports.rs`). The conversion transcodes
+them with FFmpeg to VP9, with their sound as WAV or Ogg Opus; the Android TV
+and web players share that conversion. The Mac QuickTime
 cast (`videoM`) is pinned as deferred: the runtime answers `the machineType`
 as Windows, so it is never used.
 
@@ -29,7 +30,7 @@ stores them as Lingo literals in the save archive. The Tamagotchi dog's
 animations are linked Shockwave movies played inside a sprite (cast type 9),
 which draw nothing yet.
 
-Checked in the browser runtime's probe: the boat login, the intro video, the Bauwagen hub, the Tamagotchi setup and the Videomat, without script errors.
+Checked with the web build's probe: the boat login, the intro video, the Bauwagen hub, the Tamagotchi setup and the Videomat, without script errors.
 
 Known gaps:
 

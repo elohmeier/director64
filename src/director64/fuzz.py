@@ -1,9 +1,8 @@
-"""Randomized controller-input fuzzing against the sanitized native probes.
+"""Randomized controller-input fuzzing against the game's web probe.
 
-Episodes boot the game like the playable ROM and inject only input a player
-could produce: pointer motion within the hardware envelope, clicks, drags,
-pad samples, Director key events where the probe supports them, and console
-reboots. Any Lingo failure, sanitizer report, crash, hang or protocol break
+Episodes boot the game like the player and inject only input a player could
+produce: pointer motion within the stage, clicks, drags, pad samples, text
+entry and reboots. Any Lingo failure, sanitizer report, crash, hang or protocol break
 is recorded with the exact command stream that reproduces it.
 """
 
@@ -25,78 +24,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 # The shared input controller clamps the pointer to this envelope (input.c);
-# coordinates outside it cannot occur on hardware and would report fake bugs.
+# coordinates outside it cannot occur in play and would report fake bugs.
 POINTER_X = (8, 630)
 POINTER_Y = (8, 470)
 STDERR_TAIL = 200_000
 
-def mucklas_key_pairs() -> list[tuple[int, int]]:
-    """(code, character) pairs the Mucklas platform keyboard can emit (controls.c)."""
-    letters = [0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17]
-    letters += [32, 9, 13, 7, 16, 6]
-    pairs = [(letters[i], ord("A") + i) for i in range(26)]
-    return pairs + [(49, ord(" ")), (27, ord("-")), (18, ord("1")), (51, 8), (36, 13)]
-
-
-# Arrow key events mucklas_pad_keys synthesizes from the pad in KR/KB.
-MUCKLAS_ARROWS = [(126, 30), (124, 29), (125, 31), (123, 28), (49, ord(" "))]
-
-
-def mucklas_key_gate(state: dict) -> bool:
-    """Text-entry keys only flow while the LO.DXR name keyboard is open."""
-    if state.get("movie") in {"KR.DXR", "KB.DXR"}:
-        return True
-    return "skrivernamn" in str(state.get("globals", {}).get("lo_state", ""))
-
-# RPC abilities differ per probe; sending an unsupported command can be a
-# protocol error (the workshop probe exits), so the generator must know them.
-# "keys" maps a movie to the (code, character) events the game's platform
-# layer can produce there; anything else would report bugs unreachable on
-# hardware (Mucklas text entry only opens on the LO.DXR name field, and the
-# pad-to-key mapping only runs in the KR/KB activities).
-PROBE_FEATURES = {
-    "findus-workshop": {"pad": True, "buttons": 0x7F, "keys": {}},
-    "findus-mucklas": {
-        "pad": True,
-        "buttons": 0x7FF,
-        "keys": {
-            "LO.DXR": mucklas_key_pairs(),
-            "KR.DXR": MUCKLAS_ARROWS,
-            "KB.DXR": MUCKLAS_ARROWS,
-        },
-        "key_gate": mucklas_key_gate,
-        # Cost accounting and heap census (platforms/native/probe_stats.inc);
-        # the perf sweep refuses probes without them instead of hanging.
-        "perf": True,
-        "heap": True,
-    },
-    "loewenzahn-1": {"pad": True, "buttons": 0x7FF, "keys": {}},
-    "willy-werkel-cars": {
-        "pad": False,
-        "buttons": 0,
-        "keys": {},
-        # The D6 controller keyboard's character set (text_input.c); entries
-        # land through dg_edit_text exactly like an accepted keyboard name.
-        "text": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_.",
-    },
-    "lernerfolg-deutsch-1-2": {
-        "pad": False,
-        "buttons": 0,
-        "keys": {},
-        # The ASCII subset of the D10 on-screen keyboard: the RPC line is
-        # UTF-8 while dg_edit_text validates windows-1252 bytes, so the
-        # umlaut keys stay covered by the C contract and the baked replay.
-        "text": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_.",
-        "perf": True,
-        "heap": True,
-    },
-}
-DEFAULT_FEATURES = {"pad": False, "buttons": 0, "keys": {}}
-# The browser runtime's probe (platforms/web/node/probe.mjs, --browser): the
-# page's and the TV's pads drive the pointer through the shared controller,
-# and their keyboards enter text into editable fields; Director key events
-# have no RPC there.
-BROWSER_FEATURES = {
+# What the web probe (platforms/web/node/probe.mjs) answers: the pads drive
+# the pointer through the shared controller, and keyboards enter text into
+# editable fields; Director key events have no RPC there. "keys" maps a movie
+# to (code, character) events a probe with key events could take.
+FEATURES = {
     "pad": True,
     "buttons": 0x7FF,
     "keys": {},
@@ -529,7 +466,7 @@ def load_case(path: Path) -> tuple[str, list[str]]:
 
 def main(game, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        prog="director64 fuzz", description="randomized native input fuzzing"
+        prog="director64 fuzz", description="randomized input fuzzing"
     )
     parser.add_argument("--duration", type=float, default=300.0, help="seconds of fuzzing")
     parser.add_argument("--episodes", type=int, help="stop after this many episodes")
@@ -543,7 +480,7 @@ def main(game, argv: list[str]) -> int:
     parser.add_argument("--no-minimize", action="store_true")
     parser.add_argument("--output", type=Path, help="artifact directory")
     parser.add_argument(
-        "--probe", type=Path, help="probe executable (default the sanitized native probe)"
+        "--probe", type=Path, help="probe executable (default the web build's, director64 web)"
     )
     parser.add_argument(
         "--prelude",
@@ -551,14 +488,11 @@ def main(game, argv: list[str]) -> int:
         action="append",
         help="commands each episode starts with, after boot (repeatable: one per episode)",
     )
-    parser.add_argument(
-        "--browser",
-        action="store_true",
-        help="the --probe speaks for the browser runtime (pads and text, no key events)",
-    )
     args = parser.parse_args(argv)
 
-    executable = args.probe or game.work / "native/director-probe-sanitized"
+    from .web import probe_path
+
+    executable = args.probe or probe_path(game)
     env = os.environ | {
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1",
         "ASAN_OPTIONS": "halt_on_error=1:detect_leaks=1",
@@ -569,9 +503,7 @@ def main(game, argv: list[str]) -> int:
     runner = Runner(
         executable=executable,
         output=output,
-        features=(
-            BROWSER_FEATURES if args.browser else PROBE_FEATURES.get(game.slug, DEFAULT_FEATURES)
-        ),
+        features=FEATURES,
         env=env,
         movies=args.movie or [game.data["port"].get("entry_movie", "START")],
         actions=args.actions,
@@ -647,6 +579,6 @@ def main(game, argv: list[str]) -> int:
     for signature, info in runner.signatures.items():
         print(f"{info['kind']} x{info['count']}: {signature[:140]} -> {info['case']}")
     # Recovered script alerts reproduce original behavior; only failures that
-    # would stop the ROM make the run exit non-zero.
+    # would stop the game make the run exit non-zero.
     hard = [s for s, i in runner.signatures.items() if i["kind"] != "script-alert"]
     return 1 if hard else 0

@@ -23,6 +23,3 @@ director_version = 850
 media_root = "DATA"
 entry_movie = "START"
 native_compatibility = true
-rom_title = "LOEWENZAHN ADVENT"
-rom_save_type = 80
-controller_count = 4

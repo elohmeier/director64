@@ -1,8 +1,7 @@
-// Converts a disc image for the game's Android TV APK (docs/android.md): the
-// browser importer's pipeline (the built bundle) under Node, as the parity
-// harness runs it, with FFmpeg for video. Writes the game's package and asset
-// packs as the browser's cache holds them (platforms/web/site/cache.js), and
-// the manifest last, so a directory without one is incomplete.
+// Converts a disc image for the game's Android TV APK and web player
+// (docs/android.md): the conversion pipeline (platforms/web/import) under
+// Node, with FFmpeg for video and audio. Writes the game's package and asset
+// packs, and the manifest last, so a directory without one is incomplete.
 //   node export.mjs TOOLS_DIR SOURCE PROFILE_JSON PACKAGE_META MANIFEST_JSON OUT_DIR
 import {readFileSync, writeFileSync, openSync, readSync, fstatSync, mkdirSync, rmSync} from "node:fs";
 import {createRequire} from "node:module";
@@ -22,7 +21,7 @@ if (!out) {
 const root = new URL("../../../", import.meta.url).pathname;
 // The image packer (webp.mjs) loads from the tools, here and in the workers.
 process.env.D64_TOOLS = tools;
-const {importGame} = await import(pathToFileURL(join(tools, "pipeline.mjs")).href);
+const {importGame} = await import(pathToFileURL(join(root, "platforms/web/import/pipeline.mjs")).href);
 const {loadConverter} = await import(pathToFileURL(join(root, "platforms/web/import/convert.mjs")).href);
 const {DirectorFile} = await import(pathToFileURL(join(root, "node_modules/projectorrays/dist/pkg/node.es.js")).href);
 const {Pool} = await import(pathToFileURL(join(root, "platforms/web/import/pool.mjs")).href);

@@ -1,384 +1,158 @@
-# Browser player
+# Standalone web app
 
-The browser player imports a supported game from the user's own disc image
-and plays it, entirely in the browser: milestones W1 to W4 of
-[web-roadmap.md](web-roadmap.md), and W6 for all six ports. The site
-serves the engine, the converter and the game profiles, and no game data.
-Choosing a disc image (or, for Willy Werkel, its ZIP) converts it locally, in
-a worker, with the native pipeline's own stages. The result is kept in the
-browser's origin-private file system for later visits. A Content Security
-Policy confines the page to its own origin.
-
-| Game | Family | Source | Import | Status |
-| --- | --- | --- | --- | --- |
-| Pettersson und Findus (Workshop) | D6 | `FINDUS.iso` or its raw rip `CD01.img` | 6 s | plays |
-| Autos bauen mit Willy Werkel | extended D6 | the edition's ZIP | 7 s | plays |
-| Findus: Christmas calendar | D7 | `FINDUS3.ISO` | 6 s | plays |
-| Findus bei den Mucklas | D8 | `Findus4.iso` | 14 s | plays |
-| Lernerfolg Deutsch 1/2 | D10 | `Deutsch12.iso` | 27 s | plays |
-| Löwenzahn 1 | D5 | `LOEWENZA.iso` | 14 s | plays, with video and printing |
-
-Import times are headless Chrome on a 16-core machine, with the worker pool
-described under [Importing a disc](#importing-a-disc). In one thread the
-same imports took 12 s (Workshop), 26 s (Mucklas), 60 s (Lernerfolg) and
-41 s (Löwenzahn).
-
-A game is offered once it has a browser profile, `games/<slug>/web.toml`.
-
-## Playing
-
-The mouse points and clicks, and the right button is the game's second
-button. Games from Director 7 on also receive the keyboard. An editable
-field opens a text box over it, and the game pauses until Enter commits it.
-
-**Controllers.** Every gamepad Chrome reports with the standard mapping
-(a DualShock 4 or DualSense over USB or Bluetooth on Linux, Windows or
-macOS among them) becomes one of the console's four ports. The page passes
-each pad to the runtime as an N64 controller sample (`d64_pad`), and
-`d64_step_pads` services them with `runtime/interaction/pointer.c`, as the
-console does. Each player moves their own cursor, and whoever presses or
-points holds Director's one mouse. Once two pads are connected, each cursor
-takes its player's colour. The per-game controller layers the console has
-(Mucklas' race steering, Willy's notices and right button, Löwenzahn's
-print dismissal) run unchanged.
-
-| Pad | Console | In the page's menus |
-| --- | --- | --- |
-| Left stick, D-pad | Stick, D-pad: the cursor (L1 held: fine movement) | Move focus; left/right set the volume |
-| ✕, touchpad click | A: the click | Choose |
-| ○ | B: the second button | Back, close |
-| Options | Start | Choose |
-| Right stick | C buttons | — |
-| PS, Share | — | Open or close the menu |
-
-The stick has a radial dead zone of 0.12 and maps onto the console's ±80
-with a gentle curve (`site/gamepad.js`). Moving the mouse hands the pointer
-back to the mouse, and the next pad input picks it up from where the mouse
-left it (`d64_pointer_warp`). A pad's A on an editable field opens the
-on-screen keyboard (`site/keyboard.js`): ✕ types, ○ deletes, △ switches
-capitals, □ is a space, Options commits, PS cancels. Director 10 fields
-get Ä, Ö, Ü and ß. A real keyboard still types into the same box.
-
-Chrome counts a pad button press as a user gesture, so a pad alone can
-start a game with sound or enter fullscreen. Without any gesture yet (a
-reload straight into play), the page says sound will start on the next
-click, key or button. The page holds a screen wake lock while a game runs,
-because a desktop does not count controller input as activity.
-
-**Fullscreen and display.** The Fullscreen button puts the stage alone on
-the screen. With the keyboard lock Chrome grants there, Escape reaches the
-game, and holding it leaves fullscreen. The menu, notices, dialogs and the
-on-screen keyboard live inside the stage, so they show in fullscreen. The
-browser's own fullscreen (F11) hides the page's bars. "Sharp" scaling (the
-default) enlarges the stage (640×480, or an 800×600 game's own stage) by
-the next whole factor without
-filtering and lets the browser shrink the rest. "Smooth" filters the
-whole way.
-
-**The menu** (header button, the corner button in fullscreen, or PS) pauses
-the game. It holds volume and mute, fullscreen, scaling, a diagnostics line
-(also `?debug`), save export and import, the controls, and the way back to
-the list of games. When the browser has not granted persistent storage, it
-warns that saves may be evicted under disk pressure. Preferences are kept in
-`localStorage`; texts come in English and German (`site/strings.js`, chosen
-by the browser's language or `?lang=`).
+`director64 web` builds one game as a static site: the player page, the
+engine compiled to WebAssembly with Emscripten, and that game converted from
+your own disc image. It is a by-product of the Android TV player
+([android.md](android.md)): the conversion is the same, and so is the engine
+source. Like an APK, the site contains the converted game. It is for your own
+use and must not be redistributed or published.
 
 ## Build and serve
 
 ```sh
-uv run director64 web --game findus-workshop --serve
+uv run --locked director64 web --game findus-workshop --serve
 ```
 
-This writes the source-free site to `build/web/site/` and serves it at
-<http://127.0.0.1:18064/> (`--port` changes the port, `--no-build` serves the
-existing build). Open it, choose `FINDUS.iso`, and play once the import
-finishes: about 6 s in Chrome. The build needs Docker (Emscripten 6.0.10,
-pinned by digest in `src/director64/web.py`, run without network), Rust with
-the `wasm32-unknown-unknown` target, and Node with the locked dev
-dependencies (`npm ci --ignore-scripts`).
+| Option | Effect |
+| --- | --- |
+| `--reconvert` | Convert the disc image again, even if a current conversion exists |
+| `--serve` | Serve the site at `http://127.0.0.1:18064/` after building |
+| `--port N` | Serve on another port |
+| `--no-build` | Serve the existing build without rebuilding |
 
-When the game has also been converted by the native pipeline
-(`director64 assets`), the build writes that package and its asset packs to
-`build/<game>/<source>/web/` as well. It checks them against the generated C
-and writes the probe harness. The development server offers them as
-"Play the local build" under `/local/`, which is not part of the site.
-`--check-import` then reruns the browser importer from the local disc under
-Node and compares every output with the native pipeline's. `--linked` builds
-the W1 runtime with the generated tables linked in, for the probe only.
+A game can be built once it has a port and a browser profile,
+`games/<slug>/web.toml` (its save archive's file names, or `saves = false`).
+The build needs Docker or a compatible engine (Emscripten 6.0.10, pinned by
+digest in `src/director64/web.py` and run without network), Rust with the
+`wasm32-unknown-unknown` target, Node with the locked dependencies, and FFmpeg
+for the conversion.
 
-The page asks for a click before a game starts, because browsers unlock audio
-only on a user gesture.
+The steps:
 
-`director64 web --game <slug>` builds that game's runtime and local build;
-the site lists every game with a profile and a built runtime.
+1. **Convert** (`android.convert`, shared with the APK) the disc image under
+   `media/<slug>/<source>/` into `build/<slug>/<source>/converted/`, unless a
+   conversion by the same converter revision, runtime ABI and game profile is
+   already there. The converter is described in
+   [architecture.md](architecture.md#conversion).
+2. **Validate** the converted package with the production loader
+   (`tools/director/validate-package.c`, `runtime/package/package.c`).
+3. **Compile** the runtime for the game's Director family with `emcc`
+   (`web.compile_command`): the same sources and flags the Android build
+   compiles for the NDK, plus the Emscripten glue.
+4. **Write** the site to `dist/<slug>/<source>/web/` and a probe launcher
+   beside it, `dist/<slug>/<source>/director-web-probe`.
 
-## Importing a disc
+## What the site contains
 
-| Stage | What runs | Where it came from |
-| --- | --- | --- |
-| Verify | Size, then full SHA-256 of the image against the profile's pinned edition or one of its alternate rips, streamed from the `File` in 8 MiB reads | `compiler/src/iso.rs` / `sha2` in `compiler/wasm` |
-| Extract | ISO 9660 inventory over bounded reads (`FileReaderSync` in the worker), every file into the in-memory file system; a raw 2352-byte rip (CloneCD `.img`, `.bin`) is read through its sectors' user data | Rust port of `iso.py` |
-| Parse | ProjectorRays parses each Director file once; its chunks, records and decompiled scripts become a dump | `director plan` in `compiler/src/convert/plan.rs`, then `tools/director/dump-format.mjs` |
-| Analyze, audit | Recovery of scripts, casts and score chunks; the source policy's pinned denominators | `compiler/src/convert/analyze.rs`, `audit.rs` |
-| Scores | The structural score decoder | `compiler/src/convert/score.rs` (port of `tools/projectorrays/score_recovery.cpp`) |
-| Convert | Bitmaps, sounds, film loops, Flash and vector shapes, text, and the scene model | `compiler/src/convert/compile.rs`, `movie.rs` and the model modules beside them |
-| Compile | Lingo to `program.json` | Rust port of `lingo.py` |
-| Package | Bytecode and scene tables into a D64P package; images and sounds into asset packs | `compiler/src/package.rs`, `scene.rs` |
+| File | Content |
+| --- | --- |
+| `index.html`, `*.js`, `style.css` | The player page (`platforms/web/site/`) |
+| `director64.mjs`, `director64.wasm` | The runtime |
+| `game.d64p` | The game package ([package-format.md](package-format.md)) |
+| `assets/<kind>.bin`, `.json` | Asset packs: images, audio, fonts, streams, data, video and print documents, each with its index; images are stored inflated |
+| `monogram.ttf` | The builtin font unstyled text is drawn in (CC0) |
+| `print.html`, `print.css` | The print document layout (Löwenzahn 1) |
+| `build.json` | Revision, runtime flags and digest, package digest, packs |
+| `NOTICES.txt` | The license, [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) and the license texts |
+| `manifest.webmanifest` | Name and fullscreen display, so the page can be installed as an app |
 
-Every stage after the parse is the converter's Rust code, the same code
-`director64 recover` and `director64 assets` run as `director64-aot director
-<stage>` on the host. In the browser it runs as `compiler/wasm`'s
-`d64c_director`, which reaches the in-memory file system of `vfs.mjs` through
-host imports: the extracted disc stays in JavaScript memory, and a stage
-copies in one file at a time. ProjectorRays is the one stage that is not Rust;
-its dumps (`compiler/src/convert/dump.rs`) are what the stages read. Embedded
-PFR1 fonts recover in the converter too (`compiler/src/convert/pfr.rs`,
-`cff.rs`), so games with original fonts convert in the browser as well.
-Because it is one codebase, parity is byte-level.
+A Content Security Policy confines the page to its own origin; nothing is
+uploaded. Any static file server works; `--serve` sends `Cache-Control:
+no-cache` so a rebuild is what loads.
 
-The independent parts of an import run on a pool of workers
-(`platforms/web/import/pool.mjs`, one per spare core up to twelve), each
-with its own converter and parser instance: parsing each Director file,
-converting each movie, and encoding
-each sound and each linked movie's video. A pool needs no shared memory, so
-the site needs no cross-origin isolation. A movie job converts against
-`ProxyFiles` (`jobs.mjs`): what it writes stays on its worker, and it is sent
-the files it is known to read (`Setup::job_inputs`); anything else it asks
-for, and it runs again with the answers, so a result is only made from
-complete inputs. The import worker merges the movies' files and records in
-movie order (`compile-merge`) and finishes the stage, so the output is the
-one-thread output byte for byte; `--check-import` runs the same pool under
-Node with `worker_threads` (`D64_POOL=0` runs it in one thread).
-`platforms/web/import/parity.mjs` drives the built bundle from the disc under
-Node and compares its outputs with the native pipeline's.
+## Playing
 
-Only a finished import is stored. An entry under
-`director64/<slug>/packages/<edition>-<converter revision>/` counts once its
-`manifest.json`, written last, matches the file sizes. On load, entries from
-another converter revision and directories without a valid manifest are
-removed. Removing the converted game never touches the saves under
-`director64/<slug>/saves/`. When storage is full, the game plays from memory
-and the page says so. A cancelled import terminates the worker and leaves
-nothing behind.
+The page loads `build.json`, the package and the packs, and asks for a click
+or a button press before starting, because browsers unlock audio only on a
+user gesture.
+
+- **Mouse and keyboard.** The mouse points and clicks; the right button is
+  the game's second button. From Director 7 on, keys reach the scripts as a
+  desktop projector delivers them: the Macintosh virtual key code of the
+  physical key and the character the layout types. D5 and D6 scripts
+  declare no key handler. A press on an editable field opens a text box over
+  it; the game pauses until Enter commits it through `dg_edit_text`
+  (20 characters, printable ASCII except the double quote, German letters on
+  D10). Mucklas (D8) takes names through keys and types into its field
+  directly.
+- **Controllers.** Every gamepad the browser reports with the standard
+  mapping (a DualShock 4 or DualSense among them) becomes one of four
+  players (`site/gamepad.js`). Each pad is passed to the runtime as a
+  controller sample (`d64_pad`, `runtime/interaction/input.h`), and
+  `runtime/interaction/pointer.c` turns it into that player's cursor; whoever
+  presses or points holds Director's one mouse. ✕ (or the touchpad click)
+  clicks, ○ is the second button, Options is Start, the left stick and D-pad
+  move the cursor (L1 held: fine movement), the right stick gives the
+  direction buttons some games use, and PS or Share opens the menu. Moving
+  the mouse takes the pointer back. On an editable field ✕ opens an
+  on-screen keyboard (`site/keyboard.js`). The per-game controller layers
+  (Mucklas' race steering, Willy's notices, Löwenzahn's print dismissal) are
+  the same as on Android TV.
+- **Display.** The stage is 640×480, or 800×600 for a game authored at that
+  size. "Sharp" scaling (the default) enlarges it by the next whole factor
+  without filtering and lets the browser shrink the rest; "Smooth" filters.
+  The Fullscreen button keeps the menu, notices and on-screen keyboard
+  visible and, with the keyboard lock, passes Escape to the game. A screen
+  wake lock is held while a game runs.
+- **Menu.** It pauses the game and holds volume and mute, fullscreen,
+  scaling, diagnostics (also `?debug`), save export and import, and the
+  controls. Preferences live in `localStorage`; texts come in English and
+  German (`site/strings.js`, by browser language or `?lang=`).
+- **Printing.** Löwenzahn 1's print stamps open the browser's print dialog
+  with the chapter's recovered text and artwork laid out on an A4 page
+  (`print.html`), then dismiss the game's print pause.
+
+The service clock runs at 60 Hz from `requestAnimationFrame` time, at most
+four ticks per animation frame with twelve ticks of backlog, as on Android;
+longer stalls drop time rather than rushing the score. A hidden page stops
+game time and audio together.
+
+## Saves
+
+The runtime stores a game's saves in its 128 KiB save image
+([architecture.md](architecture.md#runtime-hosts)); the game's own archive
+code commits to it. After each
+commit the page writes the whole image to the origin-private file system
+(OPFS) under `director64/<slug>/saves/` and shows *Saved* only once that
+write has closed (`site/saves.js`). A failed write shows an error and keeps
+the previous generation. The menu exports the image as a file and imports
+one; the current save is kept as a backup until the imported one boots, and
+can be restored if it fails to load. The page asks for persistent storage
+and warns when the browser has not granted it. An unreadable save stops the
+game without changing it.
+
+Saves belong to the origin: serve the site from the same host and port to
+keep them.
+
+## Browser requirements
+
+A current desktop Chrome or Edge. The page checks for the origin-private
+file system with writable file handles and for WebAssembly before it
+starts. Video (VP9) decodes with WebCodecs (`VideoDecoder`); sounds (WAV,
+Ogg Opus, MP3) decode through Web Audio.
+
+## The probe
+
+`director-web-probe` runs `platforms/web/node/probe.mjs` over the site's
+runtime under Node and speaks the probe line protocol (`MOVIE rpc`, then one
+command per line): `state`, `step`, `pad`, `point N` and the rest. It starts
+at the game's entry movie only. It renders by default; `--state-only` skips
+the compositor.
+
+`director64 fuzz`, `director64 parity` and `director64 journey` drive it
+([fuzzing.md](fuzzing.md)); each needs a web build first. In the running
+page, `window.director64.rpc("state")` returns the same state line and
+`rpc("point N")` a hittable point of sprite N.
 
 ## What runs where
 
 | Piece | Responsibility |
 | --- | --- |
-| `platforms/web/site/` | The page: import flow, menu and cache (`app.js`, `cache.js`), the player (`player.js`: the 60 Hz loop, input, Web Audio through `audio.js`, OPFS saves through `saves.js`), controllers (`gamepad.js`, `keyboard.js`), presentation, fullscreen and wake lock (`screen.js`), preferences (`settings.js`) and texts (`strings.js`) |
-| `platforms/web/import/` | The importer: worker entry, pipeline, in-memory file system, the converter's JS wrapper (`convert.mjs`) and the bundle script |
-| `compiler/wasm/` | The Rust converter stages as WebAssembly: ISO inventory, SHA-256, the Director stages over the embedder's files, Lingo parser, packager |
-| `runtime/package/package.c` | Validates a game package (header, ABI digest, bounds of every string, index, table and bytecode op) and builds the engine's movie tables from it |
-| `compiler/src/package.rs`, `scene.rs` | Write the package: the compiler's bytecode units and a Rust port of `director.py`'s plain-D6 scene tables ([package-format.md](package-format.md)) |
-| `platforms/web/web_runtime.c` | Engine instance, platform callbacks, save device, the service step and the native probes' line protocol |
-| `platforms/web/compositor.c` | Software compositor into a 640×480 (or native 800×600) RGBA framebuffer: draw order, copy/matte/background-transparent inks, blend, stretching, shapes, text, film loops and the Director cursor |
-| `platforms/web/web_main.c`, `library.js` | Emscripten glue: the runtime's imports forward to the embedder's `director64Host` object |
-| `platforms/web/node/probe.mjs` | The probe protocol over the same Wasm module, for parity and journeys |
-| `games/<slug>/web.toml` | Per-game browser profile (the save archive's file names); not a conversion input, so editing it keeps the asset receipt |
-
-Behaviour follows the console backend (`platforms/n64/director_main.c`)
-unless noted:
-
-- **Clock.** Service ticks at 60 Hz from `requestAnimationFrame` time, at most
-  four per animation frame, with twelve ticks of backlog; the console's rule.
-  Longer stalls drop time rather than rushing the score.
-- **Pause.** A hidden page stops game time and suspends audio together; on
-  return neither replays the time away. Window blur releases a held button.
-- **Input.** The mouse maps through the letterboxed canvas to stage pixels,
-  left button as the controller's A and right as B. Pointer capture keeps a
-  drag's release. A click shorter than one tick is still delivered for one
-  tick.
-- **Keyboard.** From D7 on, where scripts receive keyDown and keyUp, every
-  key goes to the runtime as a desktop projector delivers it: the Macintosh
-  virtual key code of its physical position and the character the layout
-  types. Keys go nowhere in D5 and D6, whose scripts declare no key handler.
-- **Text entry.** A press on an editable field opens a text box over it, where
-  the console opens its on-screen keyboard. The game pauses while the box is
-  open, and Enter commits the text through the same `dg_edit_text` as the
-  console's Start. The box accepts what that function accepts: 20 characters,
-  printable ASCII except the double quote, and German letters on D10. D8
-  takes names through keys, so Mucklas types into its field directly.
-- **Rendering.** The CPU composites what the RDP draws on the console, at
-  8 bits per channel instead of the console's 5. An unchanged stage and
-  pointer are not recomposited. A styled text member (D7 and later, extended
-  D6) is set in its own font, recovered from the disc or the port's pinned
-  substitute. That font is delivered as a pack beside the images and sounds,
-  and drawn at the member's size, alignment, ascent and line height.
-  Unstyled text uses the console's font: monogram (CC0), libdragon's
-  builtin, at the ascent and line height of its atlas.
-- **Sound storage.** Imported sounds and WAV speech streams are stored as
-  Opus, which the import worker encodes with WebCodecs. The converter first
-  resamples them to 48 kHz (`compiler/src/convert/resample.rs`) so they stay
-  sample-aligned. Each is decoded on first play (4 ms at the median) and
-  cached. A sound still decoding starts at the offset the service clock has
-  reached. This makes sound 5 to 9 times smaller than the PCM it replaces:
-  Mucklas's is 25 MB instead of 216 MB. Local builds and the Node parity
-  importer keep WAV.
-- **Sound.** WAV sources (which the console converts to wav64) decode
-  synchronously into Web Audio buffers, with the console's loop-bound rule and
-  gain from `the soundLevel`. *Channel lifetime* (when a script sees a sound
-  as finished) follows the service clock, as it does on the native probe. That
-  keeps score waits tick-exact with the probe; the audio plays alongside that
-  clock and pauses with it.
-- **Saves.** The runtime's save device is the console's 128 KiB FlashRAM
-  image, and the game's own archive code commits to it. After each commit the
-  page writes the whole image to the origin-private file system at
-  `director64/<slug>/saves/flash.bin`. It shows *Saved* only once that write
-  has closed. A failed write shows an error and keeps the previous generation.
-  Export downloads the image. Import keeps the current save as `flash.bak`
-  until the imported one boots; if it fails to load, *Restore previous save*
-  puts the old one back. An unreadable save stops the game without changing
-  it, as the console does.
-- **Failures.** Integrity failures stop the runtime with the console's
-  message; recovered script alerts are counted in the footer.
-
-`window.director64.rpc("state")` returns the probe state from the running
-page, and `rpc("point N")` a hittable point of sprite N. Both are read-only;
-the protocol's `step`/`pad`/`reboot` commands advance the game and are for
-debugging only.
-
-## W6 evidence: Willy, Christmas, Mucklas, Lernerfolg, Löwenzahn (2026-09-27)
-
-Each game passes the same four gates as Workshop. Loader parity is run by
-every build. Import parity, run with `--check-import`, compares the browser
-importer, driven from the disc under Node, with the native pipeline. Fuzzer
-parity runs the package build under `director64 parity --probe` against the
-native probe. The last check is by hand in Chrome.
-
-| Game | Loader parity | Import parity (Node) | Fuzzer parity | Chrome |
-| --- | --- | --- | --- | --- |
-| Willy Werkel | 30 movies, 0 differences | program, model, package identical; 1,573/1,573 images, 579/579 sounds; 6.1 s | 16 episodes, 6,929 states, 0 divergences | converts in 6 s; typing a name on the sign draws it in the game's font |
-| Christmas | 32 movies, 0 differences | identical; 1,704/1,704 images, 495/495 sounds; 5.2 s | 16 episodes, 6,879 states over 26 movies, 0 divergences | converts in 5 s; the calendar plays |
-| Mucklas | 49 movies, 0 differences | identical; 5,284/5,284 images, 1,235/1,235 sounds; 14.5 s, 1.08 GB peak | 16 episodes, 7,059 states over 14 movies, 0 divergences | converts in 15 s; the keyboard types a new player's name |
-
-| Lernerfolg | 77 movies, 0 differences | identical; 22,026/22,026 images, 301/301 sounds, 3,714/3,714 speech streams, 266/266 data files; 46 s, 754 MB peak | 16 episodes, 7,125 states over 13 movies, 0 divergences | converts in 47 s; login, class choice and the castle play with speech |
-
-| Löwenzahn | 23 movies, 0 differences | identical; 1,107/1,107 images, 390/390 sounds, print documents; 6 s (video needs WebCodecs, absent in Node) | 16 episodes, 6,584 states over 19 movies, 0 divergences | converts in 38 s including video; the intro video plays; a print stamp opens the print dialog |
-
-Löwenzahn's movies are QuickTime with Cinepak video. The Rust converter
-decodes them, and its sound is sample-identical to ffmpeg's. The import
-worker encodes the video to VP8 with WebCodecs, and the page decodes it
-again with WebCodecs at the runtime's video time. Printing uses the
-browser's print dialog: the page lays out the chapter's recovered text and
-original artwork on an A4 page (`print.html`, after the console's
-`print.typ`) and prints it. It then dismisses the print pause as the
-console's B button does.
-
-Lernerfolg needed the most, and all of it holds for any later port:
-- **Native stage.** An authored 800×600 stage (the policy's
-  `stage_prescale`, which the console converts at 4/5) plays unscaled in the
-  browser and on Android TV: the importer converts it without the prescale
-  (`web.web_policy` sets `native_stage`), the runtime is built with
-  `DIRECTOR64_NATIVE_STAGE` (800×600 framebuffer, prescale helpers in
-  `ink.h` the identity) and the page sizes its canvas by
-  `d64_stage_width`/`d64_stage_height`. One-pixel line art and thin rain
-  streaks survive, which the 4/5 resampling lost.
-- **Trimmed film-loop poses.** With `native_stage` each flattened pose is cut
-  to the rectangle its coverage spans (`fdi::trim_image`); the compositor
-  loads a pose at its own size and places it by the loop's and the pose's
-  registration points. In Ghosts the poses covered 7% of their full-stage
-  area.
-- **Live film planes.** Native films retain independently timed children.
-  The software compositor resolves their effective visual state, renders the
-  affected local bounds and retains the latest plane per instance. Palette,
-  paired-mask, text, pattern and mutable-image changes participate in reuse;
-  unsupported dynamic sources use the live path. Derived planes share the
-  image-cache budget. Conversion supplies conservative source coverage without
-  changing source extent or registration. Pointer-only updates draw over the
-  retained cursor-free scene.
-- **Masks and Flash.** Mask ink takes the `_mask` partner, by the
-  console's luminance rule. Flash prompt text is drawn over its card.
-- **Speech streams.** `sound playFile` speech arrives as a streams pack.
-  AIFF is rewritten as WAV, and WAV and MP3 are kept, since the browser
-  decodes both. Each stream records its duration, and the runtime holds
-  the channel busy that long.
-- **Data files.** The exercise databases ship as a data pack.
-- **Deflated images.** Converted images are stored deflated from the
-  moment the convert stage writes them (`D64Z`), and the page inflates
-  one when the runtime loads it. Lernerfolg's 1.7 GB of converted images
-  would otherwise have held the import at 2.3 GB.
-- **WebP images.** An embedder with an image encoder (`tools.encodeImage`;
-  the Android TV export's `webp` tool) gets an `image` stage. It stores each
-  image as lossless WebP (`D64W`) where that is smaller and the round trip
-  is exact. Every runtime decodes D64W (`platforms/web/webp_image.c`, with
-  the vendored libwebp decoder), so the format is open to the page's own
-  importer too.
-
-Each port's host corrections run in Rust as well (`compiler/src/ports.rs`):
-Willy's, Mucklas's and Lernerfolg's compatibility fixes, Willy's and
-Christmas's system-font substitute, and Lernerfolg's measured metrics. The substitute is measured by libdragon's own mkfont,
-built as WebAssembly. A game's probe step and state line live in
-`games/<slug>/probe/*.inc`, included unchanged by the native probe and the
-browser runtime, so both report one schema.
-
-Loader parity also checks two properties the runtime depends on:
-- **Behavior-block sharing.** The director tells a continuing sprite span
-  from a new one by the address of its behavior block. The loader therefore
-  shares a movie's identical blocks, as the generated C does. Without that,
-  every re-written channel restarted its sprite.
-- **Name and double pools.** Parity compares their contents.
-
-## Import evidence (W3/W4, 2026-09-27)
-
-| Check | Result |
-| --- | --- |
-| Rust Lingo parser against `lingo.py` | Byte-identical `program.json` for all six recovered corpora; identical output or failure on synthetic, non-ASCII and property-based inputs (`tests/test_lingo_rust.py`) |
-| Rust ISO reader against `iso.py` | Identical inventories and file digests on all six local discs (32 to 4,160 files) |
-| Score decoder as WebAssembly against the native `score-probe` | All 563 score chunks of the six corpora byte-identical |
-| Rust converter stages against the JavaScript stages they replace | Analysis, source audit, score recovery and conversion (`model.json`, `font-audit.json`, images, sounds, alpha planes, fonts, film-loop evidence) byte-identical for all six corpora |
-| Refactored JS stages, run through their CLIs | Workshop's Lingo, source audit, score recovery, `model.json`, 3,976 images and 783 sounds byte-identical to the existing build |
-| Browser importer from the ISO, under Node (`--check-import`) | `program.json`, `model.json`, the game package, all 3,976 images and 783 sounds byte-identical to the native pipeline; 9.6 s; the in-memory file system peaks at 342 MB |
-| Chrome, fresh profile: choose the ISO, play | Import in 9 s. The Vemory journey (hub, 10 pairs, feather, return) saves, and after a page reload the chest shows the feather |
-| Warm reopen | The page offers the converted game; play starts in about a second without importing |
-| Wrong discs | Another game's ISO is refused by size; a same-size copy of the Workshop ISO with one byte changed is refused by its SHA-256 |
-| Cancel mid-import | Nothing stored; the next visit asks for the disc |
-| Converter update | Entries of another converter revision and an interrupted import are pruned on load; saves untouched |
-| No upload | 219 requests over the test session, all GETs of site files; the page runs under `connect-src 'self'` without violations |
-| Browser importer on the Rust stages, under Node (`--check-import`) | Same byte-identical outputs; 6.1 s; the in-memory file system peaks at 476 MB, the parser's dumps included |
-| Chrome, fresh profile, Rust stages | Import in 6 s; the game plays |
-| Cache commit, pruning and failed writes (`tests/node/web-import.test.mjs`) | Round trip, manifest-last commit, truncation detection, quota failure leaves no entry; the in-memory file system keeps a disk's semantics |
-
-Not yet shown: quota exhaustion in a real browser (unit-tested only), save
-export and import in the browser (the W1 unit tests cover the store), memory
-on lower-end machines (the import holds the extracted disc in memory), and a
-deployed Pages URL (W5).
-
-## Package evidence (W2, 2026-09-27)
-
-| Check | Result |
-| --- | --- |
-| Loader parity: `tests/package/compare.c` loads Workshop's package and compares every field of every table with the generated C (also under ASan/UBSan) | 38 movies, 0 differences; the build runs it every time |
-| Refactored compiler still writes the console's C | Byte-identical units for all six ports |
-| Package runtime against the native probe: fuzzer parity and every START journey | 6,859 states, 0 divergences; 33 of 33 journeys pass with identical final states and commands |
-| Malformed and incompatible packages (`tests/native/test_package.c`) | Wrong ABI, profile, format and magic are rejected with a reason. Every truncation is rejected with nothing left allocated. None of 4,287 single-bit corruptions crashes under ASan: 712 are rejected and the rest load into tables that stay in bounds |
-| Browser | Workshop plays from the 1.39 MB package; the runtime module is the same for any Workshop package |
-
-## W1 evidence (2026-09-27)
-
-Runtime revision: the commit that adds this document. Source:
-`sha256-fc24ffe284ec`. Browser: headless Chromium through agent-browser.
-
-| Check | Result |
-| --- | --- |
-| Native/Wasm state parity: `director64 parity --against native/director-probe --probe web/director-web-probe --episodes 16 --actions 200` | 16 episodes, 6,859 states compared, 0 divergences (6 movies visited) |
-| Workshop journeys from START on the Wasm runtime (`full_probe.py <mode> --executable web/director-web-probe`): routes, hubs (incl. 12 constructions), treasure, exit, garden, profiles | All 33 scenarios pass; every final state and command stream identical to the native probe's |
-| W1 journey in the browser with real mouse input: boot, choose a profile, reach the hub, complete Vemory (10 pairs), return to the hub, reload the page, reach the chest | Passed: save generation 1 written and shown saved, the reloaded page finds the save, and the chest shows the awarded feather for that profile |
-| Focus/pause: page hidden for 3 s, then shown | Ticks frozen while hidden; resumed at 60/s with no replayed backlog |
-| Compositor contracts (`tests/native/test_web_compositor.c`, also under ASan/UBSan) | Inks, tiled and FDIA decoding, blend, stretch, shapes, text, pointer and tinted player cursors, hit test, cache, missing-asset failure |
-| Page helpers (`tests/node/web-player.test.mjs`) | WAV decoding, loop bounds, save commit ordering, failed writes, import backup/restore, no-storage reporting |
-| Controls (`tests/node/web-controls.test.mjs`) | Pad-to-console mapping, dead zone and range, navigation repeat and swallowed presses, port order, keyboard layout and moves, sharp factor, settings fallback, both languages complete |
-| Controllers in headless Chrome, simulated pads (2026-10-10) | Workshop: a pad starts the game and moves the cursor; PS opens the menu, which pauses the game (no ticks), ○ closes it without the game reading the press. Lernerfolg: ✕ on the login field opens the on-screen keyboard, "Jü" typed with the pad is accepted by the game; two pads show red and blue cursors; the mouse takes over and the pad resumes from its position |
-
-Baseline performance:
-
-| Measurement | Value |
-| --- | --- |
-| `profiles` journey, 79,920 service ticks, native probe | 0.34 s |
-| Same journey, Wasm under Node (includes module start) | 0.57 s |
-| Browser delivery over the whole session above | 60 ticks/s, 0.0 s dropped |
-| Full composite (KISTA, median / p95 of 60) | 0.80 / 1.10 ms |
-
-Not yet shown: visual comparison against console or original-projector
-frames, and audio checkpoints (the headless session plays audio but nothing
-listened to it). Not measured yet: peak memory and scene-entry stall
-distribution. Of the W1 gates, these remain open.
+| `platforms/web/site/` | The page: shell and menu (`app.js`), the player (`player.js`: clock, input, presentation, printing), sound (`audio.js`, `flash-audio.js`), video (`video.js`), saves (`saves.js`), controllers (`gamepad.js`, `keyboard.js`), fullscreen and wake lock (`screen.js`), preferences and texts |
+| `platforms/web/web_runtime.c` | Engine instance, platform callbacks, save device, the service step and the probe protocol |
+| `platforms/web/compositor.c` | Software compositor into an RGBA framebuffer: draw order, inks, blend, stretching, shapes, text, film loops and the cursor; shared with Android |
+| `platforms/web/webp_image.c` | Decodes images stored as lossless WebP, with the vendored libwebp decoder |
+| `platforms/web/web_main.c`, `library.js` | Emscripten glue: the runtime's imports forward to the page |
+| `platforms/web/node/probe.mjs` | The probe protocol over the same Wasm module |
+| `runtime/package/package.c` | Validates the game package and builds the engine's movie tables from it |
+| `games/<slug>/web.toml` | The game's save file names |

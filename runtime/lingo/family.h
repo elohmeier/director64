@@ -1,8 +1,8 @@
 #ifndef DIRECTOR64_FAMILY_H
 #define DIRECTOR64_FAMILY_H
 // The Director families the runtime is built for, and the capabilities each
-// one has. Every version-dependent piece of the runtime and the console
-// platform is guarded by one of the names below, never by the version
+// one has. Every version-dependent piece of the runtime and the players
+// is guarded by one of the names below, never by the version
 // number: a capability is a fact about what a family's ports need, stated
 // once here with its reason, and widening one to another family is one line
 // in this file, where before it was a search for every `>= 7` in three
@@ -49,8 +49,6 @@
 // the controller keyboard; plain D6 and D5 scripts declare no key handler
 // (counted 2026-09-27: Workshop 0, Löwenzahn 1 unused).
 #define DG_CAP_KEYBOARD DG_D7_UP
-// The controller keyboard for edit-text fields.
-#define DG_CAP_TEXT_INPUT (DG_EXTENDED || DG_D7_UP)
 // `the constraint of sprite`: no D5 or D6 port's scripts use it.
 #define DG_CAP_CONSTRAINTS DG_D7_UP
 // The wide tables: 801 sprite channels, 8192 objects, 512 event-miss
@@ -70,14 +68,4 @@
 #define DG_CAP_EMERGENCY_COLLECT (DG_D7_UP || DG_EXTENDED)
 // `random()` clamps its bound to sixteen bits as ScummVM's b_random does.
 #define DG_CAP_RANDOM16 DG_D7_UP
-// Recorded RDP command blocks per cached image, replayed while the image
-// and its sprite geometry stay the same. Written for D7; widened to every
-// family on 2026-09-27 (trial: measured per port below).
-#define DG_CAP_DRAW_BLOCKS 1
-// The image cache's per-window counters (NATIVE_CACHE): instrumentation
-// every port's captures can use.
-#define DG_CAP_CACHE_STATS 1
-// Heap sweeps that release completed images before a font atlas or an
-// overlay needs one contiguous block.
-#define DG_CAP_HEAP_SWEEPS DG_D7_UP
 #endif

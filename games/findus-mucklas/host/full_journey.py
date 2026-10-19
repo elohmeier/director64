@@ -9,6 +9,8 @@ import subprocess
 from pathlib import Path
 from time import time_ns
 
+from director64.probe import state_line
+
 # Deterministic spine for the perf sweep: boot through the login screen to
 # the house hub, then into the bedroom's train station — the scene with the
 # reported long-session slowdown. ("click", sprite) entries resolve from the
@@ -56,9 +58,9 @@ def run(executable: Path, output: Path, activity: bool = False):
         )
 
         def read():
-            line = process.stdout.readline()
+            line = state_line(process.stdout)
             if not line:
-                raise ValueError(f"native probe exited: inspect {output / 'journey.log'}")
+                raise ValueError(f"probe exited: inspect {output / 'journey.log'}")
             state = json.loads(line)
             states.append(state)
             if state["error"]:
@@ -220,7 +222,7 @@ def run(executable: Path, output: Path, activity: bool = False):
                     process.wait()
             shutdown_failed = failure is None and process.returncode != 0
             if shutdown_failed:
-                failure = f"native probe exited with status {process.returncode}"
+                failure = f"probe exited with status {process.returncode}"
             if failure is None:
                 try:
                     flash = flash_path.read_bytes()
@@ -230,7 +232,7 @@ def run(executable: Path, output: Path, activity: bool = False):
                         "path": flash_path.name,
                         "sha256": hashlib.sha256(flash).hexdigest(),
                         "bytes": len(flash),
-                        "origin": "successful source input journey on host-native runtime",
+                        "origin": "successful source input journey on the web probe",
                     }
                 except (OSError, ValueError) as error:
                     failure = str(error)
@@ -265,7 +267,7 @@ def run(executable: Path, output: Path, activity: bool = False):
                 raise ValueError(failure)
     return {
         "status": "passing",
-        "platform": "host-native",
+        "platform": "web-probe",
         "scenario": "startup-player-create-reload"
         + ("-clock-victory-reward-reload" if activity else ""),
         "commands": len(commands),

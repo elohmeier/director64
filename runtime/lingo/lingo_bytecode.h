@@ -4,8 +4,7 @@
 // same table (OPCODES) and tests/test_aot_bytecode.py compares the two, so a
 // number changed on one side without the other fails before anything runs.
 //
-// Operands are big-endian, so the bytes are the same on the host probe and
-// the console. Every op below LB_JUMP pushes, pops or stores over the
+// Operands are big-endian, so the bytes read the same on every host. Every op below LB_JUMP pushes, pops or stores over the
 // running frame's temps exactly as the lx_* service of the same name does;
 // every op from LB_JUMP on ends a state and returns its flow, which is what
 // keeps step accounting, collection points and yields where the native

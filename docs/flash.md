@@ -69,7 +69,7 @@ the binary came from the
 [official Adobe download](https://fpdownload.macromedia.com/pub/flashplayer/updaters/32/flashplayer_32_sa_debug.exe).
 The player, generated SWFs and raw receipts remain ignored build artifacts.
 This establishes original-player behavior under Wine for those inputs.
-It does not establish native Windows, N64 hardware or complete-game behavior.
+It does not establish native Windows or complete-game behavior.
 
 Portable tests exercise the VM, native services, independent instances,
 placement replacement, buttons, drawing and the Director/ActionScript bridge.
@@ -80,7 +80,7 @@ zero to one; dragging the slider produces 153 in the field, component property
 and Director sound-channel volume. The component's own callback performs the
 update. MUSIKSTI button actions also execute in an ignored sanitizer harness.
 These checks qualify those component paths, not every game interaction or the
-audibility and timing of event sound on physical hardware.
+audibility and timing of event sound on a playback device.
 
 Flash masks retain separate geometric assets: fills contribute coverage
 regardless of source alpha, clip alpha, visibility or color transforms, while
@@ -107,31 +107,21 @@ and selected maximum-difference samples bounded from one to five. Full pixel
 captures remain ignored. This is a qualified approximation of filter arithmetic,
 not bit-identical output or a comparison with the selected Director Flash Xtra.
 
-The N64 uses RGBA8888 intermediates for live Flash composition before conversion
-to its display format. Allocation failures report the requested image instead
-of omitting it. A bounded synthetic Gopher64 probe verifies overlapping partial
-coverage, live Director film children and dynamic Flash drawing on the actual
-console code path. Its small scenes do not establish game-scale speed or memory
-headroom. A separate 60-second Mucklas opening-scene run on Gopher64 meets the
-guest pacing gate: minimum tick delivery 0.9979 and measured audio sync 0.9969
-across eleven measurable windows. Birthday reaches and renders its opening
-bedroom, but still fails the pacing gate with multi-second animation updates;
-it is not qualified for practical N64 interaction. The four blank bordered
-rectangles in that scene match the original projector under Wine: they are
-authored save-name controls, and the recovered script assigns empty names for
-the four empty save slots. This resolves the suspected missing-text finding;
-the captures are at different animation poses and do not establish whole-scene
-pixel parity. The bounded Birthday startup run reaches 440,344 heap bytes and
-8,130 live-object slots at their respective peaks,
-against a 1 MiB heap and 8,192-slot pool. This does not establish later-room
-memory capacity. N64 hardware, complete-game rendering and physical audio
-output remain separate qualification requirements.
+The compositor shared by the web and Android players draws live Flash
+composition on the CPU into RGBA8888 surfaces. Allocation failures report the
+requested image instead of omitting it. Portable tests cover overlapping
+partial coverage, live Director film children and dynamic Flash drawing; they
+do not establish game-scale speed or memory headroom. Birthday's opening
+bedroom shows four blank bordered rectangles; they match the original
+projector under Wine: they are authored save-name controls, and the recovered
+script assigns empty names for the four empty save slots. The captures are at
+different animation poses and do not establish whole-scene pixel parity.
 
 Live Flash fields bind to an exact font family in recovered fonts or explicit
 `system_font_resources`. A missing font is a conversion error with its movie,
 cast and member. A resource records its media-relative path, SHA-256, exact
 family aliases and, for an original installer, its CAB entry and extracted
-font SHA-256. Native and browser/APK imports verify the same installer bytes;
+font SHA-256. Conversions for the web player and the APK verify the same installer bytes;
 the shared Rust converter extracts the bounded CAB entry without executing it.
 The original SFNT bytes, metrics, character coverage and hinting are preserved.
 

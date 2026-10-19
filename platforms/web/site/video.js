@@ -1,5 +1,5 @@
-// Director 5 digital video (platforms/n64/d5_video.c on the console): one
-// player per sprite channel showing a video member. The runtime tells each
+// Director digital video: one player per sprite channel showing a video
+// member. The runtime tells each
 // player its time every service step; the player decodes, with the browser's
 // WebCodecs, up to the frame for that time and keeps it for the compositor,
 // and plays the movie's sound in step with it.
@@ -81,7 +81,7 @@ class Player {
       // Requiring an exact moving target starves a decoder running behind.
       if (generation === this.generation && this.wanted >= 0 &&
           frame.timestamp <= this.video.frames[this.wanted][0] && frame.timestamp > this.shownAt) {
-        // A console stream's header leaves the size to its first frame.
+        // An H.264 header may leave the size at 0; the first frame sets it.
         if (!this.video.width) {
           this.video.width = this.canvas.width = frame.displayWidth;
           this.video.height = this.canvas.height = frame.displayHeight;
@@ -178,7 +178,7 @@ export class VideoPlayers {
     try { entry.player?.seek(time600); }
     catch (error) { this.errors.push(`video ${asset}: ${error.message ?? error}`); }
     // The movie's sound: started (or re-seeked) when it plays and the time
-    // jumped, stopped when it stops, pitched by the rate, as the console's.
+    // jumped, stopped when it stops, pitched by the rate.
     if (entry.sound) {
       const play = rate > 0 && time600 / 600 < this.audio.duration(entry.sound);
       if (play && (!entry.playing || entry.serial !== serial))

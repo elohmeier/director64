@@ -609,7 +609,7 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
       m->flash_fields = fields;
     }
     // Text colour runs and hyperlinks: kept by the Director 8.5 runtime,
-    // which renders and hit-tests them; the console's D10 skips them.
+    // which renders and hit-tests them; the Director 10 runtime skips them.
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
     bool keep = true;
 #else

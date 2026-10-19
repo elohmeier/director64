@@ -1,11 +1,12 @@
-"""Compare two host probes' state streams under the fuzzer's command streams.
+"""Compare two probes' state streams under the fuzzer's command streams.
 
-Every Track A milestone of docs/roadmap.md must reproduce the previous
-milestone's probe states byte for byte before it claims a speed-up. Side A
-is a probe built from the reference generator (`build/<game>/<source>/
-parity/probe-a`); side B is the sanitized probe of the working tree. Each
-episode drives A with the fuzzer's own random walk, records every command
-and the state it produced, replays the commands on B and compares.
+A change that should not alter behaviour (a refactor, a speed-up) must
+reproduce the previous build's probe states byte for byte. Side A is a web
+build kept from the reference revision (by default a copy of
+dist/<slug>/<source>/web at `build/<game>/<source>/parity/site-a`) or a probe;
+side B is the working tree's web build. Each episode drives A with the fuzzer's own
+random walk, records every command and the state it produced, replays the
+commands on B and compares.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import random
 import re
 from pathlib import Path
 
-from .fuzz import DEFAULT_FEATURES, PROBE_FEATURES, Probe, ProbeFailure, episode_commands
+from .fuzz import FEATURES, Probe, ProbeFailure, episode_commands
 
 # Fields that describe the runtime rather than the game: the value heap's
 # footprint and the number of live handles change with the value
@@ -190,29 +191,38 @@ def main(game, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="director64 parity", description="state-stream parity of two host probes"
     )
-    parser.add_argument("--against", type=Path, help="side A probe (default parity/probe-a)")
-    parser.add_argument("--probe", type=Path, help="side B probe (default the sanitized probe)")
+    parser.add_argument(
+        "--against", type=Path, help="side A: a probe or a kept web build (default parity/site-a)"
+    )
+    parser.add_argument("--probe", type=Path, help="side B probe (default the web build's)")
     parser.add_argument("--episodes", type=int, default=4)
     parser.add_argument("--actions", type=int, default=120, help="input actions per episode")
     parser.add_argument("--seed", type=int, default=4130993319, help="base seed")
     parser.add_argument("--movie", action="append", help="entry movie (repeatable)")
     parser.add_argument("--output", type=Path, help="artifact directory")
     args = parser.parse_args(argv)
-    side_a = args.against or game.work / "parity/probe-a"
-    side_b = args.probe or game.work / "native/director-probe-sanitized"
-    for side in (side_a, side_b):
-        if not side.is_file():
-            raise ValueError(f"missing probe {side}")
+    from .web import probe_path, write_probe
+
     output = args.output or game.work / "parity"
     output.mkdir(parents=True, exist_ok=True)
+    side_a = args.against or game.work / "parity/site-a"
+    side_b = args.probe or probe_path(game)
+    sides = []
+    for name, side in (("a", side_a), ("b", side_b)):
+        # A kept web build (a copy of dist/<slug>/<source>/web) gets its own probe.
+        if (side / "build.json").is_file():
+            side = write_probe(game, side).rename(output / f"probe-{name}")
+        if not side.is_file():
+            raise ValueError(f"missing probe or web build {side}")
+        sides.append(side)
+    side_a, side_b = sides
     env = os.environ | {
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1",
         "ASAN_OPTIONS": "halt_on_error=1:detect_leaks=1",
     }
     movies = args.movie or [game.data["port"].get("entry_movie", "START")]
-    features = PROBE_FEATURES.get(game.slug, DEFAULT_FEATURES)
     episodes = [
-        run_episode(seed, movies, args.actions, features, side_a, side_b, output, env)
+        run_episode(seed, movies, args.actions, FEATURES, side_a, side_b, output, env)
         for seed in range(args.seed, args.seed + args.episodes)
     ]
     diverged = [e for e in episodes if e["divergence"]]

@@ -1,11 +1,12 @@
 # Pettersson und Findus: Der Torten werfende Geburtstagskater
 
 Experimental Director 8.5 port of the locally supplied German disc, for the
-browser player and Android TV (no N64 build).
+Android TV player and the standalone web app.
 
 ```sh
 uv run --locked director64 android build --game findus-birthday --abi armeabi-v7a
 uv run --locked director64 android install --game findus-birthday --serial <device>
+uv run --locked director64 web --game findus-birthday --serve
 ```
 
 `PF3.EXE`'s launcher (converted as `PF3.DXR`) goes to `Utilities`. The engine
@@ -18,7 +19,7 @@ as read-only data and read through FileIO and the XML Parser Xtra (implemented
 over property lists). The engine animates every room by driving placeholder film
 loops' channels inside `tell sprite(n)`; the runtime keeps those channels and
 the compositor draws them. Saves (`info.dat`, `generalSettings.dat`, `NNN.sav`)
-live in the FlashRAM archive.
+live in the save archive.
 
 Known gaps:
 

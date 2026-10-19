@@ -385,9 +385,9 @@ static bool d6_call(dg_runtime_t *d, const char *name, unsigned argc, const lv_t
   if ((ln == LN_PUPPETTRANSITION) && argc == 4) {
     // The recovered car-save and shutdown scripts use numeric transitions
     // (1 wipe right, 10 edges-in square). The time argument is in quarter
-    // seconds with the original quarter-second floor; the N64 renderer
-    // reveals the new stage over that duration while the score keeps
-    // playing, an approximation of the original blocking transition.
+    // seconds with the original quarter-second floor, recorded in ticks with
+    // the transition. The compositor does not draw the wipe: the new stage
+    // shows at once and the score keeps playing, where the original blocked.
     lv_runtime_t *r = d->values;
     int type=lv_integer(r,a[0]), time=lv_integer(r,a[1]);
     int chunk=lv_integer(r,a[2]), area=lv_integer(r,a[3]);
@@ -402,7 +402,7 @@ static bool d6_call(dg_runtime_t *d, const char *name, unsigned argc, const lv_t
   }
   lv_runtime_t *r=d->values;
   if (ln == LN_UNLOADMEMBER) {
-    // This is a purge hint, not erase: immutable ROM assets are demand-loaded
+    // This is a purge hint, not erase: immutable package assets are demand-loaded
     // and live script/text references own their lifetime independently.
     if (argc>2) error(d,"unloadMember arguments","range");
     return true;

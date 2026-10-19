@@ -38,7 +38,7 @@ def test_unsupported_ink_has_actionable_external_cast_location():
 
 def test_target_and_version_capabilities_differ():
     assert not audit_model(model(ink=1), "web")["findings"]
-    assert not audit_model(model(ink=1), "n64")["findings"]
+    assert not audit_model(model(ink=1), "android")["findings"]
     assert not audit_model(model(ink=9), "android")["findings"]
     assert audit_model(model(ink=9, version=800), "web")["findings"]
     assert audit_model(model(ink=32, version=600), "web")["findings"]
@@ -47,7 +47,7 @@ def test_target_and_version_capabilities_differ():
     assert not audit_model(extended, "web")["findings"]
 
 
-@pytest.mark.parametrize("target", ["web", "android", "n64"])
+@pytest.mark.parametrize("target", ["web", "android"])
 def test_unknown_inks_remain_blocked_for_every_target(target):
     for ink in (63,):
         assert audit_model(model(ink=ink), target)["findings"][0]["ink"] == ink
@@ -56,16 +56,6 @@ def test_unknown_inks_remain_blocked_for_every_target(target):
 @pytest.mark.parametrize("ink", [2, 3, 4, 6, 7, 33, 34, 37, 38, 40, 41])
 def test_implemented_inks_pass_shared_gate(ink):
     assert not audit_model(model(ink=ink), "web")["findings"]
-
-
-def test_native_generation_rejects_before_writing_tables(tmp_path):
-    from director64.director import generate
-
-    fixture = model(ink=63)
-    fixture["problems"] = []
-    with pytest.raises(ValueError, match="MAIN.DXR frame 17 sprite 3 cast 1 member 1"):
-        generate(fixture, tmp_path / "tables")
-    assert not (tmp_path / "tables").exists()
 
 
 def test_nonbitmap_ink_is_not_reported_as_bitmap_failure():
@@ -105,7 +95,7 @@ def linked_model(**member_overrides):
     return fixture
 
 
-@pytest.mark.parametrize("target", ["web", "android", "n64"])
+@pytest.mark.parametrize("target", ["web", "android"])
 @pytest.mark.parametrize("flags", [28, 29, 30, 31])
 def test_supported_linked_movie_passes_shared_gate(target, flags):
     assert not audit_model(linked_model(linkedFlags=flags), target)["findings"]
@@ -242,7 +232,7 @@ def test_retained_flash_runtime_is_supported_in_implemented_profiles():
     fixture = model(ink=8, kind=2)
     fixture["movies"][0]["members"][0]["flashRuntime"] = {"clips": []}
     fixture["approximations"] = [{"kind": "flash-runtime-retained", "implemented": True}]
-    for target in ("web", "android", "n64"):
+    for target in ("web", "android"):
         report = audit_model(fixture, target)
         assert not report["findings"]
         assert report["approximation_counts"] == {"flash-runtime-retained": 1}

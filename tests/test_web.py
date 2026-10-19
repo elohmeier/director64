@@ -60,37 +60,26 @@ def test_invalid_profiles_are_refused(tmp_path):
             web.web_profile(game)
 
 
-def test_packs_index_every_asset_and_hash_names_with_contents(tmp_path):
-    (tmp_path / "a.fdi").write_bytes(b"alpha")
-    (tmp_path / "b.fdi").write_bytes(b"be")
-    entry = web.pack({"b.fdi": tmp_path / "b.fdi", "a.fdi": tmp_path / "a.fdi"}, tmp_path / "x.bin")
-    assert entry["index"] == {"a.fdi": [0, 5], "b.fdi": [5, 2]}
-    assert (tmp_path / "x.bin").read_bytes() == b"alphabe"
-    assert entry["bytes"] == 7 and entry["count"] == 2
-    renamed = web.pack(
-        {"c.fdi": tmp_path / "a.fdi", "b.fdi": tmp_path / "b.fdi"}, tmp_path / "y.bin"
-    )
-    assert renamed["sha256"] != entry["sha256"]
-
-
-def test_sounds_are_served_under_their_cast_names(tmp_path):
-    root = tmp_path / "root"
-    game = replace(GameSpec.load("findus-workshop"), root=root)
-    (game.work / "director/images").mkdir(parents=True)
-    (game.work / "director/wav").mkdir(parents=True)
-    (game.work / "director/images/1.fdi").write_bytes(b"i")
-    (game.work / "director/wav/abc.wav").write_bytes(b"w")
-    images, audio = web.asset_files(game)
-    assert list(images) == ["1.fdi"] and list(audio) == ["abc.wav64"]
-
-
-def test_package_runtime_links_the_engine_and_adapter_but_no_game_data():
+def test_runtime_links_the_engine_package_loader_and_adapter_but_no_game_data():
     game = GameSpec.load("findus-workshop")
     command = web.compile_command(game, game.work / "web")
+    assert command[0] == "emcc" and "-Werror" in command
     assert "-DDIRECTOR64_PACKAGE" in command and "runtime/package/package.c" in command
+    for source in (
+        "platforms/web/web_runtime.c",
+        "runtime/director/director.c",
+        "runtime/lingo/lingo_runtime.c",
+        "games/findus-workshop/runtime/archive.c",
+    ):
+        assert source in command
     assert not any("/aot/c" in a or "_scene.c" in a or "registry.c" in a for a in command)
+    assert "-DDIRECTOR64_DIRECTOR_VERSION=6" in command
+    # A single-threaded module: static hosts cannot send cross-origin isolation headers.
+    assert not any("PTHREAD" in a or "SHARED_MEMORY" in a for a in command)
     exports = next(a for a in command if a.startswith("-sEXPORTED_FUNCTIONS="))
-    assert "_d64_load_package" in exports
+    assert "_d64_load_package" in exports and "_d64_rpc" in exports and "_d64_step" in exports
+    # The page's text box: which field a press opens, and the commit.
+    assert "_d64_text_field" in exports and "_d64_edit_text" in exports
 
 
 def test_abi_digest_covers_the_vocabulary_and_opcodes():
@@ -106,33 +95,36 @@ def test_abi_digest_covers_the_vocabulary_and_opcodes():
     assert "#define DIRECTOR64_ABI {0x" + expected[:1].hex() in header
 
 
-def test_compile_links_the_shared_engine_generated_tables_and_adapter():
-    game = GameSpec.load("findus-workshop")
-    command = web.compile_command(game, game.work / "web", linked=True)
-    assert command[0] == "emcc" and "-Werror" in command
-    for source in (
-        "platforms/web/web_runtime.c",
-        "runtime/director/director.c",
-        "runtime/lingo/lingo_runtime.c",
-        "games/findus-workshop/runtime/archive.c",
-    ):
-        assert source in command
-    assert "games/findus-workshop/runtime/director_replay.c" not in command
-    assert "-DDIRECTOR64_DIRECTOR_VERSION=6" in command
-    # A single-threaded module: Pages cannot send cross-origin isolation headers.
-    assert not any("PTHREAD" in a or "SHARED_MEMORY" in a for a in command)
-    exports = next(a for a in command if a.startswith("-sEXPORTED_FUNCTIONS="))
-    assert "_d64_rpc" in exports and "_d64_step" in exports
-    # The page's text box: which field a press opens, and the commit.
-    assert "_d64_text_field" in exports and "_d64_edit_text" in exports
-
-
 def test_probe_wrapper_runs_the_harness_over_the_site(tmp_path):
     game = replace(GameSpec.load("findus-workshop"), root=repository())
-    probe = web.write_probe(game, tmp_path)
+    site = tmp_path / "web"
+    probe = web.write_probe(game, site)
+    assert probe == tmp_path / "director-web-probe"
     text = probe.read_text()
     assert text.startswith("#!/bin/sh\n") and "platforms/web/node/probe.mjs" in text
-    assert str(tmp_path / "site") in text and probe.stat().st_mode & 0o111
+    assert str(site) in text and probe.stat().st_mode & 0o111
+
+
+def test_site_packs_store_deflated_images_inflated(tmp_path):
+    import zlib
+
+    raw = b"pixels" * 50
+    deflate = zlib.compressobj(9, zlib.DEFLATED, -15)
+    stored = b"D64Z" + len(raw).to_bytes(4, "big") + deflate.compress(raw) + deflate.flush()
+    source, assets = tmp_path / "game", tmp_path / "assets"
+    source.mkdir()
+    assets.mkdir()
+    (source / "images.bin").write_bytes(b"D64W" + stored)
+    (source / "images.json").write_text(
+        json.dumps({"a.fdi": [4, len(stored), 7], "w.fdi": [0, 4]})
+    )
+    entry = web.write_pack(source, "images", assets)
+    index = json.loads((assets / "images.json").read_text())
+    blob = (assets / "images.bin").read_bytes()
+    assert index == {"w.fdi": [0, 4], "a.fdi": [4, len(raw), 7]}
+    assert blob == b"D64W" + raw and entry["bytes"] == len(blob)
+    with pytest.raises(ValueError, match="length"):
+        web.inflated(b"D64Z" + (1).to_bytes(4, "big") + stored[8:])
 
 
 def test_toolchain_is_pinned_by_digest():
@@ -154,17 +146,6 @@ def test_profiles_carry_identity_and_policy_but_no_disc_content():
     assert entry["port"]["media_root"] == "POFMEDIA" and entry["save_files"][0] == "vakt1.txt"
     text = json.dumps(entry)
     assert "build/" not in text and "media/" not in text
-
-
-def test_the_development_mount_serves_local_builds_outside_the_site(tmp_path):
-    local = tmp_path / "local"
-    (local / "assets").mkdir(parents=True)
-    handler = type("H", (web.Handler,), {"local": {"game": local}})
-    probe = handler.__new__(handler)
-    probe.directory = str(tmp_path / "site")
-    assert probe.translate_path("/local/game/assets/images.bin") == str(local / "assets/images.bin")
-    assert probe.translate_path("/local/game/../../etc/passwd") == str(local / "etc/passwd")
-    assert probe.translate_path("/app.js").startswith(str(tmp_path / "site"))
 
 
 def test_notices_carry_the_license_and_every_text_they_cite():

@@ -39,7 +39,7 @@ def test_stale_or_modified_tools_rebuild_before_android_conversion(tmp_path, mon
     }
     (folder / "manifest.json").write_text(json.dumps(stamp))
     monkeypatch.setattr(web, "import_source_digest", lambda root: "current")
-    monkeypatch.setattr("director64.toolchain.container_engine", lambda: "unused")
+    monkeypatch.setattr(android, "container_engine", lambda: "unused")
     builds = []
     monkeypatch.setattr(
         web, "build_tools", lambda root, engine: builds.append(root) or {"revision": "rebuilt"}
@@ -54,7 +54,9 @@ def test_stale_or_modified_tools_rebuild_before_android_conversion(tmp_path, mon
 
 
 def test_apk_install_requires_current_source_and_untampered_build_receipt(tmp_path, monkeypatch):
-    game = SimpleNamespace(dist=tmp_path, slug="synthetic", source={"sha256": "disc"})
+    game = SimpleNamespace(
+        dist=tmp_path, slug="synthetic", source={"sha256": "disc"}, image_identity={}
+    )
     path = android.apk_path(game)
     path.write_bytes(b"APK")
     monkeypatch.setattr(android, "apk_input_digest", lambda game, abis: "current")
@@ -83,6 +85,7 @@ def test_failed_rebuild_invalidates_previous_install_receipt(tmp_path, monkeypat
     game = SimpleNamespace(
         root=tmp_path,
         dist=tmp_path,
+        work=tmp_path / "build",
         slug="synthetic",
         source={"sha256": "disc", "id": "source"},
         require_port=lambda: None,
@@ -111,6 +114,7 @@ def test_asset_reuse_checks_profile_exporter_source_and_pack_hashes(tmp_path, mo
         source={"sha256": "disc"},
         slug="synthetic",
         data={"port": {"director_version": 850}},
+        image_identity={},
     )
     profile = {"policy": {"stage_prescale": False}}
     monkeypatch.setattr(android, "converter_revision", lambda root: "converter")

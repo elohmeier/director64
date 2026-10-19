@@ -8,8 +8,8 @@ unsigned game_save_generation(void) { return archive.generation; }
 bool game_save_migrated(void) { return false; }
 bool game_read_file(const char *name, char *data, unsigned cap,
                     unsigned *length) {
-  // Preference and profile files come from FlashRAM; the read-only exercise
-  // databases ship on the ROM filesystem and remain platform reads.
+  // Preference and profile files come from the save image; the read-only
+  // exercise databases ship in the game package and remain platform reads.
   return archive_read(&archive, name, data, cap, length);
 }
 

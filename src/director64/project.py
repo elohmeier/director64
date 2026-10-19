@@ -22,6 +22,11 @@ def work_dir() -> str:
     return value
 
 
+def container_engine() -> str:
+    """DOCKER selects one executable, including a Docker-compatible wrapper."""
+    return os.environ.get("DOCKER") or "docker"
+
+
 def repository() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -103,6 +108,17 @@ class GameSpec:
     @property
     def media(self) -> Path:
         return self.root / "media" / self.slug / self.source["id"] / self.image["file"]
+
+    @property
+    def image_identity(self) -> dict:
+        """Distinguish repaired media while keeping the original edition/save
+        identity. Ordinary alternate rips have identical content, so they keep
+        the established cache format; a repair changes content and must
+        identify the selected image."""
+        if not self.source.get("repairs"):
+            return {}
+        image = self.image
+        return {"source_image": {key: image[key] for key in ("file", "sha256", "bytes")}}
 
     @property
     def dist(self) -> Path:

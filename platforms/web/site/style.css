@@ -72,14 +72,6 @@ progress { width: 100%; accent-color: var(--accent); }
 button:disabled { opacity: .5; cursor: default; }
 .diagnostics { font-family: ui-monospace, monospace; }
 
-/* The supported games on the home overlay. */
-.library { list-style: none; padding: 0; margin: 1rem 0 0; text-align: left; }
-.library li { display: grid; grid-template-columns: 1fr auto; gap: .15rem .75rem; padding: .5rem 0;
-  border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
-.library .game { font-weight: 600; }
-.library .status { grid-column: 1; font-size: .85em; opacity: .75; }
-.library .actions { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: .4rem; align-items: center; }
-.library .primary { font-size: inherit; padding: .3rem .9rem; }
 .print-frame { position: fixed; width: 0; height: 0; border: 0; visibility: hidden; }
 
 /* Notices over the stage, in fullscreen too. */

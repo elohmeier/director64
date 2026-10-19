@@ -24,6 +24,3 @@ media_root = "SPIEL"
 entry_movie = "PF3"
 launcher_movie = "PF3.DXR"
 native_compatibility = false
-rom_title = "Findus Geburtstag"
-rom_save_type = 80
-controller_count = 4

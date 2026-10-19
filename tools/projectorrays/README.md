@@ -5,10 +5,10 @@ This recovers bounded structures from `VWSC`, `VWLB` and
 `reference_verified` false. It does not resolve the source obligation ledger or
 qualify a source scene.
 
-`uv run --locked director64 assets --game <slug>` verifies/extracts the user's ISO, builds the native probe,
-and writes ignored results to `build/<game>/<source-id>/analysis/score-recovery`. The manifest
-records source and output hashes, native executable hash, implementation hashes and
-the exact parser extension commit. Labels keep their source bytes; no text encoding
+`uv run --locked director64 recover --game <slug>` verifies/extracts the user's disc
+image and writes ignored results to `build/<game>/<source-id>/analysis/score-recovery`
+with the Rust port of this decoder (below). The manifest records source and output
+hashes, implementation hashes and the exact parser extension commit. Labels keep their source bytes; no text encoding
 is assumed. Channel reconstruction includes a byte-validity mask, so absent initial
 values are not mistaken for proven zero-valued Director defaults.
 
@@ -27,8 +27,8 @@ now runs the Rust port, `compiler/src/convert/score.rs`, which reproduces this
 probe's JSON byte for byte and records itself as `director64-convert`. The optional
 `mise run projectorrays-build -- --upstream` also builds the native ProjectorRays CLI;
 it needs upstream's Boost headers, zlib and mpg123 development dependencies.
-Use ordinary `CXX`, `CPPFLAGS` and `LDFLAGS` for their local paths. The libdragon
-toolchain is unaffected. `PROJECTORRAYS_SOURCE` optionally selects a local upstream
+Use ordinary `CXX`, `CPPFLAGS` and `LDFLAGS` for their local paths.
+`PROJECTORRAYS_SOURCE` optionally selects a local upstream
 clone; otherwise the task checks the conventional sibling checkout, then the
 public pinned upstream repository.
 
@@ -67,7 +67,7 @@ facts, not copied implementation, and are pinned to ScummVM commit
   and [transition.cpp](https://github.com/scummvm/scummvm/blob/41ac2b31847622d0662d22c03fe6979e3b43cfbc/engines/director/castmember/transition.cpp):
   cast type 14 is a transition, with six bytes describing transition time, chunk
   size, transition type, flags and a big-endian duration. This classification
-  does not establish N64 transition rendering fidelity.
+  does not establish transition rendering fidelity.
 
 Malformed offsets, unsupported versions, invalid deltas and expansion-budget
 violations fail closed. `uv run --locked pytest tests/test_score_recovery.py` runs

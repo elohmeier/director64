@@ -10,7 +10,7 @@ final class Native {
 
   private Native() {}
 
-  /** Starts the game thread on the APK's assets; the save is the console's flash image. */
+  /** Starts the game thread on the APK's assets; the save is the 128 KiB save image. */
   static native void start(GameActivity activity, AssetManager assets, String savePath, float volume);
 
   static native void stop();
@@ -19,7 +19,7 @@ final class Native {
 
   static native void hold(int reason, boolean on);
 
-  /** One controller port as an N64 controller sample (runtime/interaction/input.h). */
+  /** One controller port as a controller sample (runtime/interaction/input.h). */
   static native void pad(int port, boolean connected, int buttons, int stickX, int stickY);
 
   /** The mouse in stage pixels; buttons as input.h bits (left A, right B). */

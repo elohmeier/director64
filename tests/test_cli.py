@@ -13,7 +13,7 @@ def test_module_help(module):
     )
     assert result.returncode == 0
     assert "usage:" in result.stdout
-    assert "doctor" in result.stdout
+    assert "android" in result.stdout
 
 
 @pytest.mark.parametrize("module", ["director64", "director64.cli"])

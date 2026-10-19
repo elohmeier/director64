@@ -5,14 +5,27 @@ import json
 import struct
 
 from director64.project import selected_game
+from director64.web import inflated
 
 from .full_journey import Replay
 from .full_regressions import member
 
 
+def converted_image(root, name):
+    """A stored image from the converted game's image pack (build/.../converted)."""
+    index = json.loads((root / "converted/images.json").read_text())
+    at, length = index[name][:2]
+    with (root / "converted/images.bin").open("rb") as pack:
+        pack.seek(at)
+        data = inflated(pack.read(length))
+    if data[:4] == b"D64W":
+        raise ValueError(f"{name} is packed as WebP; the cursor check reads stored FDI1")
+    return data
+
+
 def bitmap_expectation(root, image, mask):
     def pixels(m):
-        data = (root / "director/images" / m["asset"]).read_bytes()
+        data = converted_image(root, m["asset"])
         if data[:4] != b"FDI1" or len(data) != 32 + 2 * m["width"] * m["height"]:
             raise ValueError("cursor fixture is not the recovered monochrome FDI1")
         return struct.unpack(f">{m['width'] * m['height']}H", data[32:])
@@ -47,7 +60,7 @@ def bitmap_expectation(root, image, mask):
 
 def run(executable, output):
     game = selected_game()
-    model = json.loads((game.work / "director/model.json").read_text())
+    model = json.loads((game.work / "model.json").read_text())
     shared = next(m for m in model["movies"] if m["name"] == "CURSOR.CXT")
     members = {m["name"].casefold(): m for m in shared["members"]}
     expected = {}
@@ -117,7 +130,7 @@ def run(executable, output):
         replay.close()
     report = {
         "status": "passing",
-        "platform": "host-native",
+        "platform": "web-probe",
         "scenario": "source-cursors",
         "source_sha256": game.source["sha256"],
         "cursors": expected,

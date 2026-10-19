@@ -30,24 +30,28 @@ metadata binding and packaging, not a new transcode or original-player
 comparison. Source-free runtime and browser tests cover sound-only host
 requests, pause, seek, resume, exact end, stop time and voice cleanup.
 
-## Platform paths
+## Conversion and playback
 
-| Target | Import and playback |
+The web and Android players share one conversion
+(`platforms/android/export/export.mjs` driving
+`platforms/web/import/pipeline.mjs`). The Rust converter parses MPEG program
+streams and decodes Cinepak frames; the host's FFmpeg encodes each linked
+movie's picture as VP9 (profile 0, CRF 30 capped at 600 kbit/s, one coded
+frame per input frame) into an indexed pack, and its MPEG sound as WAV, or as
+Ogg Opus when the sound lasts eight seconds or more.
+
+| Target | Playback |
 | --- | --- |
-| Browser | The pinned MIT PL_MPEG decoder reads demultiplexed MPEG-1 and MP2; WebCodecs encodes VP8 and decodes the resulting indexed pack. |
-| Android | FFmpeg re-encodes clips to VP9 and sound to WAV/Opus; MediaCodec decodes the video. Each active video has an independent audio voice. |
-| N64 | The pinned SDK converts MPEG to seekable H.264. The shared D5/D8.5/D10 host opens the H.264 stream and aligned wav64 audio. |
-| Rendered Node probe | FFmpeg decodes the requested GOP from VP8/VP9 IVF or native Annex B H.264 packs and returns actual RGBA pixels. Unknown codecs and decoder failures stop the probe. |
+| Web player | WebCodecs `VideoDecoder` decodes the indexed pack; `AudioDecoder` decodes Opus sound. |
+| Android | MediaCodec decodes the video (`platforms/android/jni/video.c`); long Opus sounds decode in the background (`decode.c`). Each active video has an independent audio voice. |
+| Rendered Node probe | FFmpeg decodes the requested GOP from VP8/VP9 IVF or Annex B H.264 packs and returns actual RGBA pixels. Unknown codecs and decoder failures stop the probe. |
 
-The N64 MPEG conversion preserves authored geometry and frame rate. It checks
-the encoded frame count and rejects silent rescaling or dropped frames. This
-is decoder and conversion coverage, not a claim that every source resolution
-and frame rate meets real N64 memory or throughput limits. N64 hardware playback
-still needs separate qualification.
+The conversion preserves authored geometry and frame rate. It checks the
+encoded frame count and rejects silent rescaling or dropped frames.
 
 An indexed pack contains codec, width, height, and timestamp/key/offset/length
 records. The parser rejects invalid ranges and a stream without an initial
-keyframe. Native H.264 packs may store zero width and height: their SPS supplies
+keyframe. H.264 packs may store zero width and height: their SPS supplies
 the actual dimensions. Decoded images are bounded to 4096 pixels per axis.
 
 ## Timing and instances
@@ -76,24 +80,26 @@ Linked movies receive monotonically assigned instance identities. A parent
 and two children using score channel 1 therefore have three separate players,
 seek positions, and audio voices. Removing an instance closes its players;
 allocator address reuse cannot revive stale frames. Child pause and sound flags
-also reach the host. Android's eight-player and N64's configured player limits
-fail explicitly when exceeded.
+also reach the host. Android's eight-player limit fails explicitly when
+exceeded.
 
 ## Damage and validation
 
-PL_MPEG is pinned at `c871f2be022ece7ef4f64230b4fb8e1fb9eb6023`.
-Local changes are listed in [README.director64](../third_party/pl_mpeg/README.director64).
-Video slices are bounded at their next start code, half-pel motion reads include
-their neighboring pixels in bounds checks, and malformed slices increment a
-public corruption counter. Import rejects a nonzero counter. Initializing frame
+PL_MPEG, pinned at `c871f2be022ece7ef4f64230b4fb8e1fb9eb6023`, serves the
+MPEG decoder tests and the media-repair checks as an independent decoder
+(`platforms/web/tools/mpeg_tool.c`). Local changes are listed in
+[README.director64](../third_party/pl_mpeg/README.director64). Video slices are
+bounded at their next start code, half-pel motion reads include their
+neighboring pixels in bounds checks, and malformed slices increment a public
+corruption counter that the checks reject when nonzero. Initializing frame
 storage and restoring parser synchronization contain a failure; they do not
-qualify substituted pixels as a repair. Native MPEG conversion also runs a
-strict FFmpeg decode before transcoding; APK export uses the same strict
-error policy. Encoder process failures and source-iterator errors reject the
+qualify substituted pixels as a repair. The conversion runs FFmpeg with a
+strict error policy (`-xerror -err_detect explode`), so decoder concealment
+fails the export instead of passing damaged pictures through. Encoder process failures and source-iterator errors reject the
 export and release the subprocess instead of hanging on a broken input pipe.
 
 The recovered 159-stream corpus contains MPEG-1 video throughout, with 156 MP2
-audio streams and three silent streams. The strict browser conversion scan
+audio streams and three silent streams. The strict conversion scan
 passed 152 streams and rejected seven source files:
 
 - Five `VIDEO1` through `VIDEO5` files contain byte-identical video. Their final
@@ -140,11 +146,11 @@ timeline. Its 34 missing video slots and 65 missing MP2 slots understate the
 damage because additional pictures are concealed or depend on bad references.
 
 A separate local proof reconstructs each short clip's damaged B picture by
-holding its preceding P picture for 40 ms. Both the production PL_MPEG adapter
+holding its preceding P picture for 40 ms. Both the PL_MPEG adapter
 and independent FFmpeg frame hashes establish that the other 827 displayed
 pictures are unchanged. All packet metadata, timestamps and elementary audio
 bytes are retained; the replacement matches its preceding picture exactly.
-Strict FFmpeg video/audio decoding and browser importing accept the result.
+Strict FFmpeg video/audio decoding and the conversion accept the result.
 All five program-stream copies independently pass strict video/audio decoding,
 frame-hash comparison and packet/audio preservation checks.
 This qualifies a bounded reconstruction, not recovery of the original picture.
@@ -171,7 +177,7 @@ A subsequent public-archive search recovered an intact `VI_05_01` from a raw
 ISO in exactly the 1,583 previously identified foreign sectors; every other
 sector is identical. The recovered clip's SHA-256 is
 `5513bc95319ec238310f694f8ad52117814f66503fe76e12f6ef44cd2bde1ead`.
-Strict FFmpeg video/audio decoding and the production browser importer pass:
+Strict FFmpeg video/audio decoding and the conversion pass:
 3,533 displayed pictures, 5,412 MP2 frames and 141.32 seconds after the ordinary
 initial B-picture adjustment. This is replacement from an independent copy,
 without synthesized frames or sound. Only bounded source-image ranges were
@@ -202,7 +208,7 @@ depending on damaged references; the intact I picture between damaged runs
 survives. The program stream is remultiplexed and padded within the original
 file extent, preserving ISO/Joliet/HFS catalogs and all other files.
 
-Independent FFmpeg and production PL_MPEG checks establish exact retained
+Independent FFmpeg and PL_MPEG checks establish exact retained
 video pixels, reference-matching holds, unchanged original timestamps and
 byte-identical retained MP2 frames. Intact audio runs match FFmpeg's floating
 point decoder exactly. Integer decoders can differ by one PCM unit after
@@ -214,12 +220,12 @@ video/audio decoding, importer timeline and geometry, and the entire output
 image. Its receipt binds the recipe snapshot, original, changes and output.
 The ordinary importer accepts only catalogued hashes and still rejects the
 unrepaired damage. A present repaired image is preferred; its identity also
-invalidates conversion, native-build and APK caches when the selection changes.
-APK video uses the normal VP9 export pipeline. Device playback and complete
+invalidates conversion and APK caches when the selection changes.
+Repaired video goes through the normal VP9 conversion. Device playback and complete
 gameplay remain separate qualification steps.
 
 Source-free tests cover bounded damaged slices, immutable decoder input,
 half-pel bounds, host identity and lifecycle, audio flags, decoder errors, and
-generated VP8/H.264 frames across keyframe seeks and rewinds. Native and
-sanitizer tests, Android cross-builds, and N64 cross-compilation are distinct
-from original-projector comparisons and hardware playback.
+generated VP8/H.264 frames across keyframe seeks and rewinds. These, the
+sanitizer tests and Android cross-builds are distinct from original-projector
+comparisons and device playback.

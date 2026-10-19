@@ -1040,8 +1040,8 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
       *out = lv_num(id ? ((cast ? cast - 1 : 0) << 17) | (id & 65535) : 0);
       return true;
     }
-    // Fixed environment answers for the 8 MiB target; the memory monitor
-    // renders them, it never branches on them.
+    // Fixed environment answers (8 MiB of memory, 4 MiB free); the memory
+    // monitor renders them, it never branches on them.
     if (ln == LN_MEMORYSIZE) { *out = lv_num(8 * 1024 * 1024); return true; }
     if ((ln == LN_FREEBYTES) || (ln == LN_FREEBLOCK)) {
       *out = lv_num(4 * 1024 * 1024);
@@ -1741,7 +1741,7 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     *out = lv_num(frame_number);
     return true;
   }
-  // Memory preloading is a no-op: ROM assets stream on demand.
+  // Memory preloading is a no-op: package assets stream on demand.
   if ((ln == LN_PRELOAD) || (ln == LN_PRELOADMEMBER) ||
       (ln == LN_PRELOADCAST) || (ln == LN_PRELOADNETTHING)) {
     *out = lv_num(1);
@@ -2065,7 +2065,7 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     return true;
   }
   // Buddy API surface. The projector used it for preference INI files (the
-  // FlashRAM archive serves those), display management (the target renders
+  // save archive serves those), display management (the target renders
   // one fixed 800x600x32 mode, so switching code observes a satisfied
   // display) and shell dialogs (which answer as dismissed).
   // ActionScript methods on a Flash sprite's text field. setText decodes the
@@ -2387,7 +2387,7 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
   }
   if ((ln == LN_BAFILEEXISTS) && argc == 1) {
     const char *path = lv_cstr(r, a[0]);
-    // Converted movie files always ship on the ROM; navigation still fails
+    // Converted movie files always ship in the package; navigation still fails
     // loudly for a genuinely absent overlay. Preference files answer from
     // the archive.
     if (d10_ends_ci(path, ".dxr") || d10_ends_ci(path, ".dir") ||
@@ -2456,8 +2456,8 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     return true;
   }
   if (!strncmp(name, "fx_", 3) && argc >= 1) {
-    // FileXtra4 surface, truthful to the target: the ROM filesystem is
-    // complete and read-only, saves live in FlashRAM behind the archive, no
+    // FileXtra4 surface, truthful to the target: the packaged files are
+    // complete and read-only, saves live in the save image behind the archive, no
     // removable volumes exist, and native dialogs cannot open (authored
     // code treats an empty dialog result as user cancellation).
     if (ln == LN_FX_VOLUMESTOLIST) { *out = lv_list(r, 0, NULL, false); return true; }

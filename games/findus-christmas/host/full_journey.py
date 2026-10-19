@@ -7,6 +7,7 @@ import re
 import subprocess
 from contextlib import contextmanager
 
+from director64.probe import state_line
 from director64.project import selected_game
 
 
@@ -29,9 +30,9 @@ def session(executable, output, game):
         )
 
         def receive():
-            line = process.stdout.readline()
+            line = state_line(process.stdout)
             if not line:
-                raise ValueError(f"native process ended; see {output.with_suffix('.log')}")
+                raise ValueError(f"probe ended; see {output.with_suffix('.log')}")
             state = json.loads(line)
             states.append(state)
             if state["error"] or state["quit"] or state["script_errors"]:
@@ -130,7 +131,7 @@ def run(executable, output):
     }
     return {
         "status": "passing",
-        "platform": "host-native",
+        "platform": "web-probe",
         "source_sha256": game.source["sha256"],
         "scenarios": [
             "all-24-calendar-doors",

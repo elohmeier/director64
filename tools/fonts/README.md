@@ -1,8 +1,8 @@
 # Original Director fonts
 
 The converter recovers each embedded PFR1 font member into lossless cubic
-OpenType (`compiler/src/convert/font.rs`), natively and in the browser
-importer alike. It keeps the source PFR, the decoded outlines, the OpenType
+OpenType (`compiler/src/convert/font.rs`), natively and as WebAssembly in
+the conversion for the Android TV and web players alike. It keeps the source PFR, the decoded outlines, the OpenType
 font and a report with source, decoder, writer and output hashes. Generated
 commercial font data stays under ignored `build/`.
 
@@ -36,8 +36,9 @@ can differ.
 
 The converter's compile stage (`compiler/src/convert/compile.rs`) resolves
 source names to recovered fonts and manifests all required sizes.
-`full_assets.py` passes each size through the pinned SDK's `mkfont --range all`; packed cache identity includes original OpenType hash,
-size/options, SDK revision and container identity. The renderer receives the
+Each size passes through libdragon's `mkfont --range all`, compiled to
+WebAssembly from the pinned submodule as one of the converter's tools; the
+converter's tool manifest records its hash. The renderer receives the
 original ascent, descent, line height, alignment and color. `font-audit.json`
 records score and literal-name references; absence of those references does
 not prove arbitrary computed references unreachable.
@@ -46,5 +47,5 @@ not prove arbitrary computed references unreachable.
 produces static PNG fields and a separate accented-character specimen using
 the same pinned FreeType source as `mkfont`. These are host raster evidence,
 not original-projector comparisons. PFR hint instructions are retained in the
-original payload but are not exported into CFF. FreeType rasterization and the
-N64 font atlas's coverage format can differ from the original text Xtra.
+original payload but are not exported into CFF. FreeType rasterization can differ
+from the original text Xtra.

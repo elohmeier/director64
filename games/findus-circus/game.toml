@@ -23,6 +23,3 @@ media_root = "PF2"
 entry_movie = "PF2"
 launcher_movie = "PF2.DXR"
 native_compatibility = true
-rom_title = "Findus Zirkus"
-rom_save_type = 80
-controller_count = 4

@@ -7,7 +7,7 @@
 enum { BITMAP_TILE_SIZE = 32, BITMAP_TEXTURE_LIMIT = 1024 };
 
 // Source tile interval intersecting an axis-aligned destination and viewport.
-// Keep complete edge tiles: their original UVs and the RDP scissor do the crop.
+// Keep complete edge tiles; clipping to the viewport does the crop.
 static inline void bitmap_visible_tiles(unsigned size, int start, int end,
                                         unsigned viewport, unsigned *first,
                                         unsigned *limit) {
@@ -29,12 +29,10 @@ static inline bool bitmap_needs_tiles(unsigned width, unsigned height) {
   return width > BITMAP_TEXTURE_LIMIT || height > BITMAP_TEXTURE_LIMIT;
 }
 
-// Tile-major storage keeps every upload's dimensions, stride and UVs within
-// RDP limits. Partial edge tiles are padded; all tile bases are 8-byte aligned.
-// The converter stores images past the limit in this order, so the console
-// never rearranges one: repacking a station pavement in place cost about
-// 460 ms of a frame, and the cache reloads it each time the scene scrolls
-// back to it.
+// Images past BITMAP_TEXTURE_LIMIT are stored tile-major in 32x32 tiles.
+// Partial edge tiles are padded; all tile bases are 8-byte aligned. The
+// converter stores them in this order, so the runtime never rearranges one;
+// readers index pixels through bitmap_tile_index.
 static inline uint64_t bitmap_tile_pixels(unsigned width, unsigned height) {
   return ((uint64_t)width + 31) / 32 * (((uint64_t)height + 31) / 32) * 1024;
 }

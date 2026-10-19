@@ -35,16 +35,11 @@
 #endif
 #ifndef LV_HEAP_BYTES
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-#if defined(DIRECTOR64_N64) && DIRECTOR64_N64
-// Keep room for the stage, overlays and media in 8 MiB RDRAM. Hosted ports
-// retain the larger pool needed by Circus's 148 KB parsed lip-sync table.
-#define LV_HEAP_BYTES (1024u * 1024u)
-#else
+// Circus's parsed lip-sync table alone is 148 KB.
 #define LV_HEAP_BYTES (4096u * 1024u)
-#endif
 #elif DG_D10
 // The D10 main screen peaks past 320 KiB; overruns fail visibly, never
-// silently, and the console budget covers this after the plane-pool removal.
+// silently.
 #define LV_HEAP_BYTES (384u * 1024u)
 #else
 #define LV_HEAP_BYTES (512u * 1024u)
@@ -59,11 +54,7 @@
 #elif DG_D10
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
 #ifndef LV_OBJECTS
-#if defined(DIRECTOR64_N64) && DIRECTOR64_N64
-#define LV_OBJECTS 8192
-#else
 #define LV_OBJECTS 32768
-#endif
 #endif
 #else
 #ifndef LV_OBJECTS
@@ -146,9 +137,8 @@ typedef enum {
   LV_AVM_NULL
 #endif
 } lv_type_t;
-// A value is one 64-bit word, returned in a register: the o64 ABI returns
-// any struct through memory, which put the C stack at the top of the
-// console's cache-miss profile while a value was a 16-byte struct. Handles
+// A value is one 64-bit word, so it passes and returns in registers rather
+// than through memory as a struct would. Handles
 // and integers are boxed with a zero top half, the type in bits 32..47 and
 // a 32-bit id or integer below, so the all-zero word is VOID and zeroed
 // memory reads as VOID values. A float is its IEEE double with 2^49 added
@@ -298,8 +288,7 @@ typedef struct {
 // What a by-name call from one site resolved to. Keyed by the pooled
 // name's address and the calling handler, so a hit is three word compares
 // and no string compare; the generation retires every entry when an
-// overlay comes or goes. Sized to the bytes the old name-keyed set took,
-// so nothing after it in the runtime moves in the data cache.
+// overlay comes or goes. Sized to the bytes the old name-keyed set took.
 typedef struct {
   const char *name;
   const lv_handler_t *caller, *handler; // handler NULL: resolved to nothing
@@ -307,7 +296,7 @@ typedef struct {
   uint32_t generation;
   uint8_t valid, self_void;
 } lv_call_cache_t;
-// The old table's bytes on the console, where the runtime's offsets are tuned.
+// The old table's bytes; the size is historical.
 enum { LV_CALL_BYTES = 4864, LV_CALL_SLOTS = LV_CALL_BYTES / sizeof(lv_call_cache_t) };
 // Inactive embedded-movie interpreters share this heap. Their suspended
 // roots and stacks remain visible to both garbage collection and resources.
@@ -317,10 +306,8 @@ typedef struct lv_root_span {
   unsigned count;
 } lv_root_span_t;
 struct lv_runtime {
-  // The scalars every interpreter step reads or writes, in the structure's
-  // first cache lines. They used to sit a megabyte apart at the end of it,
-  // on four different lines that the direct-mapped cache evicted between
-  // steps (measured with the emulator's miss profile, 2026-09-26).
+  // The scalars every interpreter step reads or writes, kept together at the
+  // start of the structure.
   unsigned depth;
   uint32_t steps;
   unsigned allocations_since_gc;
@@ -362,9 +349,7 @@ struct lv_runtime {
   unsigned script_count;
   unsigned char item_delimiter;
   // The frames, then the slots every frame's locals and temps are cut from.
-  // The runtime is placed at a fixed offset into the data cache's period
-  // (platforms/n64/director_main.c), so where these land in the cache is
-  // decided here and measured with tools/cache-profile.
+  // Field order is historical; no layout constraint remains.
   lv_frame_t frames[LV_FRAMES];
   lv_t stack[LV_STACK_SLOTS];
   lv_object_t objects[LV_OBJECTS];
@@ -373,9 +358,8 @@ struct lv_runtime {
 #endif
 #if DG_EXTENDED
   // The dynamic symbols' hash slots. The extended-D6 profile keeps this
-  // kilobyte here, where the symbol cache it replaced was measured; every
-  // other profile appends it below so that adding it moves none of the
-  // offsets above.
+  // kilobyte here, where the symbol cache it replaced sat; every other
+  // profile appends it below.
   uint16_t dynamic_symbol_slot[LV_DYNAMIC_SYMBOL_SLOTS];
 #endif
   _Alignas(lv_t) uint8_t heap[LV_HEAP_BYTES];
@@ -394,14 +378,14 @@ struct lv_runtime {
   uint32_t script_error_count;
   char error[160];
   char last_script_error[160];
-  // Appended rather than grouped with the other tables: the offsets above
-  // are tuned against a direct-mapped 8 KiB data cache.
+  // Appended rather than grouped with the other tables; the placement is
+  // historical.
 #if !DG_EXTENDED
   uint16_t dynamic_symbol_slot[LV_DYNAMIC_SYMBOL_SLOTS];
 #endif
   // Global slots by folded name hash (index + 1, 0 empty): the dynamic
-  // paths (do, value) look globals up by name, and a walk over hundreds
-  // of names per lookup showed in the console's miss profile.
+  // paths (do, value) look globals up by name, and this spares them a walk
+  // over hundreds of names per lookup.
   uint16_t global_slots[2048];
   // The symbols interned at run time, behind the converter's table: slot
   // holds index + 1 (0 empty), offsets point into the text arena.

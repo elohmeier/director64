@@ -1,5 +1,5 @@
-/* games/loewenzahn-1/host/print.typ as print CSS: A4, the same margins,
-   sizes and artwork frame; Liberation Sans where installed. */
+/* Löwenzahn's print documents: A4 with fixed margins, type sizes and an
+   artwork frame; Liberation Sans where installed. */
 @page { size: A4; margin: 50pt 50pt 40pt 60pt; }
 html, body { margin: 0; background: #fff; color: #000; }
 body { font: 12pt/16pt "Liberation Sans", Arial, Helvetica, sans-serif; position: relative; }

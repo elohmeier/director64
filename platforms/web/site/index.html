@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- The page talks to its own origin only: a disc image and its conversion
-     never leave the machine. WebAssembly compilation is the one exception to
-     script-src 'self'. -->
+<!-- The page talks to its own origin only. WebAssembly compilation is the
+     one exception to script-src 'self'. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; img-src 'self' blob: data:; style-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
 <title>Director64</title>
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="style.css">
 <script type="module" src="app.js"></script>
 </head>
@@ -68,7 +68,6 @@
           <p class="hint" data-text="controls.mouse"></p>
           <p class="hint" data-text="controls.pad"></p>
         </section>
-        <button id="menu-library" type="button" data-text="button.library" hidden></button>
       </div>
     </div>
     <div id="overlay" class="overlay">
@@ -77,12 +76,8 @@
         <p id="overlay-text" class="text"></p>
         <progress id="progress" max="1" value="0" hidden></progress>
         <p id="overlay-detail" class="detail"></p>
-        <ul id="library" class="library" hidden></ul>
         <div class="buttons">
           <button id="start" type="button" class="primary" data-text="button.play" hidden></button>
-          <label id="choose" class="file primary" tabindex="0" hidden><span data-text="button.choose"></span><input id="disc-input" type="file" accept=".iso,.img,.bin,.zip,application/x-iso9660-image,application/zip,application/octet-stream"></label>
-          <button id="cancel" type="button" data-text="button.cancel" hidden></button>
-          <button id="library-button" type="button" data-text="button.library" hidden></button>
           <button id="reload" type="button" data-text="button.reload" hidden></button>
           <button id="restore" type="button" data-text="button.restore" hidden></button>
         </div>

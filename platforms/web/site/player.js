@@ -1,5 +1,5 @@
 // The player: runs a game package on the shared engine's Wasm runtime at the
-// console's 60 Hz service clock, presents its composited stage, plays its
+// runtime's 60 Hz service clock, presents its composited stage, plays its
 // sounds, reads the mouse, keyboard and controllers, and keeps its saves
 // durable in the origin-private file system.
 import {AudioEngine} from "./audio.js";
@@ -24,9 +24,8 @@ const MAC_KEYS = {
   Backspace: 51, Escape: 53, NumpadEnter: 76, Home: 115, PageUp: 116, Delete: 117, End: 119,
   PageDown: 121, ArrowLeft: 123, ArrowRight: 124, ArrowDown: 125, ArrowUp: 126,
 };
-// The console's catch-up rule (platforms/n64/director_main.c): at most four
-// ticks per pass and twelve ticks of backlog; time beyond that is dropped
-// rather than rushed through.
+// The catch-up rule (as jni/main.c): at most four ticks per pass and twelve
+// ticks of backlog; time beyond that is dropped rather than rushed through.
 const MAX_STEPS = 4, BACKLOG_TICKS = 12;
 
 function packLookup({blob, index}) {
@@ -35,28 +34,8 @@ function packLookup({blob, index}) {
     return entry ? blob.subarray(entry[0], entry[0] + entry[1]) : null;
   };
 }
-// Imported images are stored deflated ("D64Z", compiler/src/convert/files.rs)
-// and inflated as the runtime loads them. It asks for an image's length and
-// then its bytes, so the last one inflated is kept.
-function inflatingLookup(lookup, converter) {
-  let last = null, lastBytes = null;
-  return (name) => {
-    if (name === last) return lastBytes;
-    const bytes = lookup(name);
-    last = name;
-    lastBytes = bytes && converter ? converter.inflate(bytes) : bytes;
-    return lastBytes;
-  };
-}
-function deflated(pack) {
-  const first = Object.values(pack.index)[0];
-  const b = first && pack.blob.subarray(first[0], first[0] + 4);
-  return !!b && b[0] === 0x44 && b[1] === 0x36 && b[2] === 0x34 && b[3] === 0x5a;
-}
-
-// Text without an authored style prints in the console's builtin monospace
-// font, monogram (CC0), at the size whose ascent the console's atlas records
-// (11 px, 13 px lines). A styled member (D7+ and extended D6) sets in the
+// Text without an authored style prints in the builtin monospace font,
+// monogram (CC0), at 11 px ascent and 13 px lines, on or off per pixel. A styled member (D7+ and extended D6) sets in the
 // game's own font, recovered from the disc or the port's substitute, at its
 // authored point size, alignment, ascent and line height.
 export async function textRasterizer(fonts) {
@@ -141,7 +120,7 @@ export async function textRasterizer(fonts) {
     const pixels = scratch.getImageData(0, 0, width, height).data;
     const coverage = new Uint8Array(width * height);
     if (!style) {
-      // A pixel font: coverage is on or off, as the console's 1-bit atlas is.
+      // A pixel font: coverage is on or off.
       for (let i = 0; i < coverage.length; i++) coverage[i] = pixels[i * 4 + 3] >= 128 ? 255 : 0;
     } else {
       for (let i = 0; i < coverage.length; i++) coverage[i] = pixels[i * 4 + 3];
@@ -226,12 +205,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     if (detail.name === "volume" || detail.name === "muted")
       audio.setVolume(settings.get("volume"), settings.get("muted"));
   });
-  // The converter's own inflate, from the importer's module.
-  const converter = deflated(game.images)
-    ? await (await import("./import/convert.mjs")).loadConverter(
-      new Uint8Array(await (await fetch("import/convert.wasm")).arrayBuffer()))
-    : null;
-  const images = inflatingLookup(packLookup(game.images), converter);
+  const images = packLookup(game.images);
   const streams = game.streams ?? {index: {}, blob: new Uint8Array()};
   const videos = new VideoPlayers(packLookup(game.video ?? {index: {}, blob: new Uint8Array()}), audio);
   const printing = packLookup(game.print ?? {index: {}, blob: new Uint8Array()});
@@ -390,10 +364,9 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   }
 
   // ---- Text entry: a box over the editable field the player pressed ----
-  // The console opens its on-screen keyboard there and pauses the game until
-  // Start commits the text (platforms/n64/text_input.c). The page does the
-  // same with the real keyboard, and shows its own on-screen keyboard to a
-  // controller. Field text is windows-1252: ASCII everywhere, German letters
+  // The page opens a text box there and holds the game until the text is
+  // committed or cancelled: typed on the real keyboard, or on the page's own
+  // on-screen keyboard from a controller. Field text is windows-1252: ASCII everywhere, German letters
   // on Director 10 (dg_edit_text, which the extended families have).
   const box = $("text-entry");
   const german = profile.port.director_version >= 1000;
@@ -512,9 +485,9 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   window.addEventListener("keydown", unlockAudio);
 
   // ---- Printing: the browser's print dialog for the game's print pages ----
-  // The console shows a QR link to the document and resumes on B
+  // The game holds while its print page is up and resumes on B
   // (games/loewenzahn-1/runtime/printing.c); the page prints the document
-  // itself and then gives the same dismissal: a neutral sample, B, neutral.
+  // itself and then gives that dismissal: a neutral sample, B, neutral.
   let printed = 0;
   const injected = [];
   const artwork = new Map();
@@ -582,10 +555,10 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     videos.closeAll();
     audio.stopAll();
     if (status === 2) {
-      overlay({heading: t("game.ended"), buttons: ["library"]});
+      overlay({heading: t("game.ended"), buttons: ["reload"]});
     } else {
       overlay({heading: t("game.stopped"), text: error,
-        detail: profile.save_files.length ? t("game.savesKept") : "", buttons: ["library"], error: true});
+        detail: profile.save_files.length ? t("game.savesKept") : "", buttons: ["reload"], error: true});
     }
   }
   function tick(now) {
@@ -680,7 +653,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   const error = module.UTF8ToString(module._d64_error());
   if (error) {
     overlay({heading: t("game.stopped"), text: error, error: true,
-      buttons: backup ? ["restore", "library"] : ["library"]});
+      buttons: backup ? ["restore", "reload"] : ["reload"]});
     return null;
   }
   if (backup) await saves.discardBackup(); // the imported save loaded

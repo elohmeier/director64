@@ -29,10 +29,10 @@ Source-free native tests cover interpolation, fade replacement, explicit
 volume changes, legacy tick units and dispatch. Browser audio tests cover
 loop release during playback, pause and asynchronous decoding, including the
 release tail. These checks do not establish sample-exact behavior of the
-original mixer or N64 hardware timing.
+original mixer or the timing of a playback device.
 
 Compressed MP3 cast sounds are decoded in the shared Rust converter with
-Symphonia 0.5.5, including browser imports. Existing decoded PCM takes
+Symphonia 0.5.5. Existing decoded PCM takes
 precedence when both representations are present. The decoder validates every
 Layer III frame boundary before decoding; it accepts bounded ID3 metadata and
 zero allocation padding, and rejects incomplete frames and format changes.
@@ -54,7 +54,7 @@ Four original-projector controls report 1,332, 1,018, 1,227 and 417 ms,
 matching decoded lengths of 58,752, 44,928, 54,144 and 18,432 frames at
 44,100 Hz (the second is stereo). These checks used Director 8.5.1r104
 under Wine 8; normalized MP3 decoding also agrees with strict FFmpeg to
-within one PCM unit. They do not establish hardware audio timing.
+within one PCM unit. They do not establish device audio timing.
 
 Flash stream sound is decoded as one continuous PCM stream so MP3 reservoir
 dependencies cross frame blocks. Authored seek offsets and initial latency

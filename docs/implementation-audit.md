@@ -35,8 +35,8 @@ These contracts follow Macromedia's
 [MX2004 Using Director, p.202](https://dit.uoi.gr/files/director_mx_2004using_director_compressed-151-350.pdf)
 and are covered by focused tests against recovered record categories. They
 are distinct from an original-projector comparison of every imported film.
-The browser has its own bounded MPEG decoder; Android continues to transcode
-video to VP9 and audio to WAV/Opus. Missing or failed audio/video decoding
+The shared conversion that both the Android and web players use transcodes
+video, including MPEG clips, to VP9 and audio to WAV/Opus with FFmpeg. Missing or failed audio/video decoding
 now reaches the player error UI and rendered probes.
 
 Film references now retain each archive's `ccl ` cast relocation table.
@@ -60,7 +60,7 @@ Retail texture pixels still come from the selected engine's resources.
 
 The repair validation converted fourteen recovered corpora containing 702 movie
 files and serialized all fourteen code/scene packages in format 9. Shared
-requirements passed for Web, Android and N64 after the normal D5 media
+requirements passed for Web and Android after the normal D5 media
 postprocessor. Four representative Wasm runtimes compiled. Fresh Android
 exports then produced twelve complete ARM32 APKs, including converted media;
 their embedded pack hashes and build receipts were verified. The two remaining
@@ -75,9 +75,8 @@ success does not certify those external streams or a complete playthrough.
 These implementations are not a full-game qualification. Arbitrary AVM1,
 unsupported SWF tags/effects and damaged source streams remain explicit
 requirements. Rich-text rasterization
-does not implement arbitrary rich-text editing. N64 syntax/build evidence,
-software pixels, Wine projector observations and hardware results must stay
-distinct. The new failure gates expose these gaps; they do not implement
+does not implement arbitrary rich-text editing. Software pixels, Wine
+projector observations and device results must stay distinct. The new failure gates expose these gaps; they do not implement
 them or turn a passing startup into proof that every activity works.
 
 The subsequent [performance and correctness follow-up](performance-audit.md)
@@ -106,10 +105,9 @@ again before recording success, preventing mixed or failed builds from
 certifying stale outputs.
 Both Python module entrypoints now execute the command line and propagate
 argument failures; invoking `python -m director64.cli` previously returned
-success without doing any work. N64 builds also validate their runtime memory
-reservation, and emulator capture gates reject script errors and CPU exceptions.
+success without doing any work.
 Pacing assertions require enough measured intervals to judge their sustained
-budget: an empty, partial or historical log without guest timing cannot pass.
+budget: an empty, partial or historical log without device timing cannot pass.
 Historical logs remain readable for diagnostics. Android conversion caches
 verify their tools, policy and asset hashes, and installation rejects APKs
 whose build receipts no longer match the current source inputs.
@@ -135,8 +133,8 @@ frames before treating their success as visual evidence.
 
 This baseline covers revision `675811f` on 2026-10-18, fourteen existing local
 recovered corpora, both renderer implementations, and fresh host diagnostic
-executions. Runtime behavior was not changed by that audit. Original-projector comparisons,
-N64 emulator captures and hardware validation remain separate work; the game
+executions. Runtime behavior was not changed by that audit. Original-projector
+comparisons and device validation remain separate work; the game
 locations below identify authored requirements, not verified player routes.
 
 The local ScummVM checkout was clean on `master` at
@@ -160,13 +158,13 @@ The baseline result was 40 mismatches across 41 checks: 11/11 for D8, 15/15
 for D10, and 14/15 for D8.5. These are repeated checks of the defect categories
 below, not forty separate bugs. The D8.5 shape-opacity check passes. Exit 1 is
 intentional while mismatches remain. The probe uses the software compositor
-at an unscaled stage size; it does not execute the N64 renderer.
+at an unscaled stage size.
 
 Run a conservative preflight on an existing normalized model:
 
 ```sh
 uv run --locked python -m director64.audit "$MODEL" --target web --strict
-# --target android or --target n64 selects the other capability sets.
+# --target android selects the Android capability set.
 ```
 
 It reports unsupported bitmap inks, linked movies, unresolved member counts,
@@ -191,9 +189,7 @@ pass with `uv run --locked pytest tests/test_visual_audit.py`.
 
 Priority P1. The bitmap branch of
 [the software compositor](../platforms/web/compositor.c) rejects inks outside
-its small allowlist with `unsupported native bitmap ink`. The
-[N64 renderer](../platforms/n64/director_main.c) is narrower still: it also
-rejects inks 1, 5 and 35, which the software compositor implements.
+its small allowlist with `unsupported native bitmap ink`.
 
 The synthetic probe confirms renderer failure for each of 2, 4, 7, 33, 40
 and 41. Recovered score records contain the following requirements:
@@ -244,7 +240,7 @@ must pass before qualifying painting, photo or puzzle activities.
 Priority P1 for scrolling, P2 for style differences. The text branch in
 [compositor.c](../platforms/web/compositor.c) reads changed text and color,
 but never reads `field_scroll`, `field_fonts`, or `field_text_changed` when
-choosing the insertion style. The N64 branch does read these fields.
+choosing the insertion style.
 
 The probe confirms that setting `scrollTop` updates runtime state but leaves
 the displayed row unchanged. Replacing text also keeps a 12-point original
@@ -261,7 +257,7 @@ and apply the same scroll/style transformation to text hit testing.
 ### 4 Translucent shapes become opaque outside the D8.5 software profile
 
 Priority P1. `fill_shape` blends only under `DIRECTOR64_D85`; other software
-profiles call an opaque fill. N64 uses an opaque RDP fill as well. The
+profiles call an opaque fill. The
 synthetic 50-percent red rectangle over blue produces red 255 instead of
 approximately 127 in D8 and D10; D8.5 correctly produces 127.
 
@@ -387,9 +383,9 @@ can represent missing animation layers. A blanket failure on every count
 would conflate these cases. Audit each exception against the live rendering
 path, and retain exact scope and a regression test for accepted cases.
 
-The browser importer also lacks MPEG-1 decoding for Löwenzahn 8's DirectMedia
-clips; Android's FFmpeg export provides a different path. This documented
-platform gap needs to remain visible in qualification results.
+At the baseline the browser importer lacked MPEG-1 decoding for Löwenzahn 8's
+DirectMedia clips while Android's FFmpeg export decoded them. Both players now
+use the FFmpeg conversion, which closes that platform gap.
 
 ## Make failures visible before release
 

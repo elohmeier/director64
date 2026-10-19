@@ -1,8 +1,8 @@
-// Gamepads as the console's controllers. Each connected pad becomes one of
-// the four ports, reported to the runtime as an N64 controller sample (input.h
-// buttons, stick in the console's range), so cursors, mouse ownership and
-// every game's controller layer behave as on the console. Menus and the
-// on-screen keyboard read the same pads as navigation actions instead.
+// Gamepads as the runtime's controllers. Each connected pad becomes one of
+// the four ports, reported to the runtime as a controller sample (input.h
+// buttons, stick about ±80), so cursors, mouse ownership and every game's
+// controller layer behave as in the Android player. Menus and the on-screen keyboard
+// read the same pads as navigation actions instead.
 //
 // Indices follow the Gamepad API's standard mapping, which Chrome applies to
 // a DualShock 4 or DualSense on Linux, Windows and macOS.
@@ -25,7 +25,7 @@ const MAPPED = [
 ];
 // A worn DualShock stick rests up to about a tenth off centre.
 export const DEAD_ZONE = 0.12;
-// The console's stick reaches about ±80; input.c ignores ±8 and moves the
+// The sample's stick reaches about ±80; input.c ignores ±8 and moves the
 // cursor 0.11 px per unit and tick, so full deflection is about 530 px/s.
 const STICK_MIN = 9, STICK_MAX = 80;
 // L1 held: fine movement, for small hotspots.
@@ -38,7 +38,7 @@ const down = (pad, index) => {
   return !!button && (button.pressed || button.value > 0.5);
 };
 
-// A stick in the console's units: x right, y up. Radial dead zone, then a
+// A stick in the sample's units: x right, y up. Radial dead zone, then a
 // gentle curve so small deflections stay precise.
 export function consoleStick(x, y, scale = 1) {
   const r = Math.hypot(x, y);
@@ -48,7 +48,7 @@ export function consoleStick(x, y, scale = 1) {
   return [Math.round((x / r) * magnitude) || 0, Math.round((-y / r) * magnitude) || 0];
 }
 
-// One pad as a console controller sample. The right stick stands in for the
+// One pad as a controller sample. The right stick stands in for the
 // C buttons (Mucklas steers with them).
 export function consoleSample(pad) {
   let buttons = 0;
@@ -94,7 +94,7 @@ export class Gamepads extends EventTarget {
     this.actions = [];
     this.held = new Map(); // pad index -> Map(action -> when it last fired)
     this.ignored = new Map(); // pad index -> actions to ignore until released
-    this.masked = new Map(); // pad index -> console buttons to ignore until released
+    this.masked = new Map(); // pad index -> input.h buttons to ignore until released
     this.known = new Set();
   }
   pads() {

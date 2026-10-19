@@ -1,15 +1,12 @@
-"""Build the browser player: a static site that imports a game from the
-user's own disc image and plays it (docs/web.md, docs/web-roadmap.md W1-W4).
+"""The standalone web player: one game, converted from the user's own disc
+image, as a static site (docs/web.md).
 
-The site under build/web/site/ is source-free. It holds the engine as a
-per-profile WebAssembly runtime, the converter (the importer bundle, the Rust
-converter module, the score decoder and ProjectorRays), the supported game
-profiles and notices; converting and playing happen in the browser, and
-nothing of a disc is served or uploaded. When the game has been converted
-locally as well, the build also writes that package and its asset packs under
-build/<game>/<source>/web/ for development and the parity harness; the
-development server offers them at /local/, and they are never part of the
-site.
+    director64 web --game SLUG [--serve]   dist/<slug>/<source>/web/
+
+The game is converted as for its Android TV APK (android.convert); the engine
+is the same runtime built with Emscripten, and the page is the player under
+platforms/web/site. Like an APK, the site contains the converted game and must
+not be redistributed.
 """
 
 from __future__ import annotations
@@ -22,14 +19,13 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tomllib
+import zlib
 from pathlib import Path
 
-from .project import GameSpec
+from .project import GameSpec, container_engine
 
-# Emscripten, pinned like the N64 SDK image: the tag names the release and
-# the digest is what runs.
+# Emscripten, pinned: the tag names the release and the digest is what runs.
 EMSDK_IMAGE = (
     "docker.io/emscripten/emsdk:6.0.10"
     "@sha256:e077d54e2b8970575ebc4f185ac1de0b95c05f2b266134d4ba27449af7aebf65"
@@ -71,16 +67,15 @@ EXPORTS = (
     "d64_pointer_player",
     "d64_step_pads",
     "d64_render_pads",
+    "d64_load_package",
+    "d64_package_error",
 )
-PACKAGE_EXPORTS = ("d64_load_package", "d64_package_error")
-# The asset packs a game plays from (platforms/web/site/cache.js PACKS).
+# The asset packs a game plays from.
 PACKS = ("images", "audio", "fonts", "streams", "data", "video", "print")
-AOT = Path("compiler/target/release/director64-aot")
 SITE_FILES = (
     "index.html",
     "app.js",
     "player.js",
-    "cache.js",
     "ui.js",
     "audio.js",
     "flash-audio.js",
@@ -95,7 +90,7 @@ SITE_FILES = (
     "print.html",
     "print.css",
 )
-# CC0 (datagoblin): the libdragon builtin debug font the console prints with.
+# CC0 (datagoblin): the builtin font unstyled text prints with.
 FONT = Path("third_party/libdragon/examples/fontgallery/assets/monogram.ttf")
 PARSER = Path("node_modules/projectorrays/dist")
 PARSER_WASM_SHA256 = "e4d7ab15a9cb20586d0e5afc54ad4d48412254d98b78a0c834b5adc8e2e3983e"
@@ -171,9 +166,13 @@ def webp_decoder_sources(root: Path) -> list[str]:
     return found
 
 
-def sources(game: GameSpec, linked: bool = False) -> list[str]:
-    work = game.work.relative_to(game.root).as_posix()
-    runtime = [
+def sources(game: GameSpec) -> list[str]:
+    adapter = sorted(
+        p.relative_to(game.root).as_posix()
+        for p in (game.directory / "runtime").glob("*.c")
+        if p.name != "director_replay.c"
+    )
+    return [
         "platforms/web/web_main.c",
         "platforms/web/web_runtime.c",
         "platforms/web/compositor.c",
@@ -184,26 +183,15 @@ def sources(game: GameSpec, linked: bool = False) -> list[str]:
         "runtime/director/shape.c",
         "runtime/interaction/input.c",
         "runtime/interaction/pointer.c",
+        "runtime/package/package.c",
+        *adapter,
     ]
-    adapter = sorted(
-        p.relative_to(game.root).as_posix()
-        for p in (game.directory / "runtime").glob("*.c")
-        if p.name != "director_replay.c"
-    )
-    if not linked:
-        return [*runtime, "runtime/package/package.c", *adapter]
-    generated = sorted(
-        p.relative_to(game.root).as_posix()
-        for pattern in ("aot/c/*.c", "director/c/*_scene.c")
-        for p in game.work.glob(pattern)
-    )
-    return [*runtime, *adapter, *generated, f"{work}/director/c/registry.c"]
 
 
-def compile_command(game: GameSpec, output: Path, linked: bool = False) -> list[str]:
+def compile_command(game: GameSpec, output: Path) -> list[str]:
     """The profile runtime's emcc command; `output` holds gen/ and receives
-    director64.mjs and director64.wasm."""
-    work = game.work.relative_to(game.root).as_posix()
+    director64.mjs and director64.wasm. Android TV compiles the same sources
+    and flags without the Emscripten glue (android.makefile)."""
     generated = output.relative_to(game.root).as_posix()
     includes = [
         "runtime",
@@ -215,12 +203,8 @@ def compile_command(game: GameSpec, output: Path, linked: bool = False) -> list[
         "platforms/web",
         f"games/{game.slug}/runtime",
         f"games/{game.slug}/probe",
-        "platforms/native",
         f"{generated}/gen",
     ]
-    if linked:
-        includes.append(f"{work}/aot/c")
-    exports = EXPORTS if linked else EXPORTS + PACKAGE_EXPORTS
     return [
         "emcc",
         "-std=c17",
@@ -236,8 +220,8 @@ def compile_command(game: GameSpec, output: Path, linked: bool = False) -> list[
         "-DDIRECTOR64_WEBP=1",
         # A hosted build: the deeper Lingo call stack (lingo_runtime.h).
         "-DDIRECTOR64_HOSTED=1",
-        *([] if linked else ["-DDIRECTOR64_PACKAGE"]),
-        *sources(game, linked),
+        "-DDIRECTOR64_PACKAGE",
+        *sources(game),
         "--js-library",
         "platforms/web/library.js",
         "-sMODULARIZE=1",
@@ -247,7 +231,7 @@ def compile_command(game: GameSpec, output: Path, linked: bool = False) -> list[
         "-sALLOW_MEMORY_GROWTH=1",
         "-sINITIAL_MEMORY=64MB",
         "-sSTACK_SIZE=8MB",
-        "-sEXPORTED_FUNCTIONS=" + ",".join("_" + name for name in exports),
+        "-sEXPORTED_FUNCTIONS=" + ",".join("_" + name for name in EXPORTS),
         "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,HEAPU8,HEAPU32,HEAP32",
         "-o",
         f"{generated}/director64.mjs",
@@ -283,12 +267,10 @@ def emscripten(root: Path, engine: str, command: list[str]) -> None:
     )
 
 
-def build_runtime(
-    game: GameSpec, web: dict, output: Path, engine: str, linked: bool = False
-) -> list[str]:
+def build_runtime(game: GameSpec, web: dict, output: Path, engine: str) -> list[str]:
     (output / "gen").mkdir(parents=True, exist_ok=True)
     (output / "gen/web_profile.h").write_text(profile_header(game, web))
-    command = compile_command(game, output, linked)
+    command = compile_command(game, output)
     emscripten(game.root, engine, command)
     return command
 
@@ -297,12 +279,12 @@ DROID_SANS = Path("third_party/libdragon/examples/fontgallery/assets/droid-sans.
 
 
 def import_source_digest(root: Path) -> str:
-    """Inputs that can change importer output, including tool and package schemas."""
+    """Inputs that can change converter output, including tool and package schemas."""
     paths = set()
     for directory in (
         "compiler/src", "compiler/wasm/src", "platforms/web/import", "platforms/web/tools",
         "third_party/libdragon/tools", "third_party/libdragon/include", "third_party/libwebp/src",
-        "third_party/pl_mpeg", "tools/projectorrays",
+        "tools/projectorrays",
     ):
         paths.update(p for p in (root / directory).rglob("*") if p.is_file())
     for name in (
@@ -322,7 +304,7 @@ def import_source_digest(root: Path) -> str:
 
 
 def build_tools(root: Path, engine: str) -> dict:
-    """The importer's tools under build/web/tools/, and their identities."""
+    """The converter's tools under build/web/tools/, and their identities."""
     tools = root / "build/web/tools"
     tools.mkdir(parents=True, exist_ok=True)
     source = import_source_digest(root)
@@ -343,8 +325,6 @@ def build_tools(root: Path, engine: str) -> dict:
     shutil.copyfile(root / CONVERTER_WASM, tools / "convert.wasm")
     emscripten(root, engine, ["sh", "platforms/web/tools/build-fonttools.sh", "build/web/tools"])
     emscripten(root, engine, ["sh", "platforms/web/tools/build-webp.sh", "build/web/tools"])
-    emscripten(root, engine, ["sh", "platforms/web/tools/build-mpeg.sh", "build/web/tools"])
-    subprocess.run(["node", root / "platforms/web/import/build.mjs", tools], cwd=root, check=True)
     if sha256(root / PARSER / "projectorrays.wasm") != PARSER_WASM_SHA256:
         raise ValueError("unsupported ProjectorRays WASM; restore the locked npm dependency")
     shutil.copyfile(root / PARSER / "projectorrays.js", tools / "projectorrays.js")
@@ -353,14 +333,7 @@ def build_tools(root: Path, engine: str) -> dict:
     # The ports' pinned substitute for unembedded system fonts (Apache-2.0).
     shutil.copyfile(root / DROID_SANS, tools / "droid-sans.ttf")
     shutil.copyfile(root / "runtime/lingo/lingo_bytecode.h", tools / "lingo_bytecode.h")
-    # The converter's JavaScript wrapper, which the page loads to inflate
-    # deflated images (platforms/web/site/player.js).
-    shutil.copyfile(root / "platforms/web/import/convert.mjs", tools / "convert.mjs")
     files = {
-        "converterModule": "convert.mjs",
-        "importer": "importer.js",
-        "pipeline": "pipeline.mjs",
-        "pool": "pool.js",
         "converter": "convert.wasm",
         "mkfont": "mkfont.js",
         "mkfontWasm": "mkfont.wasm",
@@ -368,8 +341,6 @@ def build_tools(root: Path, engine: str) -> dict:
         "mkspriteWasm": "mksprite.wasm",
         "webp": "webp.js",
         "webpWasm": "webp.wasm",
-        "mpeg": "mpeg.js",
-        "mpegWasm": "mpeg.wasm",
         "parserGlue": "projectorrays.js",
         "parserWasm": "projectorrays.wasm",
         "names": "names.txt",
@@ -396,7 +367,7 @@ def build_tools(root: Path, engine: str) -> dict:
 
 
 def web_policy(game: GameSpec) -> dict:
-    """The conversion policy as the browser and Android TV importer apply it:
+    """The conversion policy as the Android TV and web conversion applies it:
     an 800x600 stage keeps its images unscaled (native_stage), and flattened
     film-loop frames keep only the rectangle they cover."""
     policy = json.loads((game.directory / "host/source-policy.json").read_text())
@@ -407,7 +378,7 @@ def web_policy(game: GameSpec) -> dict:
 
 
 def profile_entry(game: GameSpec, web: dict) -> dict:
-    """What the page and importer know about a supported game: its pinned
+    """What the converter and player know about a supported game: its pinned
     edition, conversion policy and save files. No disc content."""
     port = game.data["port"]
     return {
@@ -433,7 +404,7 @@ def profile_entry(game: GameSpec, web: dict) -> dict:
                 "extended_d6",
                 "launcher_movie",
                 "native_compatibility",
-                "asset_postprocessor",
+                "defer_video",
             )
             if key in port
         },
@@ -442,17 +413,16 @@ def profile_entry(game: GameSpec, web: dict) -> dict:
     }
 
 
-NOTICES = """Director64 browser player
-==========================
+NOTICES = """Director64 web player
+======================
 
-Revision {commit}; ProjectorRays {parser_version}; score decoder extension
-{extension}. Source: https://github.com/elohmeier/director64
+Revision {commit}. Source: https://github.com/elohmeier/director64
 
 """
 
 
 def notices(root: Path, header: str) -> str:
-    """The site's NOTICES.txt: the repository's license, its third-party
+    """The player's NOTICES.txt: the repository's license, its third-party
     notices and every license text they refer to."""
     parts = [header] + [
         (root / name).read_text(encoding="utf-8") for name in ("LICENSE", "THIRD_PARTY_NOTICES.md")
@@ -460,111 +430,6 @@ def notices(root: Path, header: str) -> str:
     for text in sorted((root / "licenses").glob("*.txt")):
         parts.append(f"{text.stem}\n{'=' * len(text.stem)}\n\n{text.read_text(encoding='utf-8')}")
     return "\n\n".join(part.rstrip("\n") for part in parts) + "\n"
-
-
-def write_site(root: Path, tools: dict) -> Path:
-    """The source-free site: the page, the importer, and a runtime and
-    profile for every game with a browser profile whose runtime is built
-    (build/web/runtime/<slug>)."""
-    site = root / "build/web/site"
-    if site.exists():
-        shutil.rmtree(site)
-    (site / "import").mkdir(parents=True)
-    for name in SITE_FILES:
-        shutil.copyfile(root / "platforms/web/site" / name, site / name)
-    shutil.copyfile(root / FONT, site / "monogram.ttf")
-    for name in tools["files"].values():
-        shutil.copyfile(root / "build/web/tools" / name, site / "import" / name)
-    profiles, runtimes = [], {}
-    for game in web_games(root):
-        runtime = root / "build/web/runtime" / game.slug
-        if not (runtime / "director64.wasm").is_file():
-            continue
-        (site / "runtime" / game.slug).mkdir(parents=True)
-        for name in ("director64.mjs", "director64.wasm"):
-            shutil.copyfile(runtime / name, site / "runtime" / game.slug / name)
-        profiles.append(profile_entry(game, web_profile(game)))
-        runtimes[game.slug] = {
-            "module": f"runtime/{game.slug}/director64.mjs",
-            "wasm_sha256": sha256(runtime / "director64.wasm"),
-        }
-    (site / "profiles.json").write_text(json.dumps(profiles, indent=2) + "\n")
-    revision = git_revision(root)
-    parser = json.loads((root / "node_modules/projectorrays/package.json").read_text())["version"]
-    pin = json.loads((root / "tools/projectorrays/pin.json").read_text())
-    (site / "NOTICES.txt").write_text(
-        notices(
-            root,
-            NOTICES.format(
-                commit=revision["commit"],
-                parser_version=parser,
-                extension=pin["extension_commit"],
-            ),
-        )
-    )
-    manifest = {
-        "schema_version": 2,
-        "milestone": "W6",
-        "revision": revision,
-        "runtime": {
-            "toolchain": EMSDK_IMAGE,
-            "abi": abi_digest(root).hex(),
-            "profiles": runtimes,
-        },
-        "import": {
-            "revision": tools["revision"],
-            "rustc": tools["rustc"],
-            "tools": {
-                key: f"import/{name}" for key, name in tools["files"].items() if key != "importer"
-            },
-            "sha256": tools["sha256"],
-        },
-    }
-    (site / "build.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    return site
-
-
-# ---- The game converted by the native pipeline (development only) ----
-
-
-def package_meta(game: GameSpec) -> dict:
-    return {
-        "schema_version": 1,
-        "game": game.slug,
-        "source_sha256": game.source["sha256"],
-        "director_version": game.data["port"]["director_version"],
-        "converter": git_revision(game.root),
-    }
-
-
-def build_package(game: GameSpec, output: Path) -> Path:
-    """The game package, from the host pipeline's program and scene model."""
-    aot = game.root / AOT
-    if not aot.is_file():
-        raise ValueError(f"{aot} is not built; run mise run compiler")
-    package = output / "site/game.d64p"
-    meta = output / "gen/package-meta.json"
-    meta.write_text(json.dumps(package_meta(game), sort_keys=True) + "\n")
-    from .aot import executable_program
-
-    subprocess.run(
-        [
-            aot,
-            "package",
-            executable_program(game),
-            game.work / "director/model.json",
-            package,
-            "--names",
-            game.root / "runtime/lingo/names.txt",
-            "--bytecode",
-            game.root / "runtime/lingo/lingo_bytecode.h",
-            "--meta",
-            meta,
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-    return package
 
 
 def family_version(director_version: int) -> int:
@@ -589,7 +454,7 @@ def family_defines(game: GameSpec) -> list[str]:
         root = str(port.get("media_root", ".")).strip("./\\")
         if root.isalnum():
             defines.append(f"-DDIRECTOR64_MEDIA_ROOT={root}")
-    # An 800x600 game the console prescales plays unscaled here (ink.h).
+    # An 800x600 game plays its authored stage unscaled (ink.h).
     if native_stage(game):
         defines.append("-DDIRECTOR64_NATIVE_STAGE=1")
     return defines
@@ -603,7 +468,7 @@ def native_stage(game: GameSpec) -> bool:
     return bool(policy.get("stage_prescale"))
 
 
-# The console's per-game switches (platforms/n64/Makefile).
+# Per-game runtime switches.
 GAME_DEFINES = {
     "willy-werkel-cars": ["-DDIRECTOR64_WILLY=1"],
     # Mucklas's controller keys and name keyboard (games/findus-mucklas/runtime/controls.c).
@@ -613,7 +478,7 @@ GAME_DEFINES = {
 
 
 def game_defines(game: GameSpec) -> list[str]:
-    """The game's console switches, and its shared probe step and state
+    """The game's runtime switches, and its probe step and state
     (games/<slug>/probe) when it has them."""
     defines = list(GAME_DEFINES.get(game.slug, []))
     if (game.directory / "probe").is_dir():
@@ -649,323 +514,117 @@ def validate_package(game: GameSpec, output: Path, package: Path) -> dict:
     return json.loads(result.stdout)
 
 
-def check_package(game: GameSpec, output: Path, package: Path) -> dict:
-    """Loader parity: the package, loaded, equals the generated C field by
-    field (tests/package/compare.c)."""
-    work = game.work.relative_to(game.root)
-    tool = output / "gen/package-compare"
-    subprocess.run(
-        [
-            os.environ.get("CC", "cc"),
-            "-std=c17",
-            "-O1",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-pedantic",
-            *family_defines(game),
-            *(
-                f"-I{p}"
-                for p in (
-                    "runtime/director",
-                    "runtime/lingo",
-                    "runtime/interaction",
-                    "runtime/storage",
-                    "runtime/package",
-                    f"{work}/aot/c",
-                )
-            ),
-            "tests/package/compare.c",
-            "runtime/package/package.c",
-            *sorted(str(p.relative_to(game.root)) for p in game.work.glob("aot/c/*.c")),
-            *sorted(str(p.relative_to(game.root)) for p in game.work.glob("director/c/*_scene.c")),
-            f"{work}/director/c/registry.c",
-            "-o",
-            str(tool),
-        ],
-        cwd=game.root,
-        check=True,
-    )
-    result = subprocess.run(
-        [tool, package, abi_digest(game.root).hex()], capture_output=True, text=True, check=False
-    )
-    if result.returncode:
-        raise ValueError(f"package differs from the generated tables:\n{result.stderr}")
-    return json.loads(result.stdout)
-
-
-def pack(files: dict[str, Path], blob: Path) -> dict:
-    """Concatenates assets into one blob with a name -> [offset, length] index."""
-    index, offset = {}, 0
-    digest = hashlib.sha256()
-    with blob.open("wb") as out:
-        for name in sorted(files):
-            data = files[name].read_bytes()
-            out.write(data)
-            digest.update(name.encode() + b"\0" + data)
-            index[name] = [offset, len(data)]
-            offset += len(data)
-    return {
-        "file": blob.name,
-        "bytes": offset,
-        "count": len(index),
-        "sha256": digest.hexdigest(),
-        "index": index,
-    }
-
-
-def asset_files(game: GameSpec) -> tuple[dict[str, Path], dict[str, Path]]:
-    director = game.work / "director"
-    images = {p.name: p for p in sorted((director / "images").glob("*")) if p.is_file()}
-    # Sound members name the console's converted .wav64; the browser plays the
-    # PCM WAV that conversion started from.
-    audio = {p.stem + ".wav64": p for p in sorted((director / "wav").glob("*.wav"))}
-    if not images:
-        raise ValueError(f"run director64 assets --game {game.slug} first")
-    return images, audio
-
-
-def font_files(game: GameSpec) -> dict[str, Path]:
-    """The fonts the page draws text with, by the font number styles name:
-    recovered originals and the port's substitute, as OpenType/TrueType."""
-    model = json.loads((game.work / "director/model.json").read_text())
-    return {
-        str(font["number"]): game.work / "director" / font["asset"]
-        for font in model.get("fonts", [])
-        if font["asset"].endswith((".otf", ".ttf"))
-    }
-
-
-def port_plan(game: GameSpec) -> dict:
-    """What the port adds (compiler/src/ports.rs plan): the model's measured
-    fonts, and the disc folders the runtime streams or reads as data."""
-    result = subprocess.run(
-        [game.root / AOT, "director", "port-plan", game.slug, game.work / "director/model.json"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return json.loads(result.stdout)
-
-
-def stream_pack(game: GameSpec, folders: list[str], output: Path) -> dict:
-    """The playFile streams as the browser importer packs them (AIFF as WAV,
-    WAV and MP3 as they are), with each one's duration."""
-    result = subprocess.run(
-        [
-            game.root / AOT,
-            "director",
-            "stream-pack",
-            output,
-            # A NAME=FOLDER entry streams FOLDER's files under NAME.
-            *(
-                f"{name}={game.work / 'extracted' / folder}"
-                for name, _, folder in (
-                    spec.partition("=") if "=" in spec else (spec, "=", spec) for spec in folders
-                )
-            ),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return {
-        "index": json.loads(result.stdout),
-        "bytes": output.stat().st_size,
-        "sha256": sha256(output),
-    }
-
-
-def annexb_video(data: bytes, fps: int) -> bytes:
-    """A console H.264 stream (videoconv64's Annex B) as the page's video
-    container (platforms/web/site/video.js): each frame's NAL units, parameter
-    sets with the keyframe they precede, at the stream's fixed frame rate."""
-    starts, at = [], 0
-    while (at := data.find(b"\x00\x00\x01", at)) >= 0:
-        starts.append(at)
-        at += 3
-    units = [data[a : b if b else None] for a, b in zip(starts, starts[1:] + [None], strict=True)]
-    frames, pending, current, key = [], b"", None, False
-    for unit in units:
-        kind = unit[3] & 31
-        # A slice whose first_mb_in_slice is 0 (ue(v) "1") starts a frame.
-        if kind in (1, 5) and unit[4] & 0x80:
-            if current is not None:
-                frames.append((current, key))
-            current, key, pending = pending + unit, kind == 5, b""
-        elif kind in (1, 5) and current is not None:
-            current += unit
-            key = key or kind == 5
-        else:
-            pending += unit
-    if current is not None:
-        frames.append((current, key))
-    sps = next(u for u in units if u[3] & 31 == 7)
-    header = {
-        "codec": f"avc1.{sps[4]:02X}{sps[5]:02X}{sps[6]:02X}",
-        "width": 0,
-        "height": 0,
-        "frames": [],
-    }
-    blob, offset = b"", 0
-    for index, (frame, keyframe) in enumerate(frames):
-        header["frames"].append([round(index * 1_000_000 / fps), int(keyframe), offset, len(frame)])
-        blob += frame
-        offset += len(frame)
-    text = json.dumps(header, separators=(",", ":")).encode()
-    return len(text).to_bytes(4, "little") + text + blob
-
-
-def video_files(game: GameSpec, site: Path) -> dict[str, Path]:
-    """The console's converted videos as the page's containers, by the
-    asset name their members carry."""
-    model = json.loads((game.work / "director/model.json").read_text())
-    out = site / "assets/video"
-    files = {}
-    for movie in model["movies"]:
-        for member in movie["members"]:
-            asset = member.get("asset") or ""
-            if member.get("type") != 10 or not asset.endswith(".h264") or asset in files:
-                continue
-            out.mkdir(parents=True, exist_ok=True)
-            fps = member.get("videoFrameRate") or 15
-            target = out / asset
-            stream = (game.work / "director/video" / asset).read_bytes()
-            target.write_bytes(annexb_video(stream, fps))
-            files[asset] = target
-    return files
-
-
-def print_pack(game: GameSpec, folder: str, output: Path) -> dict:
-    """The print documents and their artwork as the page prints them."""
-    result = subprocess.run(
-        [
-            game.root / AOT,
-            "director",
-            "print-pack",
-            output,
-            game.work / "director/model.json",
-            game.work / "extracted" / folder,
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return {
-        "index": json.loads(result.stdout),
-        "bytes": output.stat().st_size,
-        "sha256": sha256(output),
-    }
-
-
-def build_local(
-    game: GameSpec, output: Path, runtime: Path, package: Path | None, command: list[str]
-) -> Path:
-    """The natively converted game beside a copy of its runtime: what the
-    probe harness drives and the development server offers at /local/."""
-    site = output / "site"
-    (site / "assets").mkdir(parents=True, exist_ok=True)
-    for name in ("director64.mjs", "director64.wasm"):
-        if runtime != site:
-            shutil.copyfile(runtime / name, site / name)
-    images, audio = asset_files(game)
-    plan = port_plan(game)
-    extracted = game.work / "extracted"
-    data = {
-        f"{folder}/{p.relative_to(extracted / folder).as_posix()}": p
-        for folder in plan["data"]
-        for p in sorted((extracted / folder).rglob("*"))
-        if p.is_file()
-    }
-    packs = {
-        "images": pack(images, site / "assets/images.bin"),
-        "audio": pack(audio, site / "assets/audio.bin"),
-        "fonts": pack(font_files(game), site / "assets/fonts.bin"),
-        "data": pack(data, site / "assets/data.bin"),
-    }
-    if plan["streams"]:
-        packs["streams"] = stream_pack(game, plan["streams"], site / "assets/streams.bin")
-    if plan.get("print"):
-        packs["print"] = print_pack(game, plan["print"], site / "assets/print.bin")
-    videos = video_files(game, site)
-    if videos:
-        packs["video"] = pack(videos, site / "assets/video.bin")
-        shutil.rmtree(site / "assets/video")
-    for kind, entry in packs.items():
-        (site / "assets" / f"{kind}.json").write_text(
-            json.dumps(entry["index"], separators=(",", ":")) + "\n"
-        )
-    manifest = {
-        "schema_version": 1,
-        "milestone": "W2" if package else "W1",
-        "game": {
-            "slug": game.slug,
-            "title": game.data["title"],
-            "source": game.source["id"],
-            "director_version": game.data["port"]["director_version"],
-            "entry_movie": game.data["port"]["entry_movie"],
-        },
-        "runtime": {
-            **git_revision(game.root),
-            "wasm_sha256": sha256(site / "director64.wasm"),
-            "flags": [a for a in command if a.startswith(("-s", "-O", "-D"))],
-            "abi": abi_digest(game.root).hex(),
-        },
-        "package": {
-            "file": package.name,
-            "bytes": package.stat().st_size,
-            "sha256": sha256(package),
-        }
-        if package
-        else None,
-        "assets": {
-            kind: {k: v for k, v in entry.items() if k != "index"} for kind, entry in packs.items()
-        },
-    }
-    (site / "build.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    return site
-
-
-def check_import(game: GameSpec, web: dict, output: Path) -> dict:
-    """Import parity: the browser importer's bundled pipeline, run under Node
-    from the game's disc image, against the native pipeline's outputs
-    (platforms/web/import/parity.mjs)."""
-    profile = output / "gen/profile.json"
-    profile.write_text(json.dumps(profile_entry(game, web)) + "\n")
-    result = subprocess.run(
-        [
-            "node",
-            game.root / "platforms/web/import/parity.mjs",
-            game.root / "build/web/tools",
-            game.media,
-            game.work,
-            profile,
-            output / "gen/package-meta.json",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    lines = [line for line in result.stdout.splitlines() if line.startswith("{")]
-    if not lines:
-        raise ValueError(f"import parity did not run:\n{result.stderr[-2000:]}")
-    summary = json.loads(lines[-1])
-    if result.returncode:
-        raise ValueError(f"the browser importer differs from the native pipeline: {summary}")
-    return summary
-
-
-def write_probe(game: GameSpec, output: Path) -> Path:
-    """An executable speaking the native probes' line protocol over the Wasm
-    runtime, for `director64 parity --probe` and the games' journey scripts."""
-    probe = output / "director-web-probe"
+def write_probe(game: GameSpec, site: Path) -> Path:
+    """An executable speaking the probe line protocol over the site's Wasm
+    runtime (platforms/web/node/probe.mjs), for `director64 fuzz`, `perf`,
+    `parity` and the games' journey scripts."""
+    probe = site.parent / "director-web-probe"
     harness = game.root / "platforms/web/node/probe.mjs"
-    probe.write_text(f'#!/bin/sh\nexec node "{harness}" "{output / "site"}" "$@"\n')
+    probe.write_text(f'#!/bin/sh\nexec node "{harness}" "{site}" "$@"\n')
     probe.chmod(0o755)
     return probe
 
 
-# ---- Development server ----
+def site_path(game: GameSpec) -> Path:
+    return game.dist / "web"
+
+
+def probe_path(game: GameSpec) -> Path:
+    """The web build's probe (write_probe); `director64 web` makes it."""
+    probe = game.dist / "director-web-probe"
+    if not probe.is_file():
+        raise ValueError(f"no web build to probe; run director64 web --game {game.slug}")
+    return probe
+
+
+# "D64Z", the raw length (u32 big-endian) and a raw deflate stream: an image
+# the converter kept deflated (compiler/src/convert/files.rs), stored inflated
+# here so the page reads it as it is; HTTP compresses it on the way.
+def inflated(data: bytes) -> bytes:
+    if data[:4] != b"D64Z":
+        return data
+    raw = zlib.decompress(data[8:], -15)
+    if len(raw) != int.from_bytes(data[4:8], "big"):
+        raise ValueError("deflated image length differs from its header")
+    return raw
+
+
+def write_pack(source: Path, kind: str, assets: Path) -> dict:
+    """One asset pack of the converted game into the site, images inflated."""
+    index = json.loads((source / f"{kind}.json").read_text())
+    blob = (source / f"{kind}.bin").read_bytes()
+    if kind == "images":
+        out, rebuilt = bytearray(), {}
+        for name, (offset, length, *rest) in sorted(index.items(), key=lambda e: e[1][0]):
+            data = inflated(blob[offset : offset + length])
+            rebuilt[name] = [len(out), len(data), *rest]
+            out += data
+        index, blob = rebuilt, bytes(out)
+    (assets / f"{kind}.bin").write_bytes(blob)
+    (assets / f"{kind}.json").write_text(json.dumps(index, separators=(",", ":")) + "\n")
+    return {"file": f"assets/{kind}.bin", "index": f"assets/{kind}.json", "bytes": len(blob)}
+
+
+def build_site(game: GameSpec, runtime: Path, converted: Path, command: list[str]) -> Path:
+    """The page, the runtime and the converted game as one static site."""
+    root = game.root
+    site = site_path(game)
+    if site.exists():
+        shutil.rmtree(site)
+    (site / "assets").mkdir(parents=True)
+    for name in SITE_FILES:
+        shutil.copyfile(root / "platforms/web/site" / name, site / name)
+    shutil.copyfile(root / FONT, site / "monogram.ttf")
+    for name in ("director64.mjs", "director64.wasm"):
+        shutil.copyfile(runtime / name, site / name)
+    shutil.copyfile(converted / "game.d64p", site / "game.d64p")
+    packs = {
+        kind: write_pack(converted, kind, site / "assets")
+        for kind in PACKS
+        if (converted / f"{kind}.bin").stat().st_size
+    }
+    revision = git_revision(root)
+    (site / "NOTICES.txt").write_text(notices(root, NOTICES.format(commit=revision["commit"])))
+    title = game.data["title"]
+    (site / "manifest.webmanifest").write_text(
+        json.dumps(
+            {
+                "name": title,
+                "short_name": title,
+                "start_url": ".",
+                "display": "fullscreen",
+                "background_color": "#000000",
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    profile = web_profile(game)
+    port = game.data["port"]
+    manifest = {
+        "schema_version": 3,
+        "revision": revision,
+        "game": {"slug": game.slug, "entry_movie": port["entry_movie"]},
+        "profile": {
+            "slug": game.slug,
+            "title": title,
+            "source": game.source["id"],
+            "port": {"director_version": port["director_version"]},
+            "save_files": profile["save_files"],
+        },
+        "runtime": {
+            "toolchain": EMSDK_IMAGE,
+            "wasm_sha256": sha256(site / "director64.wasm"),
+            "flags": [a for a in command if a.startswith(("-s", "-O", "-D"))],
+            "abi": abi_digest(root).hex(),
+        },
+        "package": {"file": "game.d64p", "sha256": sha256(site / "game.d64p")},
+        "packs": packs,
+        "conversion": json.loads((converted / "manifest.json").read_text())["converter"],
+    }
+    (site / "build.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    write_probe(game, site)
+    return site
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -975,124 +634,41 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         ".js": "text/javascript",
         ".wasm": "application/wasm",
         ".json": "application/json",
+        ".webmanifest": "application/manifest+json",
         ".ttf": "font/ttf",
     }
-    local: dict[str, Path] = {}
-
-    def translate_path(self, path):
-        # /local/<slug>/... serves a natively converted game; /local/local.json
-        # lists them. Neither is part of the site.
-        clean = path.split("?", 1)[0].split("#", 1)[0]
-        parts = clean.split("/")
-        if len(parts) > 3 and parts[1] == "local" and parts[2] in self.local:
-            relative = Path(*[p for p in parts[3:] if p not in ("", ".", "..")])
-            return str(self.local[parts[2]] / relative)
-        return super().translate_path(path)
-
-    def do_GET(self):
-        if self.path.split("?", 1)[0] == "/local/local.json":
-            body = json.dumps(
-                {
-                    slug: {
-                        "package": f"local/{slug}/game.d64p",
-                        "packs": {
-                            kind: [
-                                f"local/{slug}/assets/{kind}.bin",
-                                f"local/{slug}/assets/{kind}.json",
-                            ]
-                            for kind in PACKS
-                            if (folder / "assets" / f"{kind}.json").is_file()
-                        },
-                    }
-                    for slug, folder in self.local.items()
-                    if (folder / "game.d64p").is_file()
-                }
-            ).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        super().do_GET()
 
     def end_headers(self):
-        # Local development: always revalidate, so a rebuild is what loads.
+        # Local testing: always revalidate, so a rebuild is what loads.
         self.send_header("Cache-Control", "no-cache")
-        # Tells the page that local/local.json exists; a static host (GitHub
-        # Pages) never sends it, so the page does not probe there.
-        if self.local:
-            self.send_header("X-Director64-Local", "1")
         super().end_headers()
 
 
-def web_games(root: Path) -> list[GameSpec]:
-    """Every game with a browser profile."""
-    return [GameSpec.load(path.parent.name) for path in sorted((root / "games").glob("*/web.toml"))]
-
-
-def local_builds(root: Path) -> dict[str, Path]:
-    """The natively converted games the development server offers."""
-    local = {}
-    for game in web_games(root):
-        site = game.work / "web/site"
-        if (site / "game.d64p").is_file():
-            local[game.slug] = site
-    return local
-
-
-def serve(site: Path, port: int, local: dict[str, Path]) -> None:
-    handler = functools.partial(type("Mounted", (Handler,), {"local": local}), directory=str(site))
+def serve(site: Path, port: int) -> None:
+    handler = functools.partial(Handler, directory=str(site))
     with http.server.ThreadingHTTPServer(("127.0.0.1", port), handler) as server:
         print(f"serving {site} at http://127.0.0.1:{port}/", flush=True)
         server.serve_forever()
 
 
-def main(game: GameSpec, argv: list[str]) -> int:
-    from .toolchain import container_engine
+def build(game: GameSpec, reconvert: bool = False) -> Path:
+    from . import android
+    game.require_port()
+    converted = android.convert(game, game.work / "converted", reconvert)
+    runtime = game.work / "web"
+    command = build_runtime(game, web_profile(game), runtime, container_engine())
+    return build_site(game, runtime, converted, command)
 
+
+def main(game: GameSpec, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="director64 web", description=__doc__)
+    parser.add_argument("--reconvert", action="store_true", help="convert the disc image again")
     parser.add_argument("--serve", action="store_true", help="serve the site on localhost")
     parser.add_argument("--port", type=int, default=18064)
     parser.add_argument("--no-build", action="store_true", help="serve the existing build")
-    parser.add_argument(
-        "--check-import",
-        action="store_true",
-        help="run the importer from the local disc image and compare with the native pipeline",
-    )
-    parser.add_argument(
-        "--linked",
-        action="store_true",
-        help="build the W1 runtime with the generated tables linked in (probe only)",
-    )
     args = parser.parse_args(argv)
-    web = web_profile(game)
-    root = game.root
-    output = game.work / ("web-linked" if args.linked else "web")
-    converted = (game.work / "aot/c/manifest.json").exists()
-    if not args.no_build:
-        engine = container_engine()
-        if args.linked:
-            if not converted:
-                raise ValueError(f"run director64 assets --game {game.slug} first")
-            (output / "site").mkdir(parents=True, exist_ok=True)
-            command = build_runtime(game, web, output / "site", engine, linked=True)
-            build_local(game, output, output / "site", None, command)
-            print(write_probe(game, output))
-            return 0
-        runtime = root / "build/web/runtime" / game.slug
-        command = build_runtime(game, web, runtime, engine)
-        tools = build_tools(root, engine)
-        print(write_site(root, tools))
-        if converted:
-            (output / "site").mkdir(parents=True, exist_ok=True)
-            (output / "gen").mkdir(parents=True, exist_ok=True)
-            package = build_package(game, output)
-            print(json.dumps({"loader_parity": check_package(game, output, package)}))
-            build_local(game, output, runtime, package, command)
-            print(write_probe(game, output), file=sys.stderr)
-            if args.check_import:
-                print(json.dumps({"import_parity": check_import(game, web, output)}))
+    site = site_path(game) if args.no_build else build(game, args.reconvert)
+    print(site)
     if args.serve:
-        serve(root / "build/web/site", args.port, local_builds(root))
+        serve(site, args.port)
     return 0

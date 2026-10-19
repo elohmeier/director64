@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 
+from director64.probe import state_line
 from director64.project import selected_game
 
 # The scripted journey in authored 800x600 coordinates: boot to the login
@@ -71,7 +72,7 @@ def run(executable, output):
         )
 
         def receive():
-            line = process.stdout.readline()
+            line = state_line(process.stdout)
             if not line:
                 raise ValueError(f"journey process ended early; see {log_path}")
             state = json.loads(line)

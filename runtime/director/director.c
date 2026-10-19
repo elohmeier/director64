@@ -112,9 +112,8 @@ static bool eq_full(const char *a, const char *b) {
   }
   return *a == *b;
 }
-// Property and command dispatch is a long chain of eq(name, "literal") against
-// one name, and the target builds at -Os, so every link is a real call.
-// Rejecting on the first folded character inline turns almost all of them into
+// Name lookups compare one name against literal after literal with
+// eq(name, "literal"). Rejecting on the first folded character inline turns almost all of them into
 // a single compare. ASCII folds exactly as tolower does; anything else still
 // goes to the full walk.
 static inline bool eq(const char *a, const char *b) {
@@ -3574,7 +3573,7 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
   }
   if (ln == LN_UNLOAD) {
     if (argc > 2) error(d, "unload arguments", "range");
-    return true; // Frame cache hint; ROM media uses the bounded native cache.
+    return true; // Frame cache hint; packaged media uses the bounded host cache.
   }
   if ((ln == LN_PRELOADCAST) || (ln == LN_PRELOADMEMBER))
     return true; // Bounded asset-cache policy replaces memory hints.
@@ -4516,7 +4515,7 @@ static bool d6_input(dg_runtime_t *d) {
   // Hover transitions sample once per tick, like Director's per-frame
   // rollover. Every dispatched handler invalidates the cached hit, and
   // re-scanning the score between each queued event starves the 60 Hz
-  // service budget on console-scale stages.
+  // service budget.
   if (d->hover_tick == d->ticks) return false;
   d->hover_tick = d->ticks;
   unsigned hit = dg_mouse_hit(d, d->mouse_x, d->mouse_y);

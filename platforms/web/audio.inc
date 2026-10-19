@@ -1,6 +1,5 @@
 // Shared host audio timing, exercised directly by native contracts.
-// Sounds started since the module loaded; like the native probe's, it
-// survives a reboot.
+// Sounds started since the module loaded; it survives a reboot.
 static unsigned sound_count;
 static unsigned busy_until[DG_SOUND_CHANNELS];
 static unsigned sound_paused_at[DG_SOUND_CHANNELS];
@@ -14,10 +13,10 @@ static struct {
 static unsigned sound_started[DG_SOUND_CHANNELS];
 #endif
 
-// Channel lifetime follows the service clock, as the native probe's does: a
-// sound is busy for its authored length in ticks, looping sounds until they
-// are replaced. The score's waits on a sound therefore end on the same tick
-// here as on the probe, and the page's audio plays alongside that clock.
+// Channel lifetime follows the service clock: a sound is busy for its
+// authored length in ticks, looping sounds until they are replaced. The
+// score's waits on a sound therefore end on the same tick on every host and
+// in the probe, and the host's audio plays alongside that clock.
 static void sound(void *ctx, unsigned channel, const dg_member_t *m) {
   (void)ctx;
   if (channel >= DG_SOUND_CHANNELS) {
@@ -105,7 +104,7 @@ static void sound_break_loop(void *ctx, unsigned channel) {
 }
 #if DG_EXTENDED
 // How far a channel's sound has played, in milliseconds, for cue points. Like
-// channel lifetime it follows the service clock, as on the native probe.
+// channel lifetime it follows the service clock.
 static unsigned sound_position(void *ctx, unsigned channel) {
   (void)ctx;
   if (channel >= DG_SOUND_CHANNELS)

@@ -4,10 +4,11 @@ engine compiled for Android and the game converted from your own disc.
     director64 android build --game SLUG     dist/<slug>/<source>/director64-<slug>.apk
     director64 android install --game SLUG   adb install it
 
-The game is converted by the browser importer's pipeline under Node (the same
-stages, with FFmpeg encoding video) and ships uncompressed in the APK's
-assets. Like a ROM, the APK contains the converted game and must not be
-redistributed.
+The game is converted from its disc image by the conversion pipeline under
+Node (platforms/android/export, with FFmpeg encoding video and audio) into
+build/<slug>/<source>/converted/, which the web build shares, and ships
+uncompressed in the APK's assets. The APK contains the converted game and
+must not be redistributed.
 """
 
 from __future__ import annotations
@@ -25,9 +26,8 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from . import web
-from .build_inputs import source_image_identity
 from .iso import file_sha256
-from .project import GameSpec
+from .project import GameSpec, container_engine
 
 IMAGE = "director64-android:local"
 # The projector runs 32-bit and 64-bit ARM userlands alike; x86_64 serves the
@@ -60,8 +60,6 @@ KEYSTORE_PASSWORD = "director64"
 
 
 def run_container(root: Path, script: str) -> None:
-    from .toolchain import container_engine
-
     KEYSTORE.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
@@ -154,9 +152,7 @@ def makefile(game: GameSpec, output: Path, abis: list[str]) -> Path:
 
 
 def converter_revision(root: Path) -> str:
-    """Rebuild missing, stale or modified importer tools before reusing packages."""
-    from .toolchain import container_engine
-
+    """Rebuild missing, stale or modified converter tools before reusing packages."""
     folder = root / "build/web/tools"
     try:
         tools = json.loads((folder / "manifest.json").read_text())
@@ -178,7 +174,7 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
     media = game.media
     if not media.is_file():
         raise ValueError(f"{media}: place the game's disc image there first")
-    image_identity = source_image_identity(game)
+    image_identity = game.image_identity
     if image_identity:
         image = image_identity["source_image"]
         if media.stat().st_size != image["bytes"] or file_sha256(media) != image["sha256"]:
@@ -253,7 +249,7 @@ def convert(game: GameSpec, out: Path, force: bool = False) -> Path:
         ],
         check=True,
     )
-    if source_image_identity(game) != image_identity:
+    if game.image_identity != image_identity:
         raise ValueError("selected source image changed during conversion; retry conversion")
     web.validate_package(game, out.parent, out / "game.d64p")
     return out
@@ -411,20 +407,20 @@ def apk_input_digest(game: GameSpec, abis: list[str]) -> str:
     root = game.root
     paths = set()
     for directory in (
-        "runtime", "platforms/web", "platforms/android", "platforms/native", "docker/android",
+        "runtime", "platforms/web", "platforms/android", "docker/android",
         f"games/{game.slug}/runtime", f"games/{game.slug}/probe",
     ):
         paths.update(p for p in (root / directory).rglob("*") if p.is_file())
     paths.update(game.directory.glob("cover.*"))
     paths.update(game.directory.rglob("*.h"))
     paths.update(root / name for name in (
-        "src/director64/android.py", "src/director64/build_inputs.py",
+        "src/director64/android.py", "src/director64/project.py",
         "src/director64/web.py", str(web.FONT),
         "tools/director/validate-package.c",
     ))
     digest = hashlib.sha256(json.dumps({
         "source": game.source["sha256"], "abis": abis,
-        **source_image_identity(game),
+        **game.image_identity,
         "profile": web.profile_entry(game, web.web_profile(game)),
         "importer": web.import_source_digest(root),
     }, sort_keys=True).encode())
@@ -442,7 +438,7 @@ def verify_apk(game: GameSpec) -> Path:
         valid = (
             receipt["source_sha256"] == game.source["sha256"]
             and all(receipt.get(key) == value
-                    for key, value in source_image_identity(game).items())
+                    for key, value in game.image_identity.items())
             and receipt["inputs"] == apk_input_digest(game, receipt["abis"])
             and receipt["apk_sha256"] == web.sha256(path)
         )
@@ -459,7 +455,7 @@ def build(game: GameSpec, jobs: int, abis: list[str], reconvert: bool) -> Path:
     apk_receipt_path(game).unlink(missing_ok=True)
     identity = apk_input_digest(game, abis)
     work = root / "build/android" / game.slug / game.source["id"]
-    data = convert(game, work / "game", reconvert)
+    data = convert(game, game.work / "converted", reconvert)
     make = makefile(game, work, abis)
 
     # Assets: the game under game/, its profile, and the builtin font.
@@ -554,7 +550,7 @@ rm -f {w}/out/aligned.apk {out}.idsig
         raise ValueError("APK inputs changed during build; rebuild before installing")
     receipt = {
         "source_sha256": game.source["sha256"], "abis": abis, "inputs": identity,
-        **source_image_identity(game),
+        **game.image_identity,
         "apk_sha256": web.sha256(apk), "bytes": apk.stat().st_size,
         "conversion": json.loads((data / "manifest.json").read_text()),
     }

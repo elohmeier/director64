@@ -27,11 +27,7 @@ director_version = 500
 media_root = "MEDIA"
 entry_movie = "START"
 launcher_movie = "START.DXR"
-rom_title = "Loewenzahn 1"
-rom_save_type = 80
-controller_count = 4
-host_package = "director64_loewenzahn_1"
-asset_postprocessor = "full_media"
 native_compatibility = true
-asset_inputs = ["host/printing.py", "host/printing.toml"]
-optional_asset_inputs = ["host/printing.local.toml"]
+host_package = "director64_loewenzahn_1"
+# Videos convert after the scene model (compiler/src/ports.rs plan).
+defer_video = true

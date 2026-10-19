@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from director64.fuzz import (
-    PROBE_FEATURES,
+    FEATURES,
     Outcome,
     Probe,
     Runner,
@@ -103,6 +103,12 @@ for line in sys.stdin:
 '''
 
 
+# A probe without text entry whose pads take seven buttons (the STRICT
+# double), and one that takes the platform keyboard's characters only.
+PADS = {"pad": True, "buttons": 0x7F, "keys": {}}
+TEXT = {"pad": False, "buttons": 0, "keys": {}, "text": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_."}
+
+
 @pytest.fixture
 def fake_probe(tmp_path):
     path = tmp_path / "fake-probe"
@@ -117,7 +123,7 @@ def make_runner(fake_probe, tmp_path, movies, minimize=False, features=None):
     return Runner(
         executable=fake_probe,
         output=output,
-        features=features or PROBE_FEATURES["findus-workshop"],
+        features=features or PADS,
         env=dict(os.environ),
         movies=movies,
         actions=40,
@@ -142,7 +148,7 @@ def test_generated_input_satisfies_the_strict_probe_protocol(fake_probe, tmp_pat
 
 def test_text_entry_stays_inside_the_keyboard_envelope(fake_probe, tmp_path):
     runner = make_runner(
-        fake_probe, tmp_path, ["TEXTSTRICT"], features=PROBE_FEATURES["willy-werkel-cars"]
+        fake_probe, tmp_path, ["TEXTSTRICT"], features=TEXT
     )
     for seed in range(6):
         runner.run_episode(seed=seed)
@@ -189,7 +195,7 @@ def test_episode_commands_are_deterministic_per_seed(fake_probe, tmp_path):
         stderr = tmp_path / "stderr"
         probe = Probe(fake_probe, "OK", stderr, dict(os.environ))
         probe.receive(timeout=30)
-        episode_commands(probe, random.Random(7), 25, PROBE_FEATURES["findus-mucklas"])
+        episode_commands(probe, random.Random(7), 25, FEATURES)
         probe.close()
         logs.append(probe.commands)
     assert logs[0] == logs[1]

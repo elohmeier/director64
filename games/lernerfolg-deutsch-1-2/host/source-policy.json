@@ -2,13 +2,6 @@
   "director_version": 1000,
   "extended_d6": true,
   "field_text_styles": true,
-  "image_codec_tiers": [
-    {
-      "min_decompressed_bytes": 65536,
-      "level": 2
-    }
-  ],
-  "image_color_bits": 4,
   "startup_movie": "DEUTSCH.DXR",
   "directories": [
     "data",
@@ -30,8 +23,6 @@
   "source_sha256": "4c87e10dcc99dfb68882b51c9daceb7ce4761b482a2a43bf620093289353e0f4",
   "deferred_conversions": [],
   "stage_prescale": true,
-  "image_pack_budget_mib": 30.5,
-  "image_indexed": true,
   "system_font_resources": [
     {
       "path": "director64-system-fonts/arial32.exe",

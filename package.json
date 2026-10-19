@@ -7,8 +7,5 @@
   },
   "dependencies": {
     "projectorrays": "1.1.1"
-  },
-  "devDependencies": {
-    "esbuild": "0.28.2"
   }
 }

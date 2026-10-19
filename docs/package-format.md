@@ -3,10 +3,9 @@
 A game package carries everything the runtime needs to run a converted game
 that is not the runtime itself: every movie's handler bytecode and name
 pools, the corpus symbol table, the global slots, and each movie's scene
-tables (casts, members, score, labels, palette). The browser runtime loads
-one instead of linking the generated C (docs/web-roadmap.md, W2). The console
-keeps its generated C, the transition path, until the loader has the same
-evidence there.
+tables (casts, members, score, labels, palette). The conversion writes it as
+`game.d64p`; the web player and the Android TV player load the same file at
+startup, so one runtime build serves every game of its Director family.
 
 `compiler/src/package.rs` writes it. `runtime/package/package.c` validates
 and loads it into the structures `runtime/lingo/lingo_runtime.h` and
@@ -195,9 +194,8 @@ frame, sound ID and loop count; u8 SOUNDINFO flags and envelope count; u32
 in/out points; and envelope triples (u32 44.1-kHz position, u16 left/right
 levels). Out points are inclusive in the file; hosts receive a normalized
 half-open sample range. Envelope positions must increase and levels cannot
-exceed 32768. Event voices are separate from Director sound channels. N64
-packing keeps these assets as uncompressed source-rate PCM, preserving
-arbitrary sample boundaries and sample-level envelopes.
+exceed 32768. Event voices are separate from Director sound channels. Loop
+bounds use source samples; envelope positions always use 44.1-kHz samples.
 
 Version 8 adds an explicit geometric mask asset to retained raster layers, the DefineEditText UseOutlines flag, cast texture catalogs, and authored palette colors. After all profile-specific member fields, every profile stores a u16 palette color count (0..256), followed by that many u32 RGB colors. A zero count means no CLUT. A partial CLUT remains exact metadata; using it as a stage palette is explicitly blocked until its remaining-color semantics are qualified. Older packages are rejected and must be regenerated. Score channel 5 retains palette commands in spec.member: low 16 signed builtin IDs (-1 Mac, -3 Grayscale, -102 Windows), or the resolved custom palette member ID. Unsupported fade/cycle interpolation fails conversion/preflight.
 

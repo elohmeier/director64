@@ -21,8 +21,8 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_key_capacity(void) {
   return 32;
 #endif
 }
-// One character typed into a key field, as the console's keyboard presses
-// and releases it; 8 deletes.
+// One character typed into a key field, pressed and released as the host's
+// keyboard sends it; 8 deletes.
 EMSCRIPTEN_KEEPALIVE void d64_type_key(unsigned character, int down) {
 #ifdef DIRECTOR64_MUCKLAS
   if (booted && !values.failed && character <= 255 && director.key_count < 32)

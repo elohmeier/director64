@@ -1,10 +1,8 @@
-// The native probes' line protocol (games/*/tests/director_probe.c) over the
-// browser runtime's Wasm module, so the parity tool and the games' journey
-// scripts drive the browser build exactly as they drive the native probe:
+// The probe line protocol over the web build's Wasm runtime, which the
+// fuzzer, the parity tool and the games' journey scripts drive:
 //   probe.mjs SITE MOVIE rpc   then one command per line on stdin.
-// Only the game's entry movie can start: direct-activity fixtures are a
-// feature of the native probe, not of the browser runtime.
-import {existsSync, readFileSync} from "node:fs";
+// Only the game's entry movie can start.
+import {existsSync, readFileSync, writeFileSync} from "node:fs";
 import {inflateRawSync} from "node:zlib";
 import {createInterface} from "node:readline";
 import {join} from "node:path";
@@ -94,7 +92,7 @@ const module = await createDirector64({
     video: (...args) => { if (render) videos.update(...args); },
     videoFrame: (slot) => videos.frame(slot),
     videoRevision: () => videos.revision(),
-    // The native probe holds a playFile stream's channel for a nominal second.
+    // A playFile stream holds its channel for a nominal second here.
     stream: (channel, name) => (name ? 1000 : 0),
     // No fonts here: text lays out on a nominal fixed advance, wrapped as the
     // page wraps it, so text hit tests (pointToWord, hyperlinks) can be driven.
@@ -130,7 +128,7 @@ if (build.package) {
     process.exit(3);
   }
 }
-// The native probe starts from erased flash; so does a fresh browser profile.
+// A session starts from an erased save image, as a fresh install does.
 module.HEAPU8.fill(255, module._d64_flash(), module._d64_flash() + module._d64_flash_bytes());
 const out = (text) => new Promise((resolve) => process.stdout.write(text, resolve));
 if (render && typeof module._d64_probe_render !== "function") {
@@ -149,6 +147,15 @@ if (!checkpoint("boot")) process.exit(1);
 await out(boot);
 let status = 0;
 for await (const line of createInterface({input: process.stdin, crlfDelay: Infinity})) {
+  // The journeys end a session with quit, or with quit-export to keep its
+  // save image (DIRECTOR64_FLASH_EXPORT names the file).
+  const command = line.trim();
+  if (command === "quit" || command === "quit-export") {
+    if (command === "quit-export" && process.env.DIRECTOR64_FLASH_EXPORT)
+      writeFileSync(process.env.DIRECTOR64_FLASH_EXPORT,
+        module.HEAPU8.slice(module._d64_flash(), module._d64_flash() + module._d64_flash_bytes()));
+    break;
+  }
   const reply = module.ccall("d64_rpc", "string", ["string"], [line.trimEnd()]);
   if (reply === "") { status = 2; break; }
   if (!checkpoint(JSON.stringify(line.trimEnd()))) { status = 1; break; }

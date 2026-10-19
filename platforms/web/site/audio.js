@@ -52,8 +52,8 @@ export function decodeWav(bytes) {
   return {rate: format.rate, frames, channels};
 }
 
-// The console's rule (platforms/n64/audio_bounds.h): the loop end clamps to
-// the decoded length, and an empty loop is not a loop.
+// The loop rule: the loop end clamps to the decoded length, and an empty loop
+// is not a loop.
 export function loopBounds(start, end, frames) {
   end = Math.min(end, frames);
   return start < end ? {start, end} : null;
@@ -138,7 +138,7 @@ export class AudioEngine {
     this.flash = new FlashSounds(this);
   }
   // A sound's decoded buffer with its source rate and length (loop points
-  // and the console's loop rule are in source frames): at once for a WAV or
+  // and the loop rule are in source frames): at once for a WAV or
   // a sound decoded before, null while an Opus sound decodes (whenLoaded).
   load(name) {
     const entry = this.buffers.get(name);

@@ -22,8 +22,6 @@ media_root = "."
 entry_movie = "DEUTSCH"
 launcher_movie = "DEUTSCH.DXR"
 native_compatibility = true
-rom_title = "Lernerfolg Deutsch12"
-rom_save_type = 80
-controller_count = 4
 host_package = "director64_lernerfolg_deutsch_1_2"
-asset_postprocessor = "full_media"
+# Videos convert after the scene model (compiler/src/ports.rs plan).
+defer_video = true

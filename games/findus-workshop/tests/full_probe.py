@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Input-only integration checks against locally compiled native movie handlers.
+"""Input-only integration checks against the web build's probe (director64 web).
 
 The debug protocol exposes state for assertions; it has no handler invocation,
 frame jump, global assignment, or reward-injection command.
@@ -15,12 +15,12 @@ import subprocess
 from contextlib import suppress
 from pathlib import Path
 
-from director64.project import work_dir
+from director64.project import GameSpec
 
 
 class Probe:
     def __init__(self, movie="START", executable=None):
-        executable = executable or f"{work_dir()}/native/director-probe"
+        executable = executable or str(GameSpec.load("findus-workshop").dist / "director-web-probe")
         self.process = subprocess.Popen(
             [executable, movie, "rpc"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
         )
@@ -814,9 +814,10 @@ def main():
         ],
     )
     parser.add_argument("movie", nargs="?", default="START")
-    parser.add_argument("--executable", default=f"{work_dir()}/native/director-probe")
+    game = GameSpec.load("findus-workshop")
+    parser.add_argument("--executable", default=str(game.dist / "director-web-probe"))
     parser.add_argument(
-        "--output", type=Path, default=Path(f"{work_dir()}/director/input-probe.json")
+        "--output", type=Path, default=game.work / "journeys/input-probe.json"
     )
     parser.add_argument("--magic-delay", type=int, default=0)
     parser.add_argument("--magic-animation", action="store_true")

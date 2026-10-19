@@ -38,7 +38,7 @@ import org.json.JSONObject;
 
 /**
  * Plays the APK's game: the native runtime draws the 640x480 stage into a 4:3 surface and runs at
- * the console's service clock (platforms/android/jni/main.c); this activity feeds it the
+ * the runtime's 60 Hz service clock (platforms/android/jni/main.c); this activity feeds it the
  * controllers, remote, mouse and keyboard, and shows the menu and text entry. The game's package
  * and asset packs ship as the APK's assets (assets/game/), its profile as assets/game/profile.json.
  */
@@ -143,7 +143,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
 
     inputs = (InputManager) getSystemService(INPUT_SERVICE);
     inputs.registerInputDeviceListener(this, handler);
-    // The console's FlashRAM image, in the app's own storage.
+    // The 128 KiB save image, in the app's own storage.
     String savePath = new File(getFilesDir(), "flash.bin").getAbsolutePath();
     float level = preferences.getFloat("volume", 0.8f);
     LIFECYCLE.execute(() -> {
@@ -377,7 +377,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   }
 
   /**
-   * Text entry over an editable field, as the console's on-screen keyboard. Field text is
+   * Text entry over an editable field, in the TV's own keyboard. Field text is
    * windows-1252: printable ASCII except the double quote everywhere, German letters on Director
    * 10, at most 20 characters. An edit (keys false) holds the game until it is committed or
    * cancelled. A key field (Mucklas' name) instead takes each character as the game's key presses
@@ -399,7 +399,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
           // The dialog stays in view above the keyboard.
           field.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
           InputFilter length = new InputFilter.LengthFilter(20);
-          // The console keyboard's characters (platforms/n64/text_input.c).
+          // Letters, digits, space and -_. : what the games' name fields accept.
           InputFilter typable =
               (source, start, end, dest, dstart, dend) -> {
                 StringBuilder kept = new StringBuilder();

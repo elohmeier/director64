@@ -1,6 +1,5 @@
-// Christmas's probe state line, shared by the native probe (tests/director_probe.c)
-// and the browser runtime (platforms/web/web_runtime.c), which both include it
-// after defining values, director, enter(), find() and the output helpers.
+// Christmas's probe state line for the web runtime's probe
+// (platforms/web/web_runtime.c), which includes it after defining values, director, enter(), find() and the output helpers.
 static void state(void) {
   printf("{\"movie\":"); quoted(director.movie ? director.movie->code->name : "");
   printf(",\"frame\":%u,\"tick\":%u,\"depth\":%u,\"quit\":%s,\"text_pending\":%s,\"sounds\":%u,\"save_generation\":%u,\"error\":", director.frame, director.ticks, values.depth, director.quit ? "true":"false", director.text_pending ? "true":"false", sound_count, game_save_generation());

@@ -12,7 +12,6 @@ use crate::scene::Profile;
 pub enum Target {
     Web,
     Android,
-    N64,
 }
 
 impl Target {
@@ -20,7 +19,6 @@ impl Target {
         match name {
             "web" => Ok(Self::Web),
             "android" => Ok(Self::Android),
-            "n64" => Ok(Self::N64),
             _ => Err(format!("unknown renderer: {name}")),
         }
     }
@@ -28,7 +26,6 @@ impl Target {
         match self {
             Self::Web => "web",
             Self::Android => "android",
-            Self::N64 => "n64",
         }
     }
 }

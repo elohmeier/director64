@@ -1,6 +1,6 @@
 // The Android TV backend: the browser runtime's engine (web_runtime.c and
 // its software compositor) with native services, driven by a game thread at
-// the console's 60 Hz service clock, as the page's player drives it
+// the runtime's 60 Hz service clock, as the page's player drives it
 // (platforms/web/site/player.js). The activity (GameActivity.java) owns the
 // surface, the controllers and the dialogs; this owns the engine.
 #include "compositor.h"
@@ -58,9 +58,8 @@ unsigned d64_image_bytes(void);
 
 // The stage the runtime draws: 640x480, or an 800x600 game unscaled.
 enum { WIDTH = WC_WIDTH, HEIGHT = WC_HEIGHT, PORTS = 4 };
-// The console's catch-up rule (platforms/n64/director_main.c): at most four
-// ticks per pass and twelve ticks of backlog; time beyond that is dropped
-// rather than rushed through.
+// The catch-up rule: at most four ticks per pass and twelve ticks of
+// backlog; time beyond that is dropped rather than rushed through.
 enum { MAX_STEPS = 4, BACKLOG_TICKS = 12 };
 // What holds the game: the activity paused, its menu, text entry, a print
 // request. Game time and audio stop together while anything holds them.
@@ -425,7 +424,7 @@ static bool open_entry(int x, int y) {
 // A key field (Mucklas' name) takes the TV's keyboard when it starts taking
 // a name and when it is clicked, and lets it go when the game is done with
 // it. The game runs meanwhile: each character the keyboard types reaches its
-// key handlers at once (Native.typeKey), as on the console.
+// key handlers at once (Native.typeKey), as in the browser player.
 static void serve_key_field(bool clicked, int x, int y) {
   unsigned taking = d64_key_field(0, 0, 1);
   if (key_entry && !taking) {
@@ -623,9 +622,9 @@ static void *game(void *arg) {
         status = d64_step(mx, my, (int)buttons);
       }
       steps++;
-      // The console shows a QR link to a print document; the TV has no
-      // printer, so it says so and dismisses the page as the console's B
-      // does (games/loewenzahn-1/runtime/printing.c).
+      // A print document: the TV has no printer, so it says so
+      // (GameActivity.printRequested) and dismisses the page with B, as the
+      // web player does after printing (games/loewenzahn-1/runtime/printing.c).
       unsigned request = d64_print_request();
       if (request && request != printed && !injections) {
         printed = request;

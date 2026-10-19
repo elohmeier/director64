@@ -1,6 +1,5 @@
-// Willy's probe state line, shared by the native probe (tests/director_probe.c)
-// and the browser runtime (platforms/web/web_runtime.c), which both include it
-// after defining values, director, enter(), find() and the output helpers.
+// Willy's probe state line for the web runtime's probe
+// (platforms/web/web_runtime.c), which includes it after defining values, director, enter(), find() and the output helpers.
 static void state(void) {
   printf("{\"movie\":"); quoted(director.movie ? director.movie->code->name : "");
   printf(",\"notice\":");quoted(director.notice);

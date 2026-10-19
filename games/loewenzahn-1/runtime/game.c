@@ -1,5 +1,5 @@
 #include "game.h"
-// The recovered game has no player save files. No other title's FlashRAM
+// The recovered game has no player save files. No other title's save
 // format is imported or written.
 save_status_t game_save_load(save_backend_t backend) {
   (void)backend;

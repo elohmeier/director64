@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from director64.probe import state_line
+
 ROUTES = {
     "bedroom-inventions": ([14, 17], "UFAP.DXR"),
     "bedroom-ts": ([14, 12], "TS.DXR"),
@@ -46,7 +48,7 @@ class Probe:
         )
 
     def read(self):
-        line = self.process.stdout.readline()
+        line = state_line(self.process.stdout)
         if not line:
             raise ValueError(f"probe exited; inspect {self.name}.log")
         self.state = json.loads(line)
@@ -134,14 +136,14 @@ def name_entry(executable: Path, output: Path):
         probe.click(40)
         probe.step(2400)
         probe.movie("HUSET.DXR")
-        if '#namn:"AB"' not in probe.state["globals"].get("gen_minspelare", ""):
+        if '#namn:"ab"' not in probe.state["globals"].get("gen_minspelare", "").lower():
             raise ValueError("typed name did not reach the original player record")
         command("reboot")
         probe.step(18000)
         probe.click(17)
         probe.step(2400)
         probe.movie("HUSET.DXR")
-        if '#namn:"AB"' not in probe.state["globals"].get("gen_minspelare", ""):
+        if '#namn:"ab"' not in probe.state["globals"].get("gen_minspelare", "").lower():
             raise ValueError("typed name did not survive reboot and player reload")
     except (ValueError, RuntimeError, StopIteration, BrokenPipeError) as error:
         failure = str(error) or type(error).__name__
@@ -153,10 +155,9 @@ def name_entry(executable: Path, output: Path):
 
 
 def train_departure(probe: Probe):
-    passengers = json.loads(
-        probe.state["objects"]["gpassageraregenerellobj"]["pantalpassagerarepastationen"]
-    )
-    number = len(passengers)
+    # A Lingo list of passenger instances: "[<instance 1>,<instance 2>]".
+    passengers = probe.state["objects"]["gpassageraregenerellobj"]["pantalpassagerarepastationen"]
+    number = passengers.count("<instance ")
     if not 1 <= number <= 30:
         raise ValueError("train has no station question to answer")
     board = next(s for s in probe.state["sprites"] if s["id"] == 14)["bounds"]
@@ -222,7 +223,7 @@ def run(executable: Path, output: Path):
             state = probe.state
             if name == "living-br":
                 course = state["objects"]["bana"]
-                if course["introstate"] != "vantapaklick" or course["ritkant"] != "527":
+                if course["introstate"].lower() != "vantapaklick" or course["ritkant"] != "527":
                     raise ValueError("BR did not draw the first course with its keyed spacing")
             elif name == "attic-nb":
                 if state["globals"].get("gfas") != "spel" or "gflugan" not in state["objects"]:
@@ -251,7 +252,7 @@ def run(executable: Path, output: Path):
         )
     return {
         "status": "passing" if all(s["status"] == "passing" for s in scenarios) else "failed",
-        "platform": "host-native",
+        "platform": "web-probe",
         "hardware_qualified": False,
         "original_projector_verified": False,
         "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),

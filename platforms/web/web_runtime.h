@@ -5,11 +5,10 @@
 #include "compositor.h"
 #include "flash_runtime.h"
 
-// The console's 128 KiB FlashRAM; every adapter's archive is laid out in it.
+// The 128 KiB save image; every adapter's archive is laid out in it.
 #define WEB_FLASH_BYTES (128u * 1024u)
-// Decoded images the compositor keeps, as RGBA8888. The console holds 3 MiB of
-// 16-bit texels; a browser tab can afford every scene's working set. A
-// smaller device's build sets its own.
+// Decoded images the compositor keeps, as RGBA8888. A browser tab can afford
+// every scene's working set; a smaller device's build sets its own.
 #ifndef WEB_IMAGE_BUDGET
 #define WEB_IMAGE_BUDGET (192u * 1024u * 1024u)
 #endif
@@ -42,7 +41,7 @@ typedef struct {
   // A shipped read-only data file by its "folder/path" name; returns its
   // length, -1 when there is none.
   int32_t (*data)(void *ctx, const char *name, uint8_t *out, uint32_t cap);
-  // Digital video, per runtime-assigned player ID (platforms/n64/d5_video.c): the
+  // Digital video, per runtime-assigned player ID: the
   // member's video and sound assets ("" for none; NULL video closes the
   // player), its time in 600ths of a second, rate, a serial that changes on
   // every seek or loop, and the gain. Called each service step while the

@@ -6,8 +6,9 @@ container with `mise run reference-toolchain`. Optional `--replay`, `--output`,
 `--source`, `--iso` and `--windows-version` arguments belong to this game's adapter.
 Outputs stay under the selected source workspace's `reference/` directory.
 
-The original-projector reference is independent of native and N64 evidence.
-Its sandbox does not use normal user Wine or emulator save directories.
+The original-projector reference is independent of the runtime's own tests
+and of playback on Android TV or in the browser.
+Its sandbox does not use normal user Wine prefixes or save directories.
 
 ## Native film channels and playback
 
@@ -15,7 +16,8 @@ The Birthday original projector, using the **8.5.1r104 DIRAPI/IML32 engine and
 MX9 launcher under Wine 8**, qualified imported-film cast relocation and live
 film playback. Runtime DLL hashes, raw observations and local source-media
 copies remain in the ignored audit workspace. These are original-projector
-observations, separate from ScummVM agreement and N64 execution.
+observations, separate from ScummVM agreement and from the runtime's own
+playback.
 
 A film's owning cast library supplies its KEY-linked `ccl ` relocation table.
 The encoded cast word indexes that table, including index zero; `0xffff`

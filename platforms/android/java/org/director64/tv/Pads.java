@@ -7,11 +7,11 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Controllers as the console's four ports, mapped as the browser player maps a standard gamepad
+ * Controllers as the runtime's four ports, mapped as the browser player maps a standard gamepad
  * (platforms/web/site/gamepad.js): each device that gives input takes the lowest free port and
- * reports an N64 controller sample. A DualShock 4 is Android's standard gamepad; an N64-style pad
- * maps the same way, its C buttons arriving as the right stick. The TV remote's D-pad moves a
- * cursor and its centre clicks.
+ * reports a controller sample (input.h buttons, stick about ±80). A DualShock 4 is Android's
+ * standard gamepad; an N64-style pad maps the same way, its C buttons arriving as the right stick.
+ * The TV remote's D-pad moves a cursor and its centre clicks.
  */
 final class Pads {
   // runtime/interaction/input.h
@@ -20,7 +20,7 @@ final class Pads {
   static final int PORTS = 4;
   // A worn DualShock stick rests up to about a tenth off centre.
   static final float DEAD_ZONE = 0.12f;
-  // The console's stick reaches about ±80; input.c ignores ±8.
+  // The sample's stick reaches about ±80; input.c ignores ±8.
   static final int STICK_MIN = 9, STICK_MAX = 80;
   // L1 held: fine movement, for small hotspots.
   static final float FINE = 0.35f;
@@ -32,7 +32,7 @@ final class Pads {
     final int device;
     final String name;
     final boolean remote;
-    int keys; // console bits from buttons and the D-pad keys
+    int keys; // input.h bits from buttons and the D-pad keys
     boolean fine;
     float x, y, rx, ry, hatX, hatY;
     long lastInput;
@@ -164,7 +164,7 @@ final class Pads {
     return true;
   }
 
-  // The stick in the console's units: x right, y up. Radial dead zone, then a
+  // The stick in the sample's units: x right, y up. Radial dead zone, then a
   // gentle curve so small deflections stay precise.
   static int[] consoleStick(float x, float y, float scale) {
     double r = Math.hypot(x, y);

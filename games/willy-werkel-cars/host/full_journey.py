@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 
+from director64.probe import state_line
 from director64.project import selected_game
 
 
@@ -35,7 +36,7 @@ def run(executable, output):
         )
 
         def receive():
-            state = json.loads(process.stdout.readline())
+            state = json.loads(state_line(process.stdout))
             states.append(state)
             validate_state(state)
             return state
@@ -168,26 +169,6 @@ def run(executable, output):
             assert state["movie"] == "06.DXR"  # Closing the toolbox re-enables buttons.
             state = click(575, 440)
             assert state["movie"] == "03.DXR"
-            # Separate from player car assembly: the game's makeCar(#Good)
-            # helper supplies a deterministic drivable car for these checks.
-            command("fixture-drive")
-            state = command("step 6000 320 200 0")
-            assert state["movie"] == "05.DXR"
-            # Spelled as the script that named the mode (#Driving); Lingo
-            # compares text without case, and so does this.
-            assert state["objects"]["gdir"]["mode"].lower() == "driving"
-            headings = json.loads(state["driving"]["directionlist"])
-            assert len({tuple(point) for point in headings}) == 16
-            origin = state["driving"]["coordinate"]
-            direction = state["driving"]["direction"]
-            state = command("step 120 400 200 1")
-            speed = float(state["driving"]["speed"])
-            assert speed > 0 and state["driving"]["coordinate"] != origin
-            assert state["driving"]["direction"] != direction
-            state = command("step 120 400 200 2")
-            assert float(state["driving"]["speed"]) < 0
-            state = command("step 60 400 200 0")
-            assert float(state["driving"]["acceleration"]) == 0
         finally:
             if process.poll() is None:
                 process.stdin.write("quit\n")
@@ -197,10 +178,10 @@ def run(executable, output):
                 json.dumps({"commands": commands, "states": states}, indent=2) + "\n"
             )
         if process.returncode:
-            raise ValueError("native journey process failed")
+            raise ValueError("journey probe failed")
     return {
         "status": "passing",
-        "platform": "host-native",
+        "platform": "web-probe",
         "source_sha256": game.source["sha256"],
         "scenarios": [
             "create-player",
@@ -217,9 +198,7 @@ def run(executable, output):
             "toolbox-certificate-and-return",
             "certificate-print-notice-and-dismissal",
             "toolbox-close",
-            "source-fixture-driving-acceleration-steering-brake-reverse-release",
         ],
-        "driving_fixture": "recovered 05.DXR makeCar(#Good); player assembly not covered",
         "commands": len(commands),
         "replay_sha256": hashlib.sha256((output / "replay.json").read_bytes()).hexdigest(),
         "hardware_qualified": False,

@@ -1,10 +1,10 @@
 #ifndef DIRECTOR64_WEB_COMPOSITOR_H
 #define DIRECTOR64_WEB_COMPOSITOR_H
-// The browser backend's software compositor: the stage the N64 draws with the
-// RDP, drawn by the CPU into a 640x480 RGBA8888 framebuffer that the page
-// presents on a canvas. It reads the same Director state and the same converted
-// images as the console, so a difference between the two is a compositor
-// difference, not a different game.
+// The software compositor the web and Android players share: the stage,
+// drawn by the CPU into a 640x480 RGBA8888 framebuffer (800x600 with
+// DIRECTOR64_NATIVE_STAGE) that the web page presents on a canvas and the
+// Android player on its surface. Both hosts draw the same Director state from
+// the same converted images through it, so they show the same game.
 #include "director.h"
 #include "film_transform.h"
 #include <stdbool.h>
@@ -25,7 +25,7 @@ enum { WC_WIDTH = 640, WC_HEIGHT = 480 };
 // width*height coverage plane and returns false when the host has no font.
 
 // How a text box is set: the member's authored style, or NULL for the
-// console's builtin font. font is the model's font number (0: none
+// builtin monospace font. font is the model's font number (0: none
 // recovered); align 0 left, 1 center, 2 right.
 typedef struct {
   unsigned font, size, align;
@@ -50,8 +50,7 @@ typedef struct {
 } wc_host_t;
 
 // A decoded image: linear RGBA8888 (r in the low byte), the ink's coverage
-// already applied to alpha, exactly as the console's cache holds it after its
-// ink pass.
+// already applied to alpha.
 typedef struct {
   char name[40];
   unsigned ink, width, height, depth;
@@ -96,7 +95,7 @@ typedef struct {
 
 // One cursor on the stage: where it points and the ink its glyph's black
 // body takes (dg_cursor_ink; 1 keeps it black). Controllers each draw one,
-// in their player's colour, as the console does.
+// in their player's colour.
 typedef struct {
   int x, y;
   uint32_t ink; // a 16-bit ink; the full word keeps the struct unpadded
@@ -151,7 +150,7 @@ typedef struct {
 void wc_init(wc_t *, wc_host_t, size_t image_budget);
 void wc_release(wc_t *);
 // Decodes (or finds) a member's image under an ink. NULL with the runtime
-// failed on an invalid or missing asset, as the console fails.
+// failed on an invalid or missing asset.
 // width and height 0 take the stored image's own size (trimmed poses).
 const wc_image_t *wc_image(wc_t *, lv_runtime_t *, const char *asset,
                            unsigned width, unsigned height, unsigned ink);
@@ -177,12 +176,13 @@ bool wc_render(wc_t *, dg_runtime_t *, int pointer_x, int pointer_y,
 // The same with up to WC_POINTERS cursors, drawn in order (the last on top).
 bool wc_render_pointers(wc_t *, dg_runtime_t *, const wc_pointer_t *,
                         unsigned count, unsigned externals);
-// A member's cursor bitmap, as the native probe's native_cursor_bitmap reads
-// it (the probe state line's cursor hash); fails the runtime as it does.
+// A member's cursor bitmap, as the probe state line's cursor hash reads it
+// (state.inc calls it as native_cursor_bitmap); fails the runtime on a bad
+// asset.
 bool wc_cursor_bitmap(wc_t *, lv_runtime_t *, const dg_member_t *m,
                       const dg_member_t *mask, dg_cursor_bitmap_t *out);
-// Converts one stored image to RGBA8888, applying an ink as the console's
-// loader does. Exposed for the contract tests.
+// Converts one stored image to RGBA8888, applying an ink. Exposed for the
+// contract tests.
 bool wc_decode(const uint8_t *data, uint32_t length, unsigned width,
                unsigned height, unsigned ink, uint32_t *out,
                bool *follow_alpha);

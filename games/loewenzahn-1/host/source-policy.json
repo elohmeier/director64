@@ -1,12 +1,5 @@
 {
   "director_version": 500,
-  "image_codec_tiers": [
-    {
-      "min_decompressed_bytes": 65536,
-      "level": 2
-    }
-  ],
-  "wav_resample_hz": 16000,
   "startup_movie": "START.DXR",
   "directories": [
     "."
@@ -31,7 +24,5 @@
     "file": "CURSOR.CXT",
     "member": 1,
     "sha256": "7aaffbe8a1ea820744db632ddbd749d0fde5b18de958e78cf4db27d7deeab583"
-  },
-  "image_indexed": true,
-  "image_pack_budget_mib": 32
+  }
 }

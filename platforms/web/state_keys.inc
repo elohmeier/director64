@@ -2,8 +2,8 @@
  * name is case-insensitive in Lingo, and the compiler keeps the spelling of
  * the script that declared it, so a state that named keys as spelled would
  * shift under every journey and fuzz baseline whenever a script's spelling
- * differs from its use. Included by each game's tests/director_probe.c after
- * its quoted() helper.
+ * differs from its use. Included by web_runtime.c ahead of each game's
+ * probe/state.inc, after its quoted() helper.
  */
 static void quoted_key(const char *text) {
   char folded[256];

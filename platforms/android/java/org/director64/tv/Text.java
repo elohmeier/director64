@@ -26,8 +26,7 @@ import org.json.JSONObject;
 /**
  * Text boxes as coverage planes, set the way the browser player sets them on a canvas
  * (platforms/web/site/player.js textRasterizer). Text without an authored style prints in the
- * console's builtin monospace font, monogram, at the size whose ascent the console's atlas records
- * (11 px, 13 px lines), on or off per pixel. A styled member sets in the game's own font, recovered
+ * builtin monospace font, monogram (CC0), at 11 px ascent and 13 px lines, on or off per pixel. A styled member sets in the game's own font, recovered
  * from the disc or the port's substitute, at its authored size, alignment, ascent and line height.
  */
 final class Text {
@@ -214,7 +213,7 @@ final class Text {
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         int alpha = rows[y * stride + x] & 0xff;
-        // A pixel font: coverage is on or off, as the console's 1-bit atlas is.
+        // A pixel font: coverage is on or off.
         coverage[y * width + x] = (byte) (builtin ? (alpha >= 128 ? 255 : 0) : alpha);
       }
     }

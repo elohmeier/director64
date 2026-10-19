@@ -27,6 +27,3 @@ director_version = 850
 media_root = "DATA"
 entry_movie = "START"
 native_compatibility = true
-rom_title = "Loewenzahn Optik"
-rom_save_type = 80
-controller_count = 4

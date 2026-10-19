@@ -280,43 +280,6 @@ def generate(program: dict, output: Path) -> dict:
     return json.loads((output / "manifest.json").read_text())
 
 
-def executable_program(game) -> Path:
-    """Include an embedded projector as a native startup unit when selected.
-
-    Keep the recovered media AST unchanged, and record the original launcher
-    identity on each copied handler for source accountability.
-    """
-    path = game.work / "aot/program.json"
-    movie = game.data["port"].get("launcher_movie")
-    compatibility = game.data["port"].get("native_compatibility", False)
-    if not movie and not compatibility:
-        return path
-    if compatibility and not (game.directory / "host/compatibility.py").is_file():
-        converted = subprocess.run([
-            *generator_command(game.root), "director", "port-program", path,
-            game.work / "analysis/source/manifest.json", game.slug, game.source["sha256"],
-            movie or "-", "compat",
-        ], capture_output=True, text=True, check=True)
-        program = json.loads(converted.stdout)
-        output = game.work / "aot/native-program.json"
-        output.write_text(json.dumps(program, indent=2) + "\n")
-        return output
-    program = json.loads(path.read_text())
-    if compatibility:
-        program = game.host("compatibility").apply(program, game.source["sha256"])
-    if movie:
-        launcher = json.loads((game.work / "analysis/launcher-program.json").read_text())
-        if any(h["movie"] == movie for h in program["handlers"]):
-            raise LingoError("embedded launcher conflicts with a media movie")
-        for handler in launcher["handlers"]:
-            handler["source_movie"] = handler["movie"]
-            handler["movie"] = movie
-            program["handlers"].append(handler)
-    output = game.work / "aot/native-program.json"
-    output.write_text(json.dumps(program, indent=2) + "\n")
-    return output
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("program", type=Path)

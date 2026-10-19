@@ -62,7 +62,7 @@ bool wc_decode(const uint8_t *data, uint32_t length, unsigned width,
   bool rich = dg_fdi_rich_text(data);
 #if !DG_MODERN
   // Coverage-carrying images are a D7-and-later form; plain D6 reads the
-  // matte bit only, as the console's loader does for this family.
+  // matte bit only.
   follow = false;
 #endif
   if (rich) follow = ink == 36;
@@ -317,7 +317,7 @@ bool wc_hit(wc_t *c, lv_runtime_t *values, const dg_member_t *m, unsigned ink,
   unsigned width, height;
   stored_dims(m, &width, &height);
 #if DG_D10
-  // Map the authored pixel onto the prescaled image, as the native probe does.
+  // Map the authored pixel onto the prescaled image.
   x = (int)((unsigned)x * width / m->width);
   y = (int)((unsigned)y * height / m->height);
   if ((unsigned)x >= width) x = (int)width - 1;
@@ -330,8 +330,7 @@ bool wc_hit(wc_t *c, lv_runtime_t *values, const dg_member_t *m, unsigned ink,
 #if DG_D10
 // Director's mask ink: the cast member after the sprite's is its mask, and
 // light mask pixels make the image transparent; a neighbour that is no mask
-// leaves the image as it is (ink.h dg_mask_pair), as the console's loader
-// does (director_main.c mask_pair).
+// leaves the image as it is (ink.h dg_mask_pair).
 static bool mask_pair(const dg_member_t *member, const dg_member_t *mask) {
   return dg_mask_pair(member->name, mask->name, (int)mask->width - (int)member->width,
                       (int)mask->height - (int)member->height);
@@ -892,7 +891,7 @@ static bool draw_text(wc_t *c, const char *text, const wc_text_style_t *style,
 }
 
 // The style a text member sets in: its authored one, or NULL for the
-// console's builtin font.
+// builtin monospace font.
 static const wc_text_style_t *member_text_style(dg_runtime_t *d, const dg_member_t *m,
                                                 wc_text_style_t *authored, int *scroll,
                                                 bool prescale) {
@@ -1069,7 +1068,7 @@ static uint32_t sprite_color(const dg_runtime_t *d, const dg_sprite_t *s,
 
 #if DG_D10
 // Prompt text written into a converted Flash member's named edit fields draws
-// above the flattened card (director_main.c draw_flash_overlays): wrapped in
+// above the flattened card: wrapped in
 // authored member space with the field's measured advances, so the lines
 // agree with the textHeight the scripts read.
 static void draw_flash_overlays(wc_t *c, dg_runtime_t *d, unsigned channel,
@@ -1251,7 +1250,7 @@ bool wc_flash_field_hit(wc_t *c, dg_runtime_t *d, struct dg_flash_instance *inst
 
 #if DG_D5 || DG_D10
 // A digital video sprite shows the frame the host has decoded for its current
-// time (d5_video.c draws the console's), stretched to the sprite's bounds.
+// time, stretched to the sprite's bounds.
 static void draw_video(wc_t *c, dg_runtime_t *owner, unsigned sprite, const dg_sprite_t *s,
                        int l, int t, int r, int b, unsigned opacity, int ox, int oy) {
   static uint32_t frame[1024 * 768];
@@ -2169,7 +2168,7 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
     draw_scene(c, d, 0, 0, true);
 #if DG_D5
   if (d->ticks < d->alert_until && !d->values->failed) {
-    // A recovered script alert, in the console's builtin font.
+    // A recovered script alert, in the builtin monospace font.
     fill(c, 48, 180, 592, 290, 0xffffffffu);
     if(!draw_text(c, d->alert_text, NULL, 0, 255, 64, 201, 574, 281, NULL, 0, 0))
       lv_fail(d->values,"alert text rasterization failed");

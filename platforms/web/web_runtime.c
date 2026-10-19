@@ -1,8 +1,9 @@
-// The browser backend's runtime host: one shared engine instance, the
-// platform services it calls, the save device and the service step. The page
-// (site/app.js) drives it frame by frame; the Node probe harness drives the
-// same functions through the line protocol the native probes speak, so parity
-// against the native probe exercises exactly what the page runs.
+// The runtime host of the web player and Android TV: one shared engine
+// instance, the platform services it calls, the save device and the service
+// step. The page (site/player.js) and the Android host (jni/main.c) drive it
+// frame by frame; the Node probe harness (node/probe.mjs) drives the same
+// functions through a line protocol, so fuzzing and journeys exercise exactly
+// what the players run.
 #include "ink.h"
 #include "web_runtime.h"
 #include "compositor.h"
@@ -50,7 +51,7 @@ static const unsigned global_count = sizeof(global_names) / sizeof(*global_names
 #endif
 #ifndef DIRECTOR64_GAME_PROBE
 // The default state line reports the save archive's files; a game's own
-// probe state (games/<slug>/probe) reports what its native probe does.
+// probe state (games/<slug>/probe) reports what that game needs.
 static const char *const save_files[] = {DIRECTOR64_SAVE_FILES};
 enum { SAVE_FILE_COUNT = sizeof(save_files) / sizeof(*save_files) };
 #endif
@@ -65,7 +66,7 @@ static bool probe_render;
 EMSCRIPTEN_KEEPALIVE void d64_probe_render(int enabled) { probe_render = enabled != 0; }
 static unsigned seed;
 static float served_gain[DG_SOUND_CHANNELS];
-// The console's FlashRAM, erased. The page fills it from durable storage
+// The 128 KiB save image, erased. The host fills it from durable storage
 // before boot and persists it after every committed save.
 static uint8_t flash[WEB_FLASH_BYTES];
 static bool flash_dirty;
@@ -126,7 +127,7 @@ static void trace(void *ctx, const char *text) {
 }
 #if DG_D10
 // A playFile stream holds its channel for as long as it plays: the length
-// the host answers (the native probe's is a nominal second).
+// the host answers.
 static void play_file(void *ctx, unsigned channel, const char *name) {
   (void)ctx;
   if (channel >= DG_SOUND_CHANNELS)
@@ -439,7 +440,7 @@ EMSCRIPTEN_KEEPALIVE const char *d64_package_error(void) { return package_error;
 #endif
 #endif
 #include "lifecycle.inc"
-// A console power-on: volatile state resets, only the flash image persists.
+// A fresh boot: volatile state resets, only the save image persists.
 // Returns the save status; anything but valid or blank has already failed the
 // runtime without touching the flash image.
 EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
@@ -496,13 +497,8 @@ EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
 }
 
 #ifdef DIRECTOR64_GAME_PROBE
-// The game's own service step (games/<slug>/probe/step.inc), shared with its
-// native probe so both run the same per-game input layer before the tick.
-// The console's working-set recorder has no part in the browser.
-#define draw_record_tick(d) ((void)(d))
-// Nor are the native probes' host CPU-time accounts (probe_stats.inc).
-#define cpu_us() ((uint64_t)0)
-#define perf_account(movie, tick, stage) ((void)(movie), (void)(tick), (void)(stage))
+// The game's own service step (games/<slug>/probe/step.inc): its per-game
+// input layer runs before the tick.
 #include "step.inc"
 #else
 static bool step(int x, int y, unsigned buttons) {
@@ -559,8 +555,8 @@ EMSCRIPTEN_KEEPALIVE int d64_step(int x, int y, int buttons) {
   if (director.quit)
     return 2;
 #if DG_D10
-  // The page's 640x480 pointer maps into the authored 800x600 stage, as the
-  // console's does; the probe protocol speaks authored coordinates.
+  // The page's 640x480 pointer maps into the authored 800x600 stage; the
+  // probe protocol speaks authored coordinates.
   x = dg_stage_coord(x);
   y = dg_stage_coord(y);
 #endif
@@ -574,12 +570,11 @@ EMSCRIPTEN_KEEPALIVE int d64_step(int x, int y, int buttons) {
 #endif
   return values.failed ? 1 : director.quit ? 2 : 0;
 }
-// ---- Controllers: the page's gamepads as the console's four ports ----
-// The page reports every connected gamepad as an N64 controller (input.h
-// buttons, stick in the console's range) and then runs d64_step_pads, which
-// services them exactly as platforms/n64/director_main.c does: each player
-// moves their own cursor and whoever presses or points holds Director's one
-// mouse (runtime/interaction/pointer.c).
+// ---- Controllers: up to four players' gamepads ----
+// The host reports every connected gamepad as a controller sample (input.h
+// buttons, stick in -80..80) and then runs d64_step_pads: each player moves
+// their own cursor and whoever presses or points holds Director's one mouse
+// (runtime/interaction/pointer.c).
 static input_sample_t pads;
 EMSCRIPTEN_KEEPALIVE void d64_pad(unsigned player, int connected,
                                   unsigned buttons, int stick_x, int stick_y) {
@@ -615,8 +610,7 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_pointer_player(void) { return pointer.active; 
 EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y);
 // One service tick from the controllers. Returns as d64_step does, or 3 when
 // the holder pressed A on an editable field: the tick did not run, and the
-// page opens text entry there (at d64_pointer_x/y), as the console opens its
-// on-screen keyboard.
+// host opens its own text entry there (at d64_pointer_x/y).
 EMSCRIPTEN_KEEPALIVE int d64_step_pads(void) {
   if (!booted || values.failed)
     return 1;
@@ -658,10 +652,9 @@ EMSCRIPTEN_KEEPALIVE uint32_t *d64_render_pads(void) {
              ? compositor.pixels
              : NULL;
 }
-// Text entry. The console opens its on-screen keyboard when a press lands on
-// an editable field (platforms/n64/text_input.c); the page opens a text box
-// over the field instead and pauses the game while it is open, as the console
-// does. The same checks decide when a field accepts entry. The field's stage
+// Text entry. When a press lands on an editable field the page (or the
+// Android host) opens a text box over the field and pauses the game while it
+// is open. The same checks decide when a field accepts entry. The field's stage
 // rectangle is filled in for the page to place the box.
 static int text_field_rect[4];
 EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y) {
@@ -698,8 +691,8 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y) {
 EMSCRIPTEN_KEEPALIVE const int *d64_text_field_rect(void) { return text_field_rect; }
 // Key fields. Mucklas (D8) takes its player name through its own keyDown
 // handlers, with their letter sounds and length limit, rather than a
-// committed edit; the console opens its on-screen keyboard over the field
-// and sends each character as a key (platforms/n64/text_input.c). The field
+// committed edit; the host opens its keyboard over the field and sends each
+// character as a key. The field
 // at the pointer, or with `anywhere` the one taking a name now, while it
 // does; its stage rectangle is filled in as d64_text_field's.
 #if DG_D10 && !defined(DIRECTOR64_MUCKLAS)
@@ -780,8 +773,9 @@ EMSCRIPTEN_KEEPALIVE uint32_t *d64_render(int x, int y, int pointer_shown) {
              : NULL;
 }
 // The print document the game asked for (1-16: book BAS then REZ, chapters
-// 1 to 8), while its page is up; 0 otherwise. The page opens the browser's
-// print dialog for it and dismisses the page as the console's B does.
+// 1 to 8), while its page is up; 0 otherwise. The web page opens the
+// browser's print dialog for it, Android shows a notice that printing is not
+// available, and both then dismiss the page with B (printing.c).
 EMSCRIPTEN_KEEPALIVE unsigned d64_print_request(void) {
 #ifdef DIRECTOR64_PRINTING
   return booted ? game_print_id() : 0;
@@ -815,7 +809,7 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_image_bytes(void) {
 }
 EMSCRIPTEN_KEEPALIVE unsigned d64_image_loads(void) { return compositor.loads; }
 
-// ---- The native probes' line protocol (games/*/tests/director_probe.c) ----
+// ---- The probe line protocol (platforms/web/node/probe.mjs) ----
 
 static void quoted(const char *text) {
   emit("\"");
@@ -843,7 +837,7 @@ static void quoted(const char *text) {
 #define putchar(c) emit("%c", (c))
 #define puts(s) emit("%s\n", (s))
 #define fflush(f) ((void)(f))
-// The names the native probes' state lines use for this runtime's services.
+// The names the games' state lines use for this runtime's services.
 #define busy sound_busy
 #define native_cursor_bitmap(v, m, mask, out) wc_cursor_bitmap(&compositor, v, m, mask, out)
 #include "state_keys.inc"
@@ -902,7 +896,7 @@ static void state(void) {
          i, s->value.member, s->value.script, l, t, r, b, dg_opacity(s),
          s->value.x, s->value.y, s->moveable);
 #if DG_EXTENDED
-    // Fields a keyboard can type into, as the native probes report them.
+    // Fields a keyboard can type into.
     if (dg_text_editable(&director, i))
       emit(",\"editable\":1");
 #endif

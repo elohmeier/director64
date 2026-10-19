@@ -52,7 +52,7 @@ def require_capabilities(model: dict, target: str, identity: str) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("model", type=Path)
-    parser.add_argument("--target", choices=("web", "android", "n64"), required=True)
+    parser.add_argument("--target", choices=("web", "android"), required=True)
     parser.add_argument(
         "--strict", action="store_true", help="exit 1 on findings or conversion problems"
     )

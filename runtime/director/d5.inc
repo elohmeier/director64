@@ -1,6 +1,6 @@
 // Director 5 services used by Löwenzahn. Score records remain versioned;
 // Lingo's default video time scale is 60 ticks per second. Converted media and
-// the target decoder use 600 units per second internally; convert at the API.
+// the host's decoder use 600 units per second internally; convert at the API.
 static unsigned d5_number(dg_runtime_t *d, uint32_t id) {
   unsigned cast = member_cast(d, id);
   return (cast > 1 ? (cast - 1) << 17 : 0) | (id & 65535);

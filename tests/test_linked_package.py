@@ -5,10 +5,45 @@ import struct
 import subprocess
 
 from director64.aot import generator_command, repository_root
-from director64.director import film_track_data, generate
 
 
-def test_linked_movie_metadata_survives_package_and_native_generation(tmp_path):
+def film_track_data(keys):
+    """The reference encoding of package.rs film tracks (film_track.h)."""
+    fields = (
+        ("I", ("member",)), ("h", ("x",)), ("h", ("y",)),
+        ("h", ("width",)), ("h", ("height",)), ("BB", ("ink", "blend")),
+        ("BB", ("type", "flags")), ("BB", ("fore", "back")),
+        ("BBB", ("thickness", "stretch", "trails")), ("h", ("loc_z",)),
+        ("I", ("fore_rgb",)), ("I", ("back_rgb",)),
+        ("i", ("rotation",)), ("i", ("skew",)),
+    )
+
+    def groups(spec):
+        return [struct.pack("<" + fmt, *(spec.get(name, 0) for name in names))
+                for fmt, names in fields]
+
+    previous, last, result = groups({}), -1, bytearray()
+    if not keys:
+        raise ValueError("empty native film track")
+    for frame, spec in keys:
+        if not last < frame <= 65535:
+            raise ValueError("native film keys are not in frame order")
+        if any(spec.get(name) for name in ("script", "tempo", "delay", "behaviors")):
+            raise ValueError("native film key contains script/main-channel state")
+        current = groups(spec)
+        mask = sum(1 << i for i, (before, after) in enumerate(zip(previous, current, strict=True))
+                   if before != after)
+        if not mask:
+            raise ValueError("redundant native film key")
+        result.extend(struct.pack("<HH", frame, mask))
+        for i, value in enumerate(current):
+            if mask & (1 << i):
+                result.extend(value)
+        previous, last = current, frame
+    return bytes(result)
+
+
+def test_linked_movie_metadata_survives_packaging(tmp_path):
     root = repository_root()
     def layer(channel, *, enabled=True, x=11):
         data = [0] * 48
@@ -145,7 +180,7 @@ def test_linked_movie_metadata_survives_package_and_native_generation(tmp_path):
                "fore_rgb": 0x123456, "back_rgb": 0xABCDEF, "rotation": -375, "skew": 125}
     expected = film_track_data([(0, initial), (2, {})])
     signature = struct.pack("<HHHI", 2, 1, 2, len(expected)) + expected
-    assert data.count(signature) == 1  # Rust and native Python encoders agree.
+    assert data.count(signature) == 1
     tracks = data.index(signature)
     first_size = len(film_track_data([(0, initial)]))
     # Empty tracks, invalid masks/frames, duplicate keys/channels and a false
@@ -157,18 +192,3 @@ def test_linked_movie_metadata_survives_package_and_native_generation(tmp_path):
         rejected = tmp_path / f"invalid-track-{offset}.d64p"
         rejected.write_bytes(corrupt)
         subprocess.run([executable, rejected, "reject"], check=True, capture_output=True)
-    generate(model, tmp_path / "native")
-    scene = (tmp_path / "native/main_dxr_scene.c").read_text()
-    assert ",2,25,192,-12,NULL,0,0,0,0,NULL," in scene
-    assert "film_tracks_1_2" in scene
-    assert "film_frames_1_2" not in scene
-    child = (tmp_path / "native/child_dxr_scene.c").read_text()
-    assert "{0,16711680},{1,255}" in child
-    assert '{1,2,"synthetic-link"}' in child
-    for filename in ("main_dxr_scene.c", "child_dxr_scene.c"):
-        subprocess.run([
-            "cc", "-std=c17", "-Wall", "-Wextra", "-Werror", "-pedantic", "-c",
-            "-DDIRECTOR64_DIRECTOR_VERSION=10", "-DDIRECTOR64_D85=1", "-DDIRECTOR64_EXTENDED_D6=1",
-            "-Iruntime/director", "-Iruntime/lingo", tmp_path / "native" / filename,
-            "-o", tmp_path / (filename + ".o"),
-        ], cwd=root, check=True, capture_output=True)

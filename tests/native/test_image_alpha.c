@@ -1,5 +1,4 @@
 #include "ink.h"
-#include "pack.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,34 +8,7 @@ static void be32(uint8_t *p, uint32_t value) {
   p[2] = (uint8_t)(value >> 8);
   p[3] = (uint8_t)value;
 }
-static void test_pack_keys_and_records(void) {
-  // Vectors shared with tests/test_image_pack.py: the packer's keys are the
-  // console's.
-  assert(dg_image_key("2044807783f1979d6c83bbd5.fdi", 36) == 0xec740a63u);
-  assert(dg_image_key("a.fdi", 255) == 0x1b712721u);
-  assert(dg_image_key("a.fdi", 0) & 1u);
-  const uint8_t header[32] = {'D', '6', '4', 'P', 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 1,
-                              0, 0, 0, 40, 0, 0, 0, 32, 0, 0, 0, 88, 0, 0, 0, 112};
-  dg_pack_header_t parsed;
-  assert(dg_pack_header_parse(header, &parsed));
-  assert(parsed.index_count == 2 && parsed.scene_count == 1 && parsed.index_offset == 40);
-  assert(parsed.scene_table_offset == 32 && parsed.entries_offset == 88 &&
-         parsed.blobs_offset == 112);
-  uint8_t wrong[32];
-  memcpy(wrong, header, 32);
-  wrong[7] = 2;
-  assert(!dg_pack_header_parse(wrong, &parsed));
-  const uint8_t entry[28] = {0xec, 0x74, 0x0a, 0x63, 0, 0, 1, 0, 0, 0, 0, 45,
-                             0, 0, 0x1a, 0x40, 0, 0, 0x1a, 0x2c, 0, 3, 0, 2,
-                             0x03, 0xe8, 0, 0};
-  dg_pack_entry_t e;
-  dg_pack_entry_parse(entry, &e);
-  assert(e.key == 0xec740a63u && e.offset == 256 && e.compressed == 45);
-  assert(e.allocation == 6720 && e.length == 6700 && e.width == 3 && e.height == 2);
-  assert(e.share == 1000 && e.flags == 0);
-}
 int main(void) {
-  test_pack_keys_and_records();
   uint32_t alpha_offset;
   assert(dg_fdia_size(3, 3, &alpha_offset) == 65 && alpha_offset == 56);
   assert(dg_fdia_size(640, 480, &alpha_offset) == 921632 && alpha_offset == 614432);

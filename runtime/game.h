@@ -1,7 +1,7 @@
 #ifndef DIRECTOR64_GAME_H
 #define DIRECTOR64_GAME_H
 #include "storage.h"
-/* One adapter is linked per ROM. Source identities and entry movie come from game.toml. */
+/* One adapter is linked per game build. Source identities and entry movie come from game.toml. */
 save_status_t game_save_load(save_backend_t);
 save_status_t game_save_status(void);
 unsigned game_save_generation(void);

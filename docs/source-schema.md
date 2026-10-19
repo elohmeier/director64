@@ -1,10 +1,10 @@
 # Source-accountability schema version 1
 
-`director64 assets --game <slug>` verifies the supported ISO and every extracted ISO 9660
-file, then writes ignored `build/<game>/<source-id>/analysis/source/manifest.json`,
+`director64 recover --game <slug>` verifies the supported disc image and every
+extracted ISO 9660 file; its audit stage then writes ignored `build/<game>/<source-id>/analysis/source/manifest.json`,
 `obligations.json`, `summary.json` and content-addressed raw score chunks.
 This recovery schema is separate from the runtime IR. `runtime_ir_frozen` is false;
-raw score recovery is not native implementation or reference matching.
+raw score recovery is not runtime implementation or reference matching.
 
 The actual host parser is the npm-locked ProjectorRays 1.1.1 WASM, whose binary
 SHA-256 is checked before extraction. `config/provenance.toml` distinguishes that
@@ -52,6 +52,6 @@ The adapter copies only the embedded archive prologue into a temporary in-memory
 parser view, keeping absolute mmap/chunk offsets and all source files unchanged.
 Its path setup and GINTRO boot route informed the Wine reference runner.
 
-Reference tolerances, source no-op/unreachable dispositions, native mappings and
+Reference tolerances, source no-op/unreachable dispositions, runtime mappings and
 runtime semantics require reviewed evidence. No generated discovery record can
 raise those coverage dimensions on its own.

@@ -4,14 +4,14 @@
 
 // Six authored preference/progress files, the shared "save" cast file and
 // eight per-player cast files ("save01".."save08"); exercise databases
-// ship read-only on the ROM filesystem.
+// ship read-only in the game package.
 #define ARCHIVE_FILES 15u
 #define ARCHIVE_BYTES 65536u
 #define ARCHIVE_HEADER 128u
 #define ARCHIVE_FILE_LIMIT 16383u
 
-// Two independently erasable FlashRAM generations. File order is fixed; no
-// saved path is ever interpreted as a host/ROM filesystem path.
+// Two independently erasable save-image generations. File order is fixed; no
+// saved path is ever interpreted as a host filesystem path.
 typedef struct {
   save_backend_t backend;
   save_status_t status;

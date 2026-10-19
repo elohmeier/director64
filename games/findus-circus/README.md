@@ -1,11 +1,12 @@
 # Pettersson und Findus: Hühnertanz und Katerzirkus
 
 Experimental Director 8.5 port of the locally supplied German disc, for the
-browser player and Android TV (no N64 build).
+Android TV player and the standalone web app.
 
 ```sh
 uv run --locked director64 android build --game findus-circus --abi armeabi-v7a
 uv run --locked director64 android install --game findus-circus --serial <device>
+uv run --locked director64 web --game findus-circus --serve
 ```
 
 The projector `PF2.EXE` embeds a launcher (converted as `PF2.DXR`) that starts

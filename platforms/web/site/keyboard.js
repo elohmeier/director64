@@ -1,7 +1,6 @@
-// The on-screen keyboard a controller types with, as the console's
-// (platforms/n64/text_input.c): it fills the page's text box over the field,
-// and the box commits as it does for a real keyboard. Typing on a real
-// keyboard keeps working while it shows.
+// The on-screen keyboard a controller types with: it fills the page's text
+// box over the field, and the box commits as it does for a real keyboard.
+// Typing on a real keyboard keeps working while it shows.
 import {t} from "./strings.js";
 
 // Browser event bursts can exceed the engine's 32-event queue between ticks.

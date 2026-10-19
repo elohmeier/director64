@@ -7,8 +7,8 @@
 #define ARCHIVE_HEADER 128u
 #define ARCHIVE_FILE_LIMIT 16383u
 
-// Two independently erasable FlashRAM generations. File order is fixed; no
-// saved path is ever interpreted as a host/ROM filesystem path.
+// Two independently erasable save-image generations. File order is fixed; no
+// saved path is ever interpreted as a host filesystem path.
 typedef struct {
   save_backend_t backend;
   save_status_t status;

@@ -7,8 +7,7 @@ import re
 
 from director64.project import selected_game
 
-from .full_boot import validate_intro_stops
-from .full_journey import DOOR, RIGHT, ROUTES, Replay
+from .full_journey import DOOR, RIGHT, ROUTES, Replay, validate_intro_stops
 
 SCENARIOS = ("HAMMER", "RADIO", "FILMSPEED")
 
@@ -150,7 +149,7 @@ def film_speed(replay, movies):
 
 def run(executable, output):
     game = selected_game()
-    model = json.loads((game.work / "director/model.json").read_text())
+    model = json.loads((game.work / "model.json").read_text())
     movies = {m["name"]: m for m in model["movies"]}
     checkpoints, hashes = {}, {}
     for name, scenario in zip(SCENARIOS, (hammer, radio, film_speed), strict=True):
@@ -169,7 +168,7 @@ def run(executable, output):
         hashes[name] = hashlib.sha256((output / name / "replay.json").read_bytes()).hexdigest()
     return {
         "status": "passing",
-        "platform": "host-native",
+        "platform": "web-probe",
         "scenario": "hammer-radio-film-speed",
         "checkpoints": checkpoints,
         "replay_sha256": hashes,

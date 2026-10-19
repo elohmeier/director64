@@ -105,9 +105,9 @@ static inline bool dg_fdia_valid(const uint8_t *header, uint32_t length,
 // follows the palette at the next eight-byte boundary; the plane holds the
 // stored layout's pixels (tiles past the texture limit, as every plane), two
 // per byte with the left pixel in the high nibble for CI4, whose linear rows
-// are ceil(width / 2) bytes, as the RDP reads them. The packer writes it for
-// an image with at most 256 distinct words (full_assets.index_colors), which
-// on the console halves or quarters what a scene entry decompresses and
+// are ceil(width / 2) bytes. The packer writes it for an image with at most
+// 256 distinct words (full_assets.index_colors), which halves or quarters
+// what a scene entry decompresses and
 // lets one palette carry an ink's alpha for every pixel of that colour.
 static inline unsigned dg_fdic_bits(const uint8_t *header) { return header[18]; }
 static inline unsigned dg_fdic_colors(const uint8_t *header) {
@@ -479,7 +479,7 @@ static inline unsigned dg_mask_alpha(uint32_t mask, unsigned source_alpha, bool 
 }
 // RTE2 rich text retains glyph coverage for background-transparent ink36.
 // Other inks first draw that coverage over the authored text background.
-// Pixel uses the on-disk/N64 RRGGBBAA order.
+// Pixel uses the on-disk RRGGBBAA order.
 static inline uint32_t dg_rich_pixel32(uint32_t pixel, const uint8_t header[32], unsigned ink) {
   if (ink == 36) return pixel;
   unsigned alpha = pixel & 255;

@@ -4,16 +4,15 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 mkdir -p build/tests
 python3 tools/reference/generate_avm1_fixtures.py build/tests/avm1_original.h
-includes=(-Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage -Iplatforms/n64 -Igames/findus-workshop/runtime)
+includes=(-Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage -Igames/findus-workshop/runtime)
 compile() {
     local name=$1
     shift
     "${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic "${includes[@]}" "$@" -lm -o "build/tests/$name"
     "build/tests/$name"
 }
-for budget in hosted n64 override; do
+for budget in default override; do
     options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1)
-    if [ "$budget" != hosted ]; then options+=(-DDIRECTOR64_N64=1); fi
     if [ "$budget" = override ]; then
         options+=(-DEXPECT_OVERRIDE=1 -DLV_HEAP_BYTES=1572864 -DLV_OBJECTS=10000)
     fi
@@ -57,17 +56,8 @@ for profile in d5 d10 d85; do
         tests/native/test_web_lifecycle.c platforms/web/compositor.c \
         runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c runtime/package/package.c
 done
-compile n64_movie_names tests/native/test_n64_movie_names.c
 compile web_mask_phase_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 -Iplatforms/web \
     tests/native/test_web_mask_phase.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
-for profile in d10 d85; do
-    options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
-    if [ "$profile" = d85 ]; then options+=(-DDIRECTOR64_D85=1); fi
-    compile "n64_film_crop_$profile" "${options[@]}" tests/native/test_n64_film_crop.c \
-        runtime/director/director.c runtime/lingo/lingo_runtime.c
-    compile "n64_film_backdrop_$profile" "${options[@]}" tests/native/test_n64_film_backdrop.c \
-        runtime/director/director.c runtime/lingo/lingo_runtime.c
-done
 compile lingo_d8 -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_lingo_d8.c runtime/lingo/lingo_runtime.c
 compile lingo_collect tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
 compile lingo_collect_extended_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
@@ -88,7 +78,6 @@ for profile in 5 6 8 10 85; do
         options+=(-DDIRECTOR64_DIRECTOR_VERSION="$profile")
     fi
     compile "sound_fades_d$profile" "${options[@]}" tests/native/test_sound_fades.c runtime/director/director.c runtime/lingo/lingo_runtime.c
-    compile "probe_audio_d$profile" "${options[@]}" tests/native/test_probe_audio.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 done
 compile director_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile director_d6_events -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
@@ -115,7 +104,6 @@ compile director_d8_controls -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_d
 compile mucklas_controls -DDIRECTOR64_DIRECTOR_VERSION=8 -Igames/findus-mucklas/runtime games/findus-mucklas/tests/test_controls.c games/findus-mucklas/runtime/controls.c runtime/interaction/input.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile director_text -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_director_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile shape tests/native/test_shape.c runtime/director/shape.c
-compile audio tests/native/test_audio_bounds.c
 compile bitmap_tiles tests/native/test_bitmap_tiles.c
 compile image_alpha tests/native/test_image_alpha.c
 compile image_plan tests/native/test_image_plan.c
@@ -124,7 +112,6 @@ compile ink_projector -DDIRECTOR64_DIRECTOR_VERSION=10 tests/native/test_ink_pro
 compile rich_text_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile rich_text_d7 -DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile rich_text_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
-compile native_image_hit -Iplatforms/native tests/native/test_native_image_hit.c platforms/native/image.c runtime/lingo/lingo_runtime.c
 
 "${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic -Iruntime -Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage -Igames/findus-mucklas/runtime games/findus-mucklas/tests/test_save.c games/findus-mucklas/runtime/{archive,game}.c -o build/tests/mucklas_save
 build/tests/mucklas_save

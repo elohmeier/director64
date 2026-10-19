@@ -12,12 +12,9 @@
 #define SCREEN_W 640
 #define SCREEN_H 480
 #endif
-/* One player per console port. A player's index is its port number less one. */
+/* Up to four players, one per connected controller. A player's index is its
+ * controller slot. */
 #define INPUT_PLAYERS 4
-/* How many of those ports the ROM declares; the build passes the game policy. */
-#ifndef DIRECTOR64_CONTROLLER_COUNT
-#define DIRECTOR64_CONTROLLER_COUNT 1
-#endif
 
 enum {
     INPUT_A = 1u << 0, INPUT_B = 1u << 1,

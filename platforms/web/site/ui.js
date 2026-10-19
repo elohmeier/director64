@@ -5,13 +5,10 @@ import {t} from "./strings.js";
 
 export const $ = (id) => document.getElementById(id);
 
-// Overlay buttons by name; "library" goes back to the list of games.
-const BUTTONS = {start: "start", choose: "choose", cancel: "cancel", reload: "reload",
-  library: "library-button", restore: "restore"};
+// Overlay buttons by name.
+const BUTTONS = {start: "start", reload: "reload", restore: "restore"};
 
-// `library` shows the list of supported games (app.js fills it).
-export function overlay({heading, text = "", progress = null, buttons = [], error = false, detail = "",
-  library = false}) {
+export function overlay({heading, text = "", progress = null, buttons = [], error = false, detail = ""}) {
   $("overlay").hidden = false;
   $("overlay").classList.toggle("error", error);
   $("overlay-heading").textContent = heading;
@@ -20,7 +17,6 @@ export function overlay({heading, text = "", progress = null, buttons = [], erro
   $("progress").hidden = progress === null;
   if (progress !== null) $("progress").value = progress;
   for (const [name, id] of Object.entries(BUTTONS)) $(id).hidden = !buttons.includes(name);
-  $("library").hidden = !library;
   // A controller starts on the first choice offered.
   if (document.body.classList.contains("pad") && !$("overlay").contains(document.activeElement))
     focusables($("overlay"))[0]?.focus();
@@ -28,10 +24,6 @@ export function overlay({heading, text = "", progress = null, buttons = [], erro
 
 export function hideOverlay() {
   $("overlay").hidden = true;
-}
-
-export function megabytes(bytes) {
-  return `${(bytes / 1048576).toFixed(0)} MB`;
 }
 
 // A short notice over the stage, visible in fullscreen too.

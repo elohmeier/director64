@@ -9,8 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Forced inline, not merely static: at -Os a helper this small is still
-// emitted as a real call, and it is the most-called function in the runtime —
+// Forced inline, not merely static: a compiler optimizing for size may still
+// emit a helper this small as a real call, and it is the most-called function in the runtime —
 // every name comparison and every prefilter byte goes through it.
 __attribute__((always_inline)) static inline unsigned char
 fold_char(unsigned char c) {
@@ -1420,11 +1420,9 @@ static unsigned inherited_property(lv_runtime_t *r, lv_t *owner, const char *nam
 bool lv_has_property(lv_runtime_t *r, lv_t owner, const char *property) {
   return inherited_property(r, &owner, property) != 0;
 }
-// A named-property test that rejects on the first byte. Every literal below
-// is lowercase, so one folded byte compare answers nearly all of them, and at
-// -Os each equal_text against a literal is a real call: a `the ticks` read
-// walked fourteen of them before reaching the host's getter, which made
-// lv_get the single most expensive function in a station tick.
+// A named-property read. Builtin properties dispatch on the property's
+// interned name id (lv_name_id), so reaching one, such as `the ticks`, costs
+// no string compares.
 lv_t lv_get(lv_runtime_t *r, lv_frame_t *f, const char *property, lv_t owner) {
   unsigned ln = lv_name_id(r, property);
   (void)f;
@@ -1744,9 +1742,8 @@ const lv_handler_t *lv_find(lv_runtime_t *r, const lv_movie_t *movie,
 // Opens a frame for handler with the argument sequence [*lead, args...]
 // copied into its leading locals; lead is optional. Callers that prepend a
 // receiver pass it here instead of assembling the sequence in a stack
-// array: an LV_LOCALS-sized array in every method call pushed each callee's
-// frame 768 bytes further down the C stack, which the console's
-// direct-mapped cache paid for (2026-09-26 miss profile).
+// array: an LV_LOCALS-sized array in every method call would push each
+// callee's frame 768 bytes further down the C stack.
 static bool push_with(lv_runtime_t *r, const lv_movie_t *movie,
                       const lv_handler_t *handler, const lv_t *lead,
                       unsigned argc, const lv_t *args) {
@@ -1901,9 +1898,8 @@ static bool data_assignment(lv_runtime_t *r, const char *text) {
     lv_fail(r, "dynamic data target is not declared");
   return true;
 }
-// The builtin chain compares one name against ~100 literals, and the target
-// builds at -Os, so each link is a real strcmp call. strcmp already requires
-// the first characters to match, so testing that inline only skips the call.
+// The builtin chain dispatches on the name's interned id (lv_name_id), so no
+// link is a string compare.
 static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
                     const lv_t *args, lv_t *result, bool *yield) {
   unsigned ln = lv_name_id(r, name);

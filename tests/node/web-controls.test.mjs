@@ -106,7 +106,7 @@ test("both languages have every text and fill placeholders", () => {
     const names = (lang) => [...t(key, {}, lang).matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
     assert.deepEqual(names("de"), names("en"), key);
   }
-  assert.equal(t("import.ready", {seconds: 6}, "de"), "In 6 s umgewandelt.");
+  assert.equal(t("save.saved", {time: "12:00"}, "de"), "Gespeichert 12:00");
   assert.equal(chooseLanguage("", ["de-DE", "en"]), "de");
   assert.equal(chooseLanguage("?lang=en", ["de-DE"]), "en");
   assert.equal(chooseLanguage("", ["fr-FR"]), "en");

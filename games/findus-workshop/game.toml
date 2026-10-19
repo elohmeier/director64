@@ -22,7 +22,4 @@ bytes = 137900112
 director_version = 600
 media_root = "POFMEDIA"
 entry_movie = "START"
-rom_title = "Findus Workshop"
-rom_save_type = 80
-controller_count = 4
 host_package = "director64_findus_workshop"

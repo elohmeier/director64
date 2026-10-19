@@ -283,7 +283,7 @@ export async function importGame({source, profile, tools, onProgress = () => {},
     director("recover", {manifest: "/work/analysis/source/manifest.json", output: "/work/analysis/score-recovery"}));
   const converted = await stage("convert", async (progress) => {
     const request = {output: "/work/director", recovery: "/work/analysis/score-recovery", media, policy, dumps,
-      defer_video: !!profile.port.asset_postprocessor};
+      defer_video: !!profile.port.defer_video};
     // On a worker pool each movie converts on a worker, against its own copy
     // of what it writes; the movies' files and records merge here in movie
     // order, as one thread would have left them.

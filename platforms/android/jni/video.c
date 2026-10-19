@@ -89,7 +89,7 @@ static bool parse(player_t *p, const uint8_t *bytes, uint32_t length) {
 }
 
 static bool configure(player_t *p) {
-  // A console stream's header leaves the size to its first frame.
+  // An H.264 header may leave the size at 0; the first frame sets it.
   int32_t width = p->width ? (int32_t)p->width : 320,
           height = p->height ? (int32_t)p->height : 240;
   if (AImageReader_new(width, height, AIMAGE_FORMAT_YUV_420_888, IMAGES,
@@ -401,7 +401,7 @@ void video_update(unsigned sprite, const char *asset, const char *sound,
   if (e->player)
     seek(e->player, time600, e->serial != serial);
   // The movie's sound: started (or re-seeked) when it plays and the time
-  // jumped, stopped when it stops, pitched by the rate, as the console's.
+  // jumped, stopped when it stops, pitched by the rate.
   if (e->sound[0]) {
     bool play = rate > 0 && time600 / 600 < audio_duration(e->sound);
     if (play && (!e->playing || e->serial != serial))

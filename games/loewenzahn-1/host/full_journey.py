@@ -5,12 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
+from director64.probe import state_line
 from director64.project import selected_game
-
-from .full_boot import validate_intro_stops
 
 DOOR = (309, 270)
 RIGHT = (610, 240)
@@ -25,6 +25,25 @@ ROUTES = {
     "FIL": ([DOOR, RIGHT, RIGHT], (188, 65)),
     "HOE": ([DOOR, RIGHT, RIGHT], (460, 208)),
 }
+
+
+def validate_intro_stops(log, model):
+    movie = next(m for m in model["movies"] if m["name"] == "INTRO.DXR")
+    stops = [
+        {"member": int(member), "time": int(time), "duration": int(duration)}
+        for member, time, duration in re.findall(
+            r"VIDEO_STOP member=(\d+) time=(\d+) duration=(\d+)", log
+        )
+    ]
+    completed = []
+    for name in ("INTRO_1.MOV", "INTRO_2.MOV"):
+        member = next(m for m in movie["members"] if m["name"] == name)
+        identity = movie["id"] << 21 | member["cast"] << 16 | member["number"]
+        stop = next((s for s in stops if s["member"] == identity), None)
+        if not stop or stop["time"] != member["frames"] or stop["duration"] != member["frames"]:
+            raise ValueError(f"intro clip did not reach its full duration: {name}")
+        completed.append(stop)
+    return completed
 
 
 class Replay:
@@ -45,9 +64,9 @@ class Replay:
         self.read()
 
     def read(self):
-        line = self.process.stdout.readline()
+        line = state_line(self.process.stdout)
         if not line:
-            raise ValueError(f"native probe exited: {self.output}")
+            raise ValueError(f"probe exited: {self.output}")
         state = json.loads(line)
         self.states.append(state)
         if state["error"] or state["quit"]:
@@ -86,7 +105,7 @@ class Replay:
 
 def run(executable: Path, output: Path):
     game = selected_game()
-    model = json.loads((game.work / "director/model.json").read_text())
+    model = json.loads((game.work / "model.json").read_text())
     movies = {m["name"]: m for m in model["movies"]}
     checkpoints = {}
     replays = {}
@@ -160,7 +179,7 @@ def run(executable: Path, output: Path):
         replays[name] = hashlib.sha256((output / name / "replay.json").read_bytes()).hexdigest()
     report = {
         "status": "passing",
-        "platform": "host-native",
+        "platform": "web-probe",
         "scenario": "complete-intro-volume-drag-nine-topic-menus-first-topics-return",
         "checkpoints": checkpoints,
         "replay_sha256": replays,

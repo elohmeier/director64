@@ -1525,7 +1525,6 @@ mod loewenzahn {
             for target in [
                 crate::capabilities::Target::Web,
                 crate::capabilities::Target::Android,
-                crate::capabilities::Target::N64,
             ] {
                 let report = crate::capabilities::audit(&model, target, None).unwrap();
                 crate::capabilities::require(&report, "synthetic converted D5 video").unwrap();
@@ -1558,7 +1557,6 @@ mod loewenzahn {
             for target in [
                 crate::capabilities::Target::Web,
                 crate::capabilities::Target::Android,
-                crate::capabilities::Target::N64,
             ] {
                 crate::capabilities::require(
                     &crate::capabilities::audit(&audio_model, target, None).unwrap(),

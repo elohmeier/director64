@@ -1,54 +1,102 @@
 # Architecture
 
+Director64 converts a Director game from its original disc into a portable
+game package plus asset packs, and plays that package on one C runtime. The
+runtime runs on Android TV ([android.md](android.md)), its product, and in a
+standalone per-game web app ([web.md](web.md)).
+
 | Directory | Responsibility |
 | --- | --- |
-| `src/director64/` | Game/source manifests, CLI, Lingo parser and AOT compiler, metadata generation, import, asset packing, toolchain and evidence utilities |
-| `compiler/` | Rust bytecode compiler stage (`director64-aot`): program.json to bytecode units, listings and the per-movie handler index; the pipeline's only generator (`src/director64/aot.py` runs it) |
-| `tools/director/` | Director recovery models, bitmap decoding and conversion; source-specific assumptions supplied as policy |
+| `src/director64/` | CLI, game and source manifests, disc extraction, Lingo recovery for inspection, media repair, the Android and web builds, fuzz/parity/journey drivers |
+| `compiler/` | The Rust converter (`director64-aot`): ISO and ZIP reading, the Director stages (plan, analyze, audit, score recovery, conversion), the Lingo parser and bytecode compiler, the package writer, per-port corrections (`ports.rs`) |
+| `compiler/wasm/` | The converter compiled to WebAssembly for the conversion driver |
+| `platforms/web/import/` | The conversion driver: pipeline, in-memory file system, worker pool |
+| `platforms/android/export/` | Runs the pipeline under Node and encodes video, long sounds and images |
+| `tools/director/` | ProjectorRays dump driver and format, the package validator |
 | `tools/projectorrays/` | Pinned versioned Director structural score recovery extension |
 | `tools/fonts/` | Isolated host PFR1 recovery and original-outline OpenType export |
-| `runtime/lingo/` | Values, globals, handler calls, garbage collection and resumable execution |
-| `runtime/director/` | Score scheduling, sprites, stage ownership, shapes, events and Lingo services |
-| `runtime/interaction/` | Controller input and the shared per-port pointer controller |
+| `runtime/lingo/` | Values, globals, handler calls, garbage collection and resumable bytecode execution; `family.h` names each Director family's capabilities |
+| `runtime/director/` | Score scheduling, sprites, stage ownership, inks, film loops, Flash, shapes, events and Lingo services |
+| `runtime/interaction/` | Controller input and the shared per-player pointer controller |
 | `runtime/storage/` | Storage backend callbacks and status types |
+| `runtime/package/` | Loader of the game package ([package-format.md](package-format.md)) |
 | `runtime/game.h` | Compile-time adapter contract for saves and virtual directories |
-| `platforms/n64/` | Display, audio, image cache, DSO loading, FlashRAM I/O and main loop |
-| `platforms/web/` | Browser player: software compositor, runtime host, Wasm glue, the page, the in-browser importer and the Node probe harness ([web.md](web.md)) |
-| `runtime/package/` | Loader of the portable game package ([package-format.md](package-format.md)) |
-| `compiler/wasm/` | The Rust converter stages (ISO, Lingo parser, packager) as WebAssembly |
-| `games/<slug>/` | Manifest, source policy, save codec, journeys and qualification |
+| `platforms/web/` | Runtime host, software compositor, image decoding, the web page and the Node probe |
+| `platforms/android/` | Android host (`jni/`), activity and controllers (`java/`), resources |
+| `games/<slug>/` | Manifest, source policy, browser profile, save adapter, probe state and journeys |
 | `tests/` | Source-free shared contracts and synthetic inputs |
 
-The direction of travel is in [roadmap.md](roadmap.md): the converter takes
-over the semantic binding the runtime does by name today.
-The planned browser backend and local ISO pipeline are in
-[web-roadmap.md](web-roadmap.md), with a portable game package shared by the
-native and browser conversion paths and a static GitHub Pages deployment.
+The direction of travel is in [roadmap.md](roadmap.md).
 
-Script-class failures — type errors, missing handlers or properties, list
-bounds, division by zero, exhausted call stacks — reproduce the original
-projector's alert-and-continue: `dg_service` discards the Lingo call contexts,
-records the message (probes expose `script_errors`/`last_script_error`), and
-the score keeps running. Integrity failures (stale heap references, resource
-exhaustion, invalid transitions) still halt. Lingo coercions follow the
-original: numeric text participates in arithmetic, numbers coerce in string
-operators, `float` of a point or rect maps per coordinate, arithmetic maps
-element-wise over linear and property lists (property lists keep their keys),
-and `inside` of a non-rect operand returns FALSE.
+## Conversion
 
-One game adapter is linked into each ROM. The shared runtime has no Findus global
-names or virtual save filenames; its file enumeration service delegates to the
-game. The workshop adapter retains its proven save journal and migration logic
-locally; it is not a compatibility layer for the old project interfaces.
+`director64 android build` and `director64 web` convert a game the same way
+(`android.convert`) into `build/<slug>/<source>/converted/`:
+
+1. The disc image (a cooked ISO, a raw 2352-byte rip, or a ZIP) is verified
+   against the edition's SHA-256 and extracted into memory.
+2. ProjectorRays parses each Director file once into a dump.
+3. The Rust converter, as WebAssembly, runs every later stage over those
+   dumps: analysis and source audit, score recovery, conversion of bitmaps,
+   sounds, film loops, Flash and vector shapes, text and fonts (including
+   embedded PFR1 fonts), the Lingo compiler, and packaging into `game.d64p`
+   and asset packs.
+4. `platforms/android/export/` encodes video as VP9 and long sounds as Ogg
+   Opus with FFmpeg, and images as lossless WebP where that is smaller.
+5. The production C loader validates the package against the runtime ABI.
+
+Node drives the stages (`platforms/android/export/export.mjs` with
+`platforms/web/import/pipeline.mjs`), with independent work (parsing each
+file, converting each movie, encoding each sound and video) on a pool of
+worker threads; the merged output is the one-thread output byte for byte.
+A conversion is reused while the converter, ABI, source and profile match.
+
+`director64 recover` runs the same Rust stages natively for inspection: it
+writes the recovered Lingo, score records and an audit report under
+`build/<slug>/<source>/analysis/`.
+
+## Runtime hosts
+
+Android and the web compile the same sources with the same flags: the engine,
+the game's adapter (`games/<slug>/runtime/`), `platforms/web/web_runtime.c`
+and the software compositor, built for the game's Director family. The web
+build adds the Emscripten glue; the Android build adds `platforms/android/jni/`.
+Both run the score at a 60 Hz service clock with the same catch-up rule (at
+most four ticks per pass, twelve ticks of backlog), and present a 640×480
+stage, or an authored 800×600 stage unscaled.
+
+Saves go through the game's adapter (`games/<slug>/runtime/archive.c`) into
+a 128 KiB save image: two independently written 64 KiB slots, each with a
+header, a generation counter, a CRC and the game's fixed list of save files,
+so a commit that is cut off leaves the previous generation intact. Each host
+writes the whole image after every commit; the web app's menu exports and
+imports it as a file.
+
+## Script failures and coercions
+
+Script-class failures (type errors, missing handlers or properties, list
+bounds, division by zero, exhausted call stacks) reproduce the original
+projector's alert-and-continue: `dg_service` discards the Lingo call
+contexts, records the message (probes expose
+`script_errors`/`last_script_error`), and the score keeps running. Integrity
+failures (stale heap references, resource exhaustion, invalid transitions)
+still halt. Lingo coercions follow the original: numeric text participates in
+arithmetic, numbers coerce in string operators, `float` of a point or rect
+maps per coordinate, arithmetic maps element-wise over linear and property
+lists (property lists keep their keys), and `inside` of a non-rect operand
+returns FALSE.
+
+One game adapter is linked into each runtime build. The shared runtime has no
+Findus global names or virtual save filenames; its file enumeration service
+delegates to the game. The workshop adapter retains its save journal and
+migration logic locally.
 
 ## Players and cursors
 
-Every console port carries a player, up to the `controller_count` its source
-policy declares; the build passes that count to both the ROM header and the
-runtime, so the ports the menu advertises are the ports the game reads. Each
-player owns a cursor, and each draws in its own colour — red, blue, gold and
-green by port. The colour tints the glyph's black ink only; its white
-contrast pixels stay white, so a cursor still reads against the art under it.
+Up to four players each own a cursor, and each draws in its own colour (red,
+blue, gold and green by player) once more than one is connected. The colour
+tints the glyph's black ink only; its white contrast pixels stay white, so a
+cursor still reads against the art under it.
 
 Numeric cursors include Director's standard tool roles: finger 280, open hand
 260, closed hand 290, no-drop hand 291, drawing tools, resize arrows and zoom
@@ -65,70 +113,64 @@ alongside. A press claims the mouse; failing that, the player who is actually
 moving takes it, which keeps rollover under the cursor that is pointing. The
 holder wins every tie and cannot lose the mouse mid-click: a held button or a
 queued source event keeps the mouse until that click finishes on both sides. A
-single connected controller therefore never hands over and behaves exactly as
-it did before. The players who are not driving still move their own cursor, but
-only the driver's press becomes a Director event. The on-screen keyboard, print
-dialogue and Willy's notices each cover the whole screen and answer to the
-player who opened them.
+single connected controller therefore never hands over. The players who are
+not driving still move their own cursor, but only the driver's press becomes a
+Director event. The on-screen keyboard and Willy's notices each cover the
+whole screen and answer to the player who opened them. A cursor left idle for
+five seconds hides, except the holder's.
 
-The N64 backend uses resumable Lingo state machines, a 3 MiB image cache and a
-640×480 stage. The Director 6 profile retains the workshop's four-overlay limit
-and two audio channels; Director 7 and 8 permit thirteen overlays and eight channels.
-The extended D6 profile renders puppet wipe and edges-in transition requests as
-timed reveals sourced from the previously queued framebuffer; the score keeps
-playing during the reveal.
-Director 5 uses 48 sprite channels, four overlays, four logical audio channels,
-and two bounded H.264/ULC video slots. Its source dialog can suspend the stage
-and render a centered movie window while keeping its overlays alive.
-A game needing different stage dimensions or further external libraries requires
-extensions.
+## Director versions
 
-`GameSpec` validates manifest identities and selects isolated
-`media/<game>/<source-id>/`, `build/<game>/<source-id>/` and
-`dist/<game>/<source-id>/` trees. Game host code is a checkout plugin loaded from
-`host/__init__.py` under the package name declared in the manifest. The Python
-wheel contains shared tools; complete builds run from this repository checkout.
+Structural score recovery supports the verified Director 5, 6, 7, 8, 8.5 and
+10 layouts. The runtime is built for a Director 5, 6, 7, 8 or 10 family
+selected by the game manifest (`runtime/lingo/family.h`); a Director 8.5 game
+(manifest version 850) builds the D10 family, whose 1006-channel score layout
+and services it shares, and its package header names the D10 layout.
 
-Original archives are retained byte-for-byte. ISO associated streams are extracted
-under `__associated__/`; ordinary data keeps its original paths. ZIP import keeps
-its directory roots, verifies CRC while reading, rejects traversal, symlinks,
-encryption and duplicate names, and bounds total expansion. Import does not run
-projector executables or adopt archived user progress.
+- **D5** (Löwenzahn 1) keeps direct score/cast script references, versioned
+  tempo operands, mouse-event propagation, actorList callbacks and
+  cross-movie labels, with 48 sprite channels and four logical sound
+  channels. Its linked QuickTime movies (Cinepak video) are decoded by the
+  converter and play as digital video on a 600-unit source clock
+  ([video.md](video.md)). D5 STXT retains its Mac Roman bytes and style
+  metrics; this game explicitly substitutes pinned Droid Sans for
+  unavailable system fonts. The runtime supports the one source DIALOG
+  window, which suspends the stage and renders a centered movie window, not
+  a general desktop window manager.
+- **D6** (Workshop) has two sound channels. The **extended D6** profile
+  (Willy Werkel) renders puppet wipe and edges-in transition requests as
+  timed reveals sourced from the previous frame; the score keeps playing
+  during the reveal.
+- **D7 and D8** add 800 sprites, twelve external cast libraries, eight sound
+  channels, extended score fields and persistent script instances. The
+  Christmas calendar selects Director 7 from its recovered media: the D7
+  48-byte score, 999 FPS tempo and larger bounds with the shared extended
+  services; its clock adapter supplies a fixed Christmas Eve date. D7 bitmap
+  conversion also handles two-bit pixels and the modern Windows palette.
+  The embedded Mucklas projector is converted as a separate startup movie
+  with source provenance; its original embedded font is recovered through a
+  pinned, isolated host parser.
+- **D8.5** files differ in their text Xtra payload and XMED structure (the
+  D10 forms, with the character set read from each document's Paige table),
+  zero-padded sound samples, and source quirks the converter repairs and
+  records as approximations: palette references stored with castlib 0 or
+  stale castlib numbers, film loops nesting loops or carrying comment
+  fields, and castlibs sharing a library id and script context.
+- **D10** shares D7's score semantics, hover cache and cast-preserving member
+  arithmetic, extends the bounds to 1,000 sprites and sixteen linked cast
+  files, and adds the bounded controller-window services (resident window
+  code, request-based attachment, sprite timeline tells); the window's own
+  score tick and panel rendering remain explicit feature work.
 
-To add a port, create a game manifest and audited source policy, then implement
-`runtime/game.h`, source-specific recovery decisions and game journeys. Catalogue
-status is separate from executable support. Add synthetic contracts for new shared
-behavior and qualify the game through native journeys and target captures.
+Object methods, collection loops, cases, indexed access and chunks lower to
+resumable bytecode (`runtime/lingo/lingo_bytecode.h`) that `lv_vm_step` runs
+one state at a time; each movie's compiled unit also carries a `.lst` listing
+that maps a reported offset back to its statement. Script instances keep
+stable member IDs and heap properties across movie changes.
 
-Structural score recovery supports the verified Director 5, 6, 7, 8, 8.5 and 10
-layouts. The native runtime uses a Director 5, 6, 7, 8 or 10 build profile selected
-by the game manifest; a Director 8.5 game (manifest version 850) builds the D10
-profile, whose 1006-channel score layout and services it shares, and its package
-header names the D10 layout. Director 8.5 files differ in
-their text Xtra payload and XMED structure (the D10 forms, with the character set
-read from each document's Paige table), zero-padded sound samples, and source
-quirks the converter repairs and records as approximations: palette references
-stored with castlib 0 or stale castlib numbers, film loops nesting loops or
-carrying comment fields, and castlibs sharing a library id and script context. D7 and D8 add 800 sprites, twelve external cast libraries, eight sound
-channels, extended score fields, and persistent script instances. The D10 profile
-shares D7's score semantics, hover cache and cast-preserving member arithmetic,
-extends the bounds to 1,000 sprites and sixteen linked cast files, and adds the
-bounded controller-window services (resident window code, request-based
-overlay attachment, sprite timeline tells); the window's own score tick,
-panel rendering and boot qualification remain explicit feature work. Object methods,
-collection loops, cases, indexed access, and chunks lower to resumable bytecode
-(`runtime/lingo/lingo_bytecode.h`) that `lv_vm_step` runs one state at a time; each
-movie's generated unit also carries a `.lst` listing that maps a reported offset back
-to its statement.
-Script instances keep stable member IDs and heap properties across overlay reloads;
-no pointer into an unloaded native overlay remains in their property storage.
-The embedded Mucklas projector is compiled as a separate startup unit with source
-provenance. Its original embedded font is recovered through a pinned, isolated
-host parser; the ROM contains only converted font data and the libdragon renderer.
-Paige styles retain source metrics, while missing system-font and layout limits
-remain explicit in the asset model. FDIA images retain RGB555 plus A8 coverage
-in paired textures within the existing bounded image cache. The selected static
-SWF vector-shape conversion is also explicit.
+Paige styles retain source metrics, while missing system-font and layout
+limits remain explicit in the asset model. FDIA images retain RGB555 plus A8
+coverage. The selected static SWF vector-shape conversion is also explicit.
 
 Converted FDI images carry optional conservative coverage bounds in reserved
 header bytes: byte 27 is `0xa0 | shift`, and bytes 28–31 are left, top, right
@@ -139,25 +181,30 @@ fall back to scanning decoded pixels. The compositor uses this hint only when
 the selected ink follows source alpha; rectangle inks, palette brushes,
 opaque rich text and derived paired-mask coverage retain their own rules.
 
-The Löwenzahn D5 profile keeps direct score/cast script references, versioned
-tempo operands, mouse-event propagation, actorList callbacks, and cross-movie
-labels. Its selected host postprocessor converts all linked QuickTime media
-to H.264 and ULC, with a 600-unit source playback clock. D5 STXT retains its
-Mac Roman bytes and style metrics; this game explicitly substitutes pinned
-Droid Sans for unavailable system fonts. The target supports the one source
-DIALOG window, not a general desktop window manager. Additional Director
-versions, multiple parameterized behaviors, arbitrary QuickTime codecs,
-general Flash playback and further Xtras remain feature work.
-Director64 is a reusable AOT porting framework, not a universal Director emulator.
+Additional Director versions, multiple parameterized behaviors, arbitrary
+QuickTime codecs, general Flash playback and further Xtras remain feature
+work. Director64 is a reusable ahead-of-time porting framework, not a
+universal Director emulator.
 
-libdragon remains the clean pinned submodule. The upstream fork branch still has
-its original name: it is dependency provenance, not an old Director64 interface.
-Release and probe builds use the same DSO input ELF paths so their DragonFS payloads
-can be compared exactly. Emulator evidence is distinct from hardware validation.
+## Games, sources and adding a port
 
-The Christmas calendar selects Director 7 from its recovered media. It combines
-the D7 48-byte score, 999 FPS tempo and larger runtime bounds with the shared
-extended behavior services. Its clock adapter supplies a fixed Christmas Eve
-date. D7 bitmap conversion also handles two-bit pixels and the modern Windows
-palette. Source policy pins the multi-archive launcher selection and records
-external-copy differences and visual substitutions.
+`GameSpec` validates manifest identities and selects isolated
+`media/<game>/<source-id>/`, `build/<game>/<source-id>/` and
+`dist/<game>/<source-id>/` trees. Game host code (journeys, reference
+runners) is a checkout plugin loaded from `host/__init__.py` under the
+package name declared in the manifest.
+
+Original archives are retained byte-for-byte. ISO associated streams are
+extracted under `__associated__/`; ordinary data keeps its original paths.
+ZIP import keeps its directory roots, verifies CRC while reading, rejects
+traversal, symlinks, encryption and duplicate names, and bounds total
+expansion. Import does not run projector executables or adopt archived user
+progress.
+
+To add a port, create a game manifest and audited source policy
+([source-schema.md](source-schema.md)), a browser profile
+(`games/<slug>/web.toml`), then implement `runtime/game.h`, any
+source-specific conversion decisions and game journeys. Catalogue status is
+separate from executable support. Add synthetic contracts for new shared
+behavior and check the game with its journeys, the fuzzer
+([fuzzing.md](fuzzing.md)) and a device run.

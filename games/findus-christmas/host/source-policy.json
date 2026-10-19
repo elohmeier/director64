@@ -1,11 +1,5 @@
 {
   "director_version": 700,
-  "image_codec_tiers": [
-    {
-      "min_decompressed_bytes": 65536,
-      "level": 2
-    }
-  ],
   "startup_movie": "START.DXR",
   "directories": [
     "."
@@ -99,8 +93,6 @@
       "disposition": "identical script copy; compile the external media"
     }
   ],
-  "image_indexed": true,
-  "image_pack_budget_mib": 49,
   "shape_pattern_library": {
     "path": "../FINDUS3.EXE",
     "sha256": "02a2d719bdca3ac47c53b08dd583247684fc53c745a2ee995b23eef491230267",

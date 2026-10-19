@@ -4,12 +4,12 @@
 engine compiled for Android and the game converted from your own disc. The
 APK starts the game directly from the TV's launcher. It was written for an
 Epson EF-62N projector (Google TV, Android 14, MediaTek MT9676 with four
-Cortex-A55 cores and 2 GiB RAM) played with a DualShock 4 or an N64-style
-controller.
+Cortex-A55 cores, 2 GiB RAM and a 32-bit `armeabi-v7a` userland) played with
+a DualShock 4 or the remote.
 
-**The APK contains the converted game.** Like a ROM, it is for your own
-use: build it into the ignored `dist/`, install it on your own devices, and
-never commit, publish or redistribute it.
+**The APK contains the converted game.** It is for your own use: build it
+into the ignored `dist/`, install it on your own devices, and never commit,
+publish or redistribute it.
 
 | Game | Director | ARM32 APK | Earlier emulator check |
 | --- | --- | --- | --- |
@@ -28,191 +28,140 @@ never commit, publish or redistribute it.
 | 25 Jahre Löwenzahn: Optik + Mechanik | D8.5 | 507 MB | Bauwagen on an earlier build |
 | Löwenzahn Adventskalender | D8.5 | 165 MB | December countdown |
 
-Sizes describe the current single-ABI `armeabi-v7a` packages. The emulator
-observations above came from earlier Android 14 x86_64 builds; they are not
-fresh gameplay qualification of these APKs. The EF-62N runs a 32-bit userland.
-Earlier projector measurements showed Mucklas holding 60 service ticks per
-second with no dropped time at about 15% CPU and 130 MB resident, and Christmas's
-day 5 (Not Transparent ink) playing. Lernerfolg's scene covers were checked in
-the emulator; its masked helper characters still need projector confirmation.
-The diagnostics line in the menu shows ticks, redraws and dropped time.
+Sizes are the single-ABI `armeabi-v7a` packages. The emulator observations
+came from earlier Android 14 x86_64 builds; they are not gameplay
+qualification of the current APKs.
 
-The worker also logs `DIRECTOR64 ANDROID_PACING` once per active second,
-including service delivery, redraws, separate service/render/presentation costs,
-dropped time and script alerts. Menu and lifecycle holds reset the measurement
-window. Capture the `director64` logcat tag during the scenario, then run:
+## Status on the projector
+
+- Earlier projector measurements showed Mucklas holding 60 service ticks per
+  second with no dropped time at about 15% CPU and 130 MB resident, and
+  Christmas's day 5 (Not Transparent ink) playing. Lernerfolg's masked helper
+  characters still need projector confirmation.
+- Birthday's bedroom scene rendered at 2–3 presentations per second before
+  the repair described in [performance-audit.md](performance-audit.md):
+  conversion-time source coverage, retained film and mask planes, and
+  equivalent-picture detection. A short physical run after the repair
+  delivered about 58 Hz service; it ended too early to pass the pacing gate.
+  The film-container visibility and cursor fixes that followed
+  ([follow-up](performance-audit.md#visibility-and-cursor-follow-up)) are not
+  yet checked on the projector.
+- All fourteen APKs are built from one clean source commit, with matching
+  source and conversion receipts and one signing certificate, and are
+  installed on the projector as in-place updates. Each passes a local
+  6,000-tick startup smoke without a runtime failure or script alert. Those
+  smokes use blank font coverage, nominal audio lifetimes and no video
+  decoding; physical gameplay and performance qualification remain pending.
+- Löwenzahn 7 and Optik build from separately pinned repaired images
+  ([video.md](video.md#preparing-separate-repaired-images)); the reconstructions
+  enable the builds but do not restore missing original content.
+
+A successful install and a matching APK hash establish deployment, not a
+startup check or a playthrough.
+
+### Pacing measurements
+
+The diagnostics line in the menu shows ticks, redraws and dropped time. The
+game thread also logs `DIRECTOR64 ANDROID_PACING` once per active second:
+service delivery, redraws, service, render and presentation costs, dropped
+time and script alerts. Menu and lifecycle holds reset the window. Capture
+the `director64` logcat tag during a scenario, then run:
 
 ```sh
 uv run --locked python -m director64.android_pacing build/android-pacing.log
 ```
 
-This exits unsuccessfully for incomplete or malformed measurements, script
-alerts, or three consecutive windows below 95% of 60 Hz service. Ten usable
-windows are required by default; a longer run and scene-specific checks remain
-necessary. An idle scene can correctly have zero redraws. The pacing gate
-cannot prove visual correctness, input responsiveness or absence of Android
-ANRs; check those during the device run as well. Device performance is a
-separate qualification step from compiling or installing an APK.
-
-Strict fresh export rejects Löwenzahn 7's and Optik's original damaged streams.
-The separate [media repair workflow](video.md#preparing-separate-repaired-images)
-now produces verified derivative images that pass the ordinary importer and
-decoders. Original images remain unchanged. Existing installed copies are
-retained when a rebuild fails. A successful install and matching APK hash
-establish deployment, not a startup check or a complete playthrough.
-
-On 2026-10-18, all twelve buildable ARM32 APKs were installed on the EF-62N
-with in-place updates. Their original installation identities were retained;
-Löwenzahn 7 and Optik kept their earlier versions. The running foreground app
-was left in place, so this deployment did not repeat the gameplay checks above.
-
-A subsequent startup test of that Birthday APK exposed sustained bedroom
-rendering at about 2–3 presentations/second and a 10-second input-dispatch
-timeout with diagnostics enabled. The matching host replay attributes nearly
-all measured work to rendering and reveals many identical redraws. See the
-[performance follow-up](performance-audit.md) for measurements, baseline findings
-and the preprocessing design; successful installation does not qualify this
-scene for practical play.
-
-The subsequent [repair](performance-audit.md#repair-and-regression-evidence)
-adds conversion-time source coverage, retained film/mask planes and equivalent
-picture detection, together with input, UI, audio and video fixes. The fresh
-Birthday replay matches all 300 frames byte-for-byte against the original
-renderer while reducing redraws to 28. Host, sanitizer and browser evidence
-passes. A later EF-62N reconnection allowed an in-place Birthday update and a
-short physical run of repair `be06bbd`.
-At that stage, twelve ARM32 APKs had fresh exports and verified current-source
-receipts for repair `be06bbd`; Löwenzahn 7 and Optik still had source blockers.
-Birthday was the only repair APK installed during that reconnection.
-
-That run delivered 1,039 service ticks in 17.913 active seconds, about 58 Hz.
-Animated windows generally reached 11–12 redraws/second, with costly frames
-and 0.506 seconds of dropped time. The run ended after an unsupported standard
-cursor, leaving only 17 measurement windows; the 60-second qualification gate
-correctly failed for insufficient data. It does not qualify performance,
-visual correctness or lifecycle behavior.
-
-The subsequent offline investigation found native film-container effects
-incorrectly fading the animals and missing XML aliases selecting the wrong
-animation state. Original Director 8.5.1 probes establish both behaviors; see
-the [follow-up evidence](performance-audit.md#visibility-and-cursor-follow-up).
-The follow-up also adds standard tool cursors and a bounded background cache.
-Projector interaction stopped at the user's request while it was being used
-for a movie. Installation was deferred until authorization on 2026-10-19;
-physical gameplay checks remain pending.
-
-All fourteen ARM32 APKs are now built from clean source commit `152f450`, with
-matching source/conversion receipts, embedded version names and a common
-verified signing certificate. Löwenzahn 7 and Optik have fresh exports from
-their separately pinned repaired images; the other twelve verified exports
-remain reusable. Each passes a local 6,000-tick startup smoke: 84,000 ticks total
-without a runtime failure or script alert. These checks use blank font coverage,
-nominal audio lifetimes and no video decoding; they do not qualify full gameplay
-or device performance. The repaired streams separately pass strict FFmpeg and
-production decoder checks. On 2026-10-19, all fourteen APKs were installed on the
-EF-62N as in-place updates. Each installed APK's SHA-256 matches its verified
-build; application IDs and original installation times remain unchanged.
-No games were launched during this deployment, so physical gameplay and
-performance qualification remain pending.
-
-Löwenzahn 7's long clip comes from an independently recovered copy; each of its
-five short clips contains one explicit 40 ms picture hold. Optik's affected clip
-contains 3.32 seconds of picture holds and 1.2 seconds of silence across the
-damaged intervals. Healthy pictures and compressed audio remain intact. These
-reconstructions enable the builds but do not restore missing original content.
+It fails on incomplete or malformed measurements, script alerts, or three
+consecutive windows below 95% of 60 Hz service, and needs ten usable windows
+by default. An idle scene can correctly have zero redraws. It cannot prove
+visual correctness, input responsiveness or the absence of ANRs; check those
+on the device as well.
 
 ## Building
 
-Requirements are the browser player's (Node with the locked dev
-dependencies, Rust, a host C17 compiler, Docker for the importer's tools) plus FFmpeg with libvpx
-(Löwenzahn's video; MPEG-1 decoding for Löwenzahn 6–8, Optik and the
-Adventskalender) and the Android toolchain image:
+Requirements: Node with the locked dependencies, Rust with the
+`wasm32-unknown-unknown` target, a host C17 compiler, Docker or a compatible
+engine (Emscripten for the converter's tools, and the Android toolchain
+image), and FFmpeg with libvpx and libopus (video and long sounds; MPEG-1
+decoding for Löwenzahn 6–8, Optik and the Adventskalender).
 
 ```sh
 docker build --target sdk -t director64-android:local docker/android
 uv run --locked director64 android build --game findus-workshop
 ```
 
-The image pins a JDK, the SDK platform and build tools and the NDK; the
+The image pins a JDK, the SDK platform, the build tools and the NDK; the
 build runs in it offline and uses no Gradle. Output:
 `dist/<game>/<source>/director64-<game>.apk`, for `armeabi-v7a`,
-`arm64-v8a` and `x86_64` (`--abi` selects some; many TV boxes run a 32-bit
-userland). ImageMagick, when present, writes the game's title onto the
-launcher banner.
+`arm64-v8a` and `x86_64` by default; `--abi` selects some (the EF-62N needs
+`armeabi-v7a`). With ImageMagick present, the build draws the launcher icon
+and Google TV banner: the game's box art (the ignored, never committed
+`games/<slug>/cover.*`) as the icon and beside the title on the banner, or
+the title alone.
 
 A build:
 
-1. **Converts the disc** with the browser importer's pipeline under Node
-   (`platforms/android/export/export.mjs`), the same stages the page runs,
-   into `build/android/<game>/<source>/game/`. Three encodings keep the
-   APK small:
-   - **Video:** FFmpeg encodes Löwenzahn's video as VP9 (CRF 30, at most
-     600 kbit/s) in the page's video container. Löwenzahn 1's Cinepak frames
-     go in as the converter decodes them, the 8.5 titles' MPEG-1 files whole
+1. **Converts the disc** (`android.convert`) into
+   `build/<game>/<source>/converted/`, shared with the web app
+   ([web.md](web.md)). `platforms/android/export/export.mjs` runs the
+   conversion pipeline (`platforms/web/import/pipeline.mjs`, the Rust
+   converter compiled to WebAssembly, on a pool of worker threads) under
+   Node; see [architecture.md](architecture.md#conversion). Three encodings
+   keep the APK small:
+   - **Video:** FFmpeg encodes video as VP9 (CRF 30, at most 600 kbit/s) in
+     the player's video container. Löwenzahn 1's Cinepak frames go in as the
+     converter decodes them, the 8.5 titles' MPEG-1 files whole
      (`platforms/android/export/video.mjs`).
-   - **Sound:** a sound of 8 seconds or more (the movies' soundtracks, long
-     speech) becomes Ogg Opus, 96 kbit/s stereo or 64 kbit/s mono. Shorter
-     ones stay PCM WAV, so they start at once.
-   - **Images:** each image is stored as lossless WebP (`D64W`,
-     `platforms/web/webp_image.h`, the vendored libwebp in
-     `third_party/libwebp`) where that is smaller than deflate. The importer's
-     `webp` tool keeps one only after its decoder gives back the exact stored
-     bytes, and the runtime decodes it when the image loads.
+   - **Sound:** a sound of 8 seconds or more becomes Ogg Opus, 96 kbit/s
+     stereo or 64 kbit/s mono. Shorter ones stay PCM WAV, so they start at
+     once.
+   - **Images:** each image is stored as lossless WebP (`D64W`, the vendored
+     libwebp) where that is smaller than deflate and the round trip is exact.
 
-   Löwenzahn 6 went from 1.9 GB to under 0.6 GB.
-
-   A conversion is reused only when the importer, runtime ABI, selected source,
-   repaired-image selection, profile/policy and Android exporter match, and every
-   packed asset has its recorded size and SHA-256. `--reconvert` forces a new one. Importer tools are
-   rebuilt when their source fingerprint or any generated tool hash changes;
-   an old browser-site manifest cannot authorize stale conversion tools.
-   Both fresh and reused packages must also load successfully with the actual
-   profile-specific C package loader. This validates member records, styles,
-   palettes and bytecode against the runtime ABI before APK assembly.
-2. **Compiles the game's runtime** with the NDK: the browser runtime's sources
+   A conversion is reused only when the converter tools, runtime ABI,
+   selected source, repaired-image selection, profile and policy and the
+   exporter match, and every packed asset has its recorded size and SHA-256.
+   `--reconvert` forces a new one. The converter's tools are rebuilt when
+   their source fingerprint or any tool hash changes. Every package, fresh or
+   reused, must load with the profile-specific C package loader before APK
+   assembly.
+2. **Compiles the game's runtime** with the NDK: the web runtime's sources
    and flags (`platforms/web/web_runtime.c`, its software compositor, the
-   engine, the game's adapter, package mode) without its Emscripten glue,
+   engine, the game's adapter, package mode) without the Emscripten glue,
    plus the Android host (`platforms/android/jni/`), into
    `lib<d64_slug>.so`.
 3. **Packages** with aapt2, javac and d8: package
    `org.director64.tv.<slug>` labelled with the game's title, the game under
    `assets/game/` stored uncompressed, native libraries stored and 16 KiB
-   aligned. It signs with a personal key that the first build creates at
-   `~/.config/director64/android.keystore`; keep it, because an update must
-   be signed with the same key to keep the game's saves.
+   aligned. The version code is the minutes since 2026, so every build installs
+   as an update and the launcher reloads its cached icon and banner. It signs with a personal key that
+   the first build creates at `~/.config/director64/android.keystore`; keep
+   it, because an update must be signed with the same key to keep the game's
+   saves.
+
+A successful build writes an adjacent `.apk.json` receipt with the source,
+ABIs, build-input identity, APK hash and conversion manifest. Starting a
+rebuild invalidates it, so a failed build cannot leave an installable stale
+APK.
 
 ## Installing
 
-A successful build writes an adjacent `.apk.json` receipt containing the selected
-source, ABIs, build-input identity, APK hash and asset manifest. Starting a rebuild
-invalidates the old receipt; a failed build cannot leave an installable stale APK.
-The CLI checks that receipt against current sources and APK bytes before ADB runs.
-
-Over the network: enable developer options on the projector (Settings →
-System → About → press Build seven times), turn on network debugging, then
+`director64 android install` checks the receipt against the current sources
+and APK bytes, then runs `adb install -r`. Enable developer options on the
+TV (Settings → System → About → press Build seven times) and wireless
+debugging, then pair and connect with the addresses its settings screen
+shows (the pairing and connection ports differ and can change):
 
 ```sh
-adb connect <projector-ip>:5555
-uv run --locked director64 android install --game findus-workshop --serial <projector-ip>:5555
+adb pair <tv-ip>:<pairing-port>
+adb connect <tv-ip>:<connection-port>
+uv run --locked director64 android install --game findus-workshop --serial <tv-ip>:<connection-port>
 ```
 
-For wireless debugging with pairing, use the addresses shown on its settings
-screen. The pairing port and connection port differ, and can change:
-
-```sh
-adb pair <projector-ip>:<pairing-port>
-adb connect <projector-ip>:<connection-port>
-adb devices -l
-uv run --locked director64 android install --game findus-workshop --serial <projector-ip>:<connection-port>
-```
-
-`adb pair` prompts for the displayed pairing code. `adb mdns services` can
-discover the connection address. Updates use `adb install -r`; keeping the
-existing package and signing key preserves saves. Uninstalling the game
-removes its app data.
-
-Or copy the APK to a USB stick and open it with a file manager on the TV,
-allowing that app to install unknown apps.
+`adb pair` prompts for the displayed code; `adb mdns services` can discover
+the connection address. Updates keep the existing package and signing key
+and so preserve saves; uninstalling removes them. An APK copied to a USB
+stick can also be opened with a file manager on the TV.
 
 ## Playing
 
@@ -222,45 +171,51 @@ allowing that app to install unknown apps.
 | ✕, A, remote OK | click |
 | ○, B | the second button |
 | Options, Start | Start |
-| Right stick | the C buttons |
+| Right stick | the direction buttons some games use |
 | PS, Share, Back, Menu | the menu |
 
-Controllers map as the browser player maps a standard gamepad
+Controllers map as the web app maps a standard gamepad
 (`platforms/web/site/gamepad.js`, ported in `Pads.java`): every device that
-gives input takes the lowest free of the console's four ports, each moves its
-own cursor, and the per-game controller layers run unchanged. A DualShock 4
-pairs with Google TV directly. An N64-style pad (ModRetro M64 Pro,
-8BitDo 64) should map its A, B, Start and stick the same way; whether its C
-buttons arrive as the right stick depends on the pad and is unverified. The
-menu's diagnostics show each device's name and its last key or axes, which
-is what a mapping needs. A remote gives its port back after 30 s idle. A
-mouse points and clicks; a keyboard types into games from Director 7 on.
+gives input takes the lowest free of four player slots, each moves its own
+cursor, and the per-game controller layers run unchanged. A DualShock 4
+pairs with Google TV directly. Other pads (a ModRetro M64 Pro, an
+8BitDo 64) should map their face buttons, Start and stick the same way;
+their extra buttons are unverified. The menu's diagnostics show each
+device's name and its last key or axes, which is what a mapping needs. A
+remote gives its slot back after 30 s idle. A mouse points and clicks; a
+keyboard types into games from Director 7 on.
 
 The menu pauses the game and holds the volume, diagnostics, the controls and
 quitting. An editable field opens a text dialog with the TV's keyboard, and
 the game holds until it is committed. Mucklas takes its player name as key
-presses instead, as on the console: the keyboard opens by itself when the
-name field starts taking a name (and again on a click into it), every typed
-or deleted character reaches the game's own key handlers at once, OK closes
-the keyboard, and the game's confirmation button saves the name
-(`d64_key_field` and `d64_type_key` in `platforms/web/web_runtime.c`). Saves are the console's FlashRAM image,
-written whole to the app's storage after every save and kept across updates.
-The TV has no printer: Löwenzahn's print pages say so and are dismissed, as
-on the console.
+presses instead: the keyboard opens by itself when the name field starts
+taking a name (and again on a click into it), every typed or deleted
+character reaches the game's own key handlers at once, OK closes the
+keyboard, and the game's confirmation button saves the name (`d64_key_field`
+and `d64_type_key` in `platforms/web/web_runtime.c`).
+
+Saves are the game's 128 KiB save image ([architecture.md](architecture.md#runtime-hosts)), written whole
+to the app's storage (through a temporary file) after every save and kept
+across updates. The TV has no printer: Löwenzahn 1's print requests show a
+notice and are dismissed.
 
 ## What runs where
 
 | Piece | Responsibility |
 | --- | --- |
-| `jni/main.c` | JNI bridge and game thread: the page's 60 Hz service clock and catch-up rule, holds (paused, menu, text entry), pads and mouse, text entry, printing, saves, presenting the stage (640×480, or an 800×600 game unscaled) to the surface |
+| `jni/main.c` | JNI bridge and game thread: the 60 Hz service clock and catch-up rule (at most four ticks per pass, twelve ticks of backlog), holds (paused, menu, text entry, print), pads and mouse, text entry, saves, presenting the stage (640×480, or an 800×600 game unscaled) to the surface |
 | `jni/packs.c` | Asset packs from the APK's uncompressed assets: indexes parsed by `jni/json.c`, blobs mapped in place, images inflated (D64Z) with zlib; WebP images (D64W) pass through to the runtime's decoder |
-| `jni/mixer.c`, `jni/decode.c` | The sound channels through AAudio, with the page's loop rule and gains; WAV decoded directly, Ogg Opus sounds and MP3 streams through MediaExtractor and MediaCodec on a decoder thread, started as far in as they took to decode |
+| `jni/mixer.c`, `jni/decode.c` | The sound channels through AAudio, with the runtime's loop rule and gains; WAV decoded directly, Ogg Opus sounds and MP3 streams through MediaExtractor and MediaCodec on a decoder thread |
 | `jni/video.c` | D5 digital video and D8.5 DirectMedia video through MediaCodec into an image reader, the frame the runtime's time asks for converted for the compositor, its sound in step |
 | `java/.../GameActivity.java` | The 4:3 surface, controllers, mouse and keys, the menu and dialogs |
-| `java/.../Text.java` | Text boxes set with Android's text renderer, as the page sets them on a canvas |
+| `java/.../Text.java` | Text boxes set with Android's text renderer, as the web page sets them on a canvas |
 | `src/director64/android.py` | Conversion, the make file per game and ABI, packaging and signing |
 
-For development, the image's `emulator` target holds an Android 14 emulator
-(`docker build --target emulator -t director64-android-emulator:local
-docker/android`; run it with `--device /dev/kvm`). Its Google APIs image
-accepts adb's key, which the Android TV images do not.
+`mise run test-android-host` checks the keyboard mapping and the Java/JNI
+signatures on the host (JDK 11 or newer).
+
+For development without a TV, the image's `emulator` target holds an
+Android 14 emulator (`docker build --target emulator -t
+director64-android-emulator:local docker/android`; run it with
+`--device /dev/kvm`). Its Google APIs image accepts adb's key, which the
+Android TV images do not.

@@ -163,8 +163,7 @@ Compare preprocessed and live rendering through edits, palette changes,
 independent nested clocks, masks, flips and fractional placement. Then rerun
 Birthday's actual bedroom on the EF-62N with 60 Hz service and its authored
 12 Hz animation as targets. Host timings and pixel equivalence alone cannot
-establish projector performance or original-player parity. N64 needs its own
-memory and pacing qualification.
+establish projector performance or original-player parity.
 
 ## Repair and regression evidence
 
@@ -235,9 +234,9 @@ reserves both press/release slots. Browser queues also retain releases across
 modifier, focus and menu changes. The actual compiled Wasm module exports the
 capacity service and loads successfully; it does not require a package format
 change.
-The Android worker emits active-time pacing windows and the
-[qualification command](android.md) rejects missing measurements, alerts and
-sustained service loss. These checks complement visual and input checks on
+The Android worker emits active-time pacing windows (`DIRECTOR64 ANDROID_PACING`
+logcat lines), and `uv run --locked python -m director64.android_pacing LOGFILE`
+rejects captures with missing measurements, alerts or sustained service loss. These checks complement visual and input checks on
 the device; an APK build alone cannot perform them.
 
 The full `check` task passes: 805 Python tests, 72 Node tests, 237 Rust tests,
@@ -298,7 +297,7 @@ Utilities bootstrap enabled the Message window and invoked initialization;
 local INI settings disabled disc checks and display-mode changes. Original
 room scripts and rendering modules were retained. A temporary observer logged
 root and child members during playback. This is original-engine evidence under
-Wine, with separate physical Android and N64 qualification still required.
+Wine, with separate physical Android qualification still required.
 The clean local ScummVM reference at
 `41ac2b31847622d0662d22c03fe6979e3b43cfbc` corroborates direct child rendering;
 the original engine supplies the numeric-conversion contract.
@@ -341,10 +340,7 @@ nominal host audio and separate device timing remain qualification limits.
 
 The final full check passes 812 Python, 72 Node and 237 Rust tests, portable
 native contracts and Android Java/JNI/threading checks. Additional focused
-sanitizer tests cover the new behavior. All seven N64 profiles compile with
-strict MIPS warnings and the synthetic render-probe ROM builds with a valid
-header. Its new target pixel fixtures have not been executed in an emulator or
-on hardware. Independent review also reproduced and fixed a null-palette
+sanitizer tests cover the new behavior. Independent review also reproduced and fixed a null-palette
 prefix crash and a transformed-film sampling discrepancy before integration.
 
 All twelve buildable games have fresh exports and signed ARM32 APKs built from

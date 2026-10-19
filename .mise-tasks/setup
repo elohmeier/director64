@@ -7,7 +7,5 @@ cd "$repo_root"
 
 uv sync --locked
 npm ci
-# The Rust compiler stage (compiler/) is optional on the host: without cargo
-# the Python generator runs instead, byte for byte the same output.
 # The bytecode compiler is the pipeline's only generator; cargo is required.
 cargo build --release --manifest-path compiler/Cargo.toml

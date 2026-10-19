@@ -21,8 +21,6 @@ director_version = 700
 media_root = "MAIN"
 entry_movie = "START"
 launcher_movie = "START.DXR"
-rom_title = "Findus Weihnachten"
-rom_save_type = 80
-controller_count = 4
 host_package = "director64_findus_christmas"
-asset_postprocessor = "full_media"
+# Videos convert after the scene model (compiler/src/ports.rs plan).
+defer_video = true
