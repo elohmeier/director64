@@ -71,10 +71,10 @@ static inline dg_film_bounds_t dg_film_bounds(dg_runtime_t *d, unsigned channel,
     // transformed bound gets one extra physical pixel for float rounding
     // when the renderer translates its quad into the intermediate's space.
     int pad = child.custom_quad || child.value.rotation || child.value.skew;
-    int64_t cl = (int64_t)dg_prescale_coord(l - member->film_left) - pad;
-    int64_t ct = (int64_t)dg_prescale_coord(t - member->film_top) - pad;
-    int64_t cr = (int64_t)dg_prescale_coord(r - member->film_left) + pad;
-    int64_t cb = (int64_t)dg_prescale_coord(b - member->film_top) + pad;
+    int64_t cl = (int64_t)(l - member->film_left) - pad;
+    int64_t ct = (int64_t)(t - member->film_top) - pad;
+    int64_t cr = (int64_t)(r - member->film_left) + pad;
+    int64_t cb = (int64_t)(b - member->film_top) + pad;
     if (cl < 0)
       cl = 0;
     if (ct < 0)
@@ -96,10 +96,6 @@ static inline dg_film_bounds_t dg_film_bounds(dg_runtime_t *d, unsigned channel,
   }
   if (right <= left || bottom <= top)
     return (dg_film_bounds_t){0};
-  // Four physical pixels are exactly five authored pixels. Keeping this
-  // phase lets the cropped render use dg_stage_coord without resampling.
-  left &= ~INT64_C(3);
-  top &= ~INT64_C(3);
   return (dg_film_bounds_t){(unsigned)left, (unsigned)top,
                             (unsigned)(right - left), (unsigned)(bottom - top)};
 }

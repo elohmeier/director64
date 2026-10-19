@@ -57,10 +57,6 @@ static wc_film_key_t prefix_key(wc_t *c, dg_runtime_t *d, const uint16_t *order,
     film_key_add(&key, sprite, sizeof(*sprite));
     int l, t, r, b;
     dg_sprite_bounds(d, sprite, &l, &t, &r, &b);
-    l = dg_prescale_coord(l);
-    t = dg_prescale_coord(t);
-    r = dg_prescale_coord(r);
-    b = dg_prescale_coord(b);
     if (l < 0)
       l = 0;
     if (t < 0)

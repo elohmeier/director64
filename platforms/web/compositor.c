@@ -294,17 +294,6 @@ const wc_image_t *wc_image(wc_t *c, lv_runtime_t *values, const char *asset,
   return image;
 }
 
-// A member's stored image dimensions: D10 converts its authored 800x600
-// stage's images prescaled to 640x480 (ink.h), while the member keeps its
-// authored dimensions for layout and scripts.
-static void stored_dims(const dg_member_t *m, unsigned *width, unsigned *height) {
-#if DG_D10
-  dg_prescale_dims(m->width, m->height, width, height);
-#else
-  *width = m->width;
-  *height = m->height;
-#endif
-}
 
 bool wc_hit(wc_t *c, lv_runtime_t *values, const dg_member_t *m, unsigned ink,
             int x, int y) {
@@ -314,16 +303,7 @@ bool wc_hit(wc_t *c, lv_runtime_t *values, const dg_member_t *m, unsigned ink,
     return true;
   if (x < 0 || y < 0 || x >= m->width || y >= m->height)
     return false;
-  unsigned width, height;
-  stored_dims(m, &width, &height);
-#if DG_D10
-  // Map the authored pixel onto the prescaled image.
-  x = (int)((unsigned)x * width / m->width);
-  y = (int)((unsigned)y * height / m->height);
-  if ((unsigned)x >= width) x = (int)width - 1;
-  if ((unsigned)y >= height) y = (int)height - 1;
-#endif
-  const wc_image_t *image = wc_image(c, values, m->asset, width, height, ink);
+  const wc_image_t *image = wc_image(c, values, m->asset, m->width, m->height, ink);
   return image && (image->pixels[(size_t)y * image->width + (unsigned)x] >> 24);
 }
 
@@ -338,7 +318,7 @@ static bool mask_pair(const dg_member_t *member, const dg_member_t *mask) {
 static void apply_mask(wc_t *c, dg_runtime_t *d, const dg_member_t *member, const dg_member_t *mask,
                        wc_image_t *image) {
   unsigned width, height;
-  stored_dims(mask, &width, &height);
+  width = mask->width; height = mask->height;
   const dg_pixel_image_t *mutable = dg_member_image(d, mask->id);
   dg_member_t mask_info;
   const uint32_t *mask_pixels;
@@ -464,7 +444,7 @@ static bool film_leaf_safe(void *context, dg_runtime_t *d,
     if (!asset || !*asset) return true;
     width = height = ink = 0;
   } else if (member->type == 1 || member->type == 5 || member->type == 12) {
-    stored_dims(member, &width, &height);
+    width = member->width; height = member->height;
     if (ink == 36 && member->type != 12) ink = 0;
   } else if (member->type == 2) {
     asset = dg_film_asset(member, sprite);
@@ -547,13 +527,6 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
       q[k] += (float)ox;
       q[k + 1] += (float)oy;
     }
-#if DG_D10
-#if !(defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE)
-    // The quad is authored; it rasterizes on the prescaled stage.
-    for (unsigned k = 0; k < 8; k++)
-      q[k] = q[k] * 4.0f / 5.0f;
-#endif
-#endif
   }
 #else
   (void)d;
@@ -893,10 +866,8 @@ static bool draw_text(wc_t *c, const char *text, const wc_text_style_t *style,
 // The style a text member sets in: its authored one, or NULL for the
 // builtin monospace font.
 static const wc_text_style_t *member_text_style(dg_runtime_t *d, const dg_member_t *m,
-                                                wc_text_style_t *authored, int *scroll,
-                                                bool prescale) {
+                                                wc_text_style_t *authored, int *scroll) {
   *scroll = 0;
-  (void)prescale;
 #if DG_MODERN
   const dg_text_style_t *st = m->text_style;
   const char *font = NULL;
@@ -921,14 +892,6 @@ static const wc_text_style_t *member_text_style(dg_runtime_t *d, const dg_member
               authored->font = styles[k]->font_id;
         }
       }
-#if DG_D10
-    if (prescale) {
-      authored->size = (unsigned)dg_prescale_size((int)authored->size);
-      authored->ascent = dg_prescale_size(authored->ascent);
-      authored->line_height = dg_prescale_size(authored->line_height);
-      *scroll = dg_prescale_size(*scroll);
-    }
-#endif
     return authored;
   }
 #else
@@ -956,7 +919,7 @@ int wc_text_char_at(wc_t *c, dg_runtime_t *d, const dg_member_t *m, const char *
     return -1;
   wc_text_style_t authored;
   int scroll;
-  const wc_text_style_t *style = member_text_style(d, m, &authored, &scroll, true);
+  const wc_text_style_t *style = member_text_style(d, m, &authored, &scroll);
   text = utf8_text(text);
   if (scroll < 0) scroll = 0;
   if (scroll > 4096 || height > 4096 - scroll) return -1;
@@ -990,7 +953,7 @@ bool wc_read_image(wc_t *c, dg_runtime_t *d, uint32_t member, dg_pixel_image_t *
   }
   if (m->type == 1 || m->type == 5 || m->type == 12) {
     unsigned sw, sh;
-    stored_dims(m, &sw, &sh);
+    sw = m->width; sh = m->height;
     const wc_image_t *image = wc_image(c, d->values, m->asset, sw, sh, 8);
     if (image) {
       for (unsigned y = 0; y < height; y++)
@@ -1008,7 +971,7 @@ bool wc_read_image(wc_t *c, dg_runtime_t *d, uint32_t member, dg_pixel_image_t *
         text = lv_cstr(d->values, d->values->roots[DG_FIELD_TEXT_ROOT + j]);
     wc_text_style_t authored;
     int scroll;
-    const wc_text_style_t *style = member_text_style(d, m, &authored, &scroll, false);
+    const wc_text_style_t *style = member_text_style(d, m, &authored, &scroll);
     bool ok = coverage && c->host.text && text &&
         c->host.text(c->host.ctx, utf8_text(text), (int)width, (int)height, style, coverage);
     if (ok) {
@@ -1124,8 +1087,8 @@ static void draw_flash_overlays(wc_t *c, dg_runtime_t *d, unsigned channel,
     if (size != st->size)
       ascent = ascent * (int)size / (st->size ? (int)st->size : 1);
     int line_height = (int)size + (field->leading < 0 ? 0 : field->leading);
-    wc_text_style_t style = {st->font_id, (unsigned)dg_prescale_size((int)size), st->align,
-                             dg_prescale_size(ascent), dg_prescale_size(line_height)};
+    wc_text_style_t style = {st->font_id, size, st->align,
+                             ascent, line_height};
     int al, at, ar, ab;
     dg_sprite_bounds(d, s, &al, &at, &ar, &ab);
     al += ox; ar += ox; at += oy; ab += oy;
@@ -1136,8 +1099,6 @@ static void draw_flash_overlays(wc_t *c, dg_runtime_t *d, unsigned channel,
     int t = at + (int)(fy * sy) + 2;
     int r = al + (int)((fx + fw - field->margin_right) * sx) - 2;
     int b = at + (int)((fy + fh) * sy);
-    l = dg_prescale_coord(l); t = dg_prescale_coord(t);
-    r = dg_prescale_coord(r); b = dg_prescale_coord(b);
     if(!draw_text(c, wrapped, &style, color & 0xffffffu, opacity * 255 / 100, l, t, r, b,
               NULL, 0, 0)) lv_fail(d->values,"Flash text rasterization failed: font, allocation or dimensions");
   }
@@ -1149,7 +1110,7 @@ static void draw_flash_field(wc_t *c, dg_runtime_t *d, unsigned parent,
   dg_flash_plane_t layout;
   if (!dg_flash_field_plane(d, parent, member, field, layer, &layout)) return;
   unsigned width, height;
-  dg_prescale_plane_dims(layout.width, layout.height, &width, &height);
+  width = layout.width; height = layout.height;
   uint32_t *plane = malloc((size_t)width * height * sizeof(*plane));
   uint32_t *saved = malloc(sizeof(c->pixels));
   if (!plane || !saved) { free(plane); free(saved); lv_fail(d->values, "Flash field framebuffer allocation"); return; }
@@ -1167,7 +1128,7 @@ static void draw_flash_field(wc_t *c, dg_runtime_t *d, unsigned parent,
     for (unsigned left = 0; left < width && !d->values->failed; left += WC_WIDTH) {
       memset(target(c), 0, sizeof(c->pixels));
       draw_flash_overlays(c, d, parent, &local_sprite, &local_member,
-          -dg_stage_coord((int)left), -dg_stage_coord((int)top), layer->name, true);
+          -((int)left), -((int)top), layer->name, true);
       unsigned rows = height - top < WC_HEIGHT ? height - top : WC_HEIGHT;
       unsigned columns = width - left < WC_WIDTH ? width - left : WC_WIDTH;
       for (unsigned y = 0; y < rows; y++)
@@ -1182,8 +1143,8 @@ static void draw_flash_field(wc_t *c, dg_runtime_t *d, unsigned parent,
     wc_image_t image = {.width = width, .height = height, .pixels = plane, .follow_alpha = true};
     image_coverage(&image);
     int l,t,r,b; dg_sprite_bounds(d, &layout.sprite, &l,&t,&r,&b);
-    l = dg_prescale_coord(l + ox); r = dg_prescale_coord(r + ox);
-    t = dg_prescale_coord(t + oy); b = dg_prescale_coord(b + oy);
+    l = (l + ox); r = (r + ox);
+    t = (t + oy); b = (b + oy);
     if (r > l && b > t)
       draw_bitmap(c,d,&layout.sprite,&image,l,t,r,b,8,dg_opacity(&layout.sprite),ox,oy);
   }
@@ -1192,11 +1153,11 @@ static void draw_flash_field(wc_t *c, dg_runtime_t *d, unsigned parent,
 typedef struct { wc_t *compositor; dg_runtime_t *director; } wc_flash_context_t;
 static bool wc_flash_asset(void *context,const dg_film_layer_t *layer,dg_flash_raster_t *out) {
   wc_flash_context_t *ctx=context;unsigned width,height;
-  dg_prescale_dims(layer->value.width,layer->value.height,&width,&height);
+  width = layer->value.width; height = layer->value.height;
   const wc_image_t *image=wc_image(ctx->compositor,ctx->director->values,layer->asset,width,height,8);
   if(!image)return false;
-  unsigned rw,rh;dg_prescale_plane_dims(layer->value.width,layer->value.height,&rw,&rh);
-  int left=dg_prescale_coord(layer->value.x),top=dg_prescale_coord(layer->value.y);
+  unsigned rw,rh;rw = layer->value.width; rh = layer->value.height;
+  int left=layer->value.x,top=layer->value.y;
   if(!dg_flash_raster_allocate(ctx->director,out,left,top,left+(int)rw,top+(int)rh))return false;
   for(unsigned y=0;y<rh;y++)for(unsigned x=0;x<rw;x++)
     out->pixels[(size_t)y*rw+x]=image->pixels[(size_t)(y*image->height/rh)*image->width+x*image->width/rw];
@@ -1206,8 +1167,8 @@ static bool wc_flash_text(void *context,dg_flash_instance_t *instance,const dg_f
   wc_flash_context_t *ctx=context;wc_t *c=ctx->compositor;dg_runtime_t *d=ctx->director;
   dg_flash_field_t effective;dg_text_style_t style;if(!dg_flash_field_snapshot(d,instance,field,&effective,&style))return false;
   dg_flash_view_t view;dg_flash_view(instance,&view);unsigned width,height;
-  dg_prescale_plane_dims(effective.width,effective.height,&width,&height);
-  int left=dg_prescale_coord((int)floorf(view.bounds[0])),top=dg_prescale_coord((int)floorf(view.bounds[1]));
+  width = effective.width; height = effective.height;
+  int left=((int)floorf(view.bounds[0])),top=((int)floorf(view.bounds[1]));
   if(!dg_flash_raster_allocate(d,out,left,top,left+(int)width,top+(int)height))return false;
   uint32_t *saved=malloc(sizeof(c->pixels));
   if(!saved){free(out->pixels);out->pixels=NULL;lv_fail(d->values,"Flash text stage preservation allocation");return false;}
@@ -1222,7 +1183,7 @@ static bool wc_flash_text(void *context,dg_flash_instance_t *instance,const dg_f
   for(unsigned y=0;y<height&&!d->values->failed;y+=WC_HEIGHT)
     for(unsigned x=0;x<width&&!d->values->failed;x+=WC_WIDTH) {
       memset(target(c),0,sizeof(c->pixels));
-      draw_flash_overlays(c,d,DG_SPRITES,&sprite,&member,-dg_stage_coord((int)x),-dg_stage_coord((int)y),NULL,true);
+      draw_flash_overlays(c,d,DG_SPRITES,&sprite,&member,-((int)x),-((int)y),NULL,true);
       unsigned rows=height-y<WC_HEIGHT?height-y:WC_HEIGHT,cols=width-x<WC_WIDTH?width-x:WC_WIDTH;
       for(unsigned row=0;row<rows;row++)memcpy(out->pixels+(size_t)(y+row)*width+x,target(c)+(size_t)row*WC_WIDTH,cols*4);
     }
@@ -1237,9 +1198,6 @@ bool wc_flash_field_hit(wc_t *c, dg_runtime_t *d, struct dg_flash_instance *inst
   wc_flash_context_t context = {c, d};
   dg_flash_raster_t raster = {0};
   bool ok = wc_flash_text(&context, instance, view.field, &raster), hit = false;
-#if !(defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE)
-  x *= 0.8f; y *= 0.8f;
-#endif
   int px = (int)floorf(x) - raster.left, py = (int)floorf(y) - raster.top;
   if (ok && px >= 0 && py >= 0 && px < (int)raster.width && py < (int)raster.height)
     hit = (raster.pixels[(size_t)py * raster.width + (unsigned)px] >> 24) != 0;
@@ -1262,9 +1220,6 @@ static void draw_video(wc_t *c, dg_runtime_t *owner, unsigned sprite, const dg_s
   float quad[8];
   dg_sprite_quad(owner,s,quad);
   for (unsigned at = 0; at < 8; at += 2) { quad[at] += ox; quad[at + 1] += oy; }
-#if DG_D10 && !(defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE)
-  for (unsigned at = 0; at < 8; at++) quad[at] *= 0.8f;
-#endif
   int cl = l < 0 ? 0 : l, ct = t < 0 ? 0 : t;
   int cr = r > WC_WIDTH ? WC_WIDTH : r, cb = b > WC_HEIGHT ? WC_HEIGHT : b;
 #if DG_D10
@@ -1308,7 +1263,6 @@ static void draw_transformed_text(wc_t *c, dg_runtime_t *d, unsigned channel,
   if (right <= left || bottom <= top) return;
   unsigned width = (unsigned)(right - left), height = (unsigned)(bottom - top);
 #if DG_D10
-  dg_prescale_plane_dims(width, height, &width, &height);
 #endif
   if (width > 16384 || height > 16384 || (size_t)width * height > 16u * 1024u * 1024u) {
     lv_fail(d->values, "transformed text dimensions exceed bound"); return;
@@ -1328,7 +1282,7 @@ static void draw_transformed_text(wc_t *c, dg_runtime_t *d, unsigned channel,
     for (unsigned x = 0; x < width && !d->values->failed; x += WC_WIDTH) {
       memset(target(c), 0, sizeof(c->pixels));
 #if DG_D10
-      draw_sprite(c,d,channel,&flat,-dg_stage_coord((int)x),-dg_stage_coord((int)y));
+      draw_sprite(c,d,channel,&flat,-((int)x),-((int)y));
 #else
       draw_sprite(c,d,channel,&flat,-(int)x,-(int)y);
 #endif
@@ -1365,7 +1319,7 @@ static void draw_film_direct(wc_t *c, dg_runtime_t *d, unsigned parent,
   }
   dg_film_transform_t transform;
   dg_film_transform_init(d,sprite,member,ox,oy,
-      dg_prescale_coord(1000)/1000.0f,&transform);
+      1.0f,&transform);
   unsigned previous=c->film_transform_count;
   // The common authored800x600 container contributes no mapping or clipping
   // beyond the stage itself, so its children retain their ordinary fast paths.
@@ -1378,12 +1332,12 @@ static void draw_film_direct(wc_t *c, dg_runtime_t *d, unsigned parent,
     if (!dg_film_layer_sprite(d,parent,layer,&child)) continue;
     if (layer->asset && *layer->asset) {
       unsigned width,height;
-      dg_prescale_dims(layer->value.width,layer->value.height,&width,&height);
+      width = layer->value.width; height = layer->value.height;
       const wc_image_t *image=wc_image(c,d->values,layer->asset,width,height,child.value.ink);
       if (!image) continue;
       int l,t,r,b;dg_sprite_bounds(d,&child,&l,&t,&r,&b);
-      draw_bitmap(c,d,&child,image,dg_prescale_coord(l),dg_prescale_coord(t),
-          dg_prescale_coord(r),dg_prescale_coord(b),child.value.ink,dg_opacity(&child),0,0);
+      draw_bitmap(c,d,&child,image,l,t,
+          r,b,child.value.ink,dg_opacity(&child),0,0);
     } else if (!layer->value.member && layer->name && *layer->name) {
       dg_sprite_t field_parent={.value={.member=member->id,.type=16,
           .x=member->reg_x,.y=member->reg_y,.width=member->width,.height=member->height,
@@ -1449,8 +1403,6 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
   t += oy; b += oy;
 #if DG_D10
   // Authored 800x600 geometry rasterizes onto the 640x480 stage.
-  l = dg_prescale_coord(l); t = dg_prescale_coord(t);
-  r = dg_prescale_coord(r); b = dg_prescale_coord(b);
 #endif
   if (r <= l || b <= t || (
 #if DG_D10
@@ -1467,7 +1419,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
 #if DG_D10
   if(m&&m->type==2&&m->flash_clip_count) {
     wc_flash_context_t context={c,d};
-    dg_flash_raster_host_t host={.context=&context,.scale=dg_prescale_coord(1000)/1000.0f,
+    dg_flash_raster_host_t host={.context=&context,.scale=1.0f,
       .asset=wc_flash_asset,.text=wc_flash_text};
     dg_flash_raster_t plane;
     if(dg_flash_render(d,i,&host,&plane)&&plane.pixels) {
@@ -1479,7 +1431,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
   }
   if (m && m->type == 2 && (m->film_frames || m->film_track_count || driven)) {
     unsigned width, height;
-    dg_prescale_plane_dims(m->width, m->height, &width, &height);
+    width = m->width; height = m->height;
     if (!width || !height || (size_t)width * height > 16u * 1024u * 1024u || c->film_depth >= 8) {
       lv_fail(values, "film loop render dimensions or nesting exceeded"); return;
     }
@@ -1489,7 +1441,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     if (resolve && !driven_layers) return;
     const dg_film_frame_t *frame = resolve ? &driven_frame : &m->film_frames[dg_film_storage_pose(m, s)];
     dg_film_transform_t placement;
-    dg_film_transform_init(d,s,m,ox,oy,dg_prescale_coord(1000)/1000.0f,&placement);
+    dg_film_transform_init(d,s,m,ox,oy,1.0f,&placement);
     if (dg_film_container_effects(m) &&
         (c->film_transform_count || !dg_film_transform_raster_aligned(&placement) ||
          !dg_film_isolated_safe(d,i,m,frame,film_leaf_safe,c,0))) {
@@ -1519,8 +1471,8 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
         memset(target(c), 0, sizeof(c->pixels));
         for (unsigned layer = 0; layer < frame->count && !values->failed; layer++) {
           const dg_film_layer_t *item = &frame->layers[layer];
-          int offset_x = -m->film_left - dg_stage_coord((int)(crop.left+left));
-          int offset_y = -m->film_top - dg_stage_coord((int)(crop.top+top));
+          int offset_x = -m->film_left - ((int)(crop.left+left));
+          int offset_y = -m->film_top - ((int)(crop.top+top));
           if (!item->value.member && item->name && *item->name &&
               (!item->asset || !*item->asset)) {
             dg_sprite_t field_parent = {.value = {.member = m->id, .type = 16,
@@ -1535,13 +1487,13 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
           if (!dg_film_layer_sprite(d, i, item, &child)) continue;
           if (item->asset && *item->asset) {
             unsigned iw, ih;
-            dg_prescale_dims(item->value.width, item->value.height, &iw, &ih);
+            iw = item->value.width; ih = item->value.height;
             const wc_image_t *image = wc_image(c, values, item->asset, iw, ih, child.value.ink);
             if (!image) continue;
             int cl, ct, cr, cb;
             dg_sprite_bounds(d, &child, &cl, &ct, &cr, &cb);
-            cl = dg_prescale_coord(cl + offset_x); cr = dg_prescale_coord(cr + offset_x);
-            ct = dg_prescale_coord(ct + offset_y); cb = dg_prescale_coord(cb + offset_y);
+            cl = (cl + offset_x); cr = (cr + offset_x);
+            ct = (ct + offset_y); cb = (cb + offset_y);
             if (cr > cl && cb > ct)
               draw_bitmap(c, d, &child, image, cl, ct, cr, cb, child.value.ink,
                           dg_opacity(&child), offset_x, offset_y);
@@ -1585,7 +1537,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
       return;
     }
     unsigned width, height;
-    dg_prescale_plane_dims(m->width, m->height, &width, &height);
+    width = m->width; height = m->height;
     if (!width || !height || width > WC_WIDTH || height > WC_HEIGHT) {
       lv_fail(values, "linked movie source rectangle exceeds compositor");
       return;
@@ -1671,7 +1623,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
       return;
     }
     unsigned width, height;
-    stored_dims(m, &width, &height);
+    width = m->width; height = m->height;
     // Older profiles use the matte for blended Copy. The original Birthday
     // engine preserves the whole rectangle, including one-bit sources.
     // A background key is applied at draw time, since sprites sharing an
@@ -1728,7 +1680,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     uint32_t color = indexed_color(d, s->value.fore);
     wc_text_style_t authored;
     int scroll;
-    const wc_text_style_t *style = member_text_style(d, m, &authored, &scroll, true);
+    const wc_text_style_t *style = member_text_style(d, m, &authored, &scroll);
 #if DG_MODERN
     if (m->text_style) {
       uint32_t rgb = m->text_style->color;
@@ -1803,9 +1755,6 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
       for (unsigned point = 0; point < 8; point += 2) {
         shape_quad[point] += ox; shape_quad[point + 1] += oy;
       }
-#if DG_D10 && !(defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE)
-      for (unsigned point = 0; point < 8; point++) shape_quad[point] *= 0.8f;
-#endif
     }
 #endif
     if (!transformed && !tile && pattern <= 1
@@ -1884,8 +1833,8 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
           }
 
 #if DG_D10
-          int stage_x = dg_stage_coord((int)floorf(sample_x)) - ox,
-              stage_y = dg_stage_coord((int)floorf(sample_y)) - oy;
+          int stage_x = ((int)floorf(sample_x)) - ox,
+              stage_y = ((int)floorf(sample_y)) - oy;
 #else
           int stage_x = x - ox, stage_y = y - oy;
 #endif
@@ -1925,7 +1874,7 @@ static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy, bool retained) 
 #if DG_D10
   const dg_pixel_image_t *stage = dg_stage_image(d);
   if (stage) {
-    int dx = dg_prescale_coord(ox), dy = dg_prescale_coord(oy);
+    int dx = ox, dy = oy;
     for (unsigned y = 0; y < WC_HEIGHT; y++)
       for (unsigned x = 0; x < WC_WIDTH; x++) {
         int sx = (int)x - dx, sy = (int)y - dy;

@@ -19,60 +19,6 @@ static inline uint32_t dg_fdi_be32(const uint8_t *p) {
 static inline unsigned dg_fdi_be16(const uint8_t *p) {
   return (unsigned)p[0] << 8 | p[1];
 }
-#if DG_D10
-#if defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE
-// The browser and Android TV draw the authored 800x600 stage as it is:
-// images keep their converted size and geometry is not scaled.
-static inline void dg_prescale_dims(unsigned width, unsigned height,
-                                    unsigned *scaled_width,
-                                    unsigned *scaled_height) {
-  *scaled_width = width;
-  *scaled_height = height;
-}
-static inline int dg_prescale_coord(int v) { return v; }
-// A text size or metric on the target stage.
-static inline int dg_prescale_size(int v) { return v; }
-// A target-screen coordinate in authored stage space.
-static inline int dg_stage_coord(int v) { return v; }
-#else
-// The authored 800x600 stage prescales its converted images to the 640x480
-// target (4/5). Geometry everywhere stays authored; texture dimensions map
-// through this rule, mirrored exactly by the converter (prescaleImage).
-// Cursor-sized images (<=16x16) keep their exact pixels.
-static inline void dg_prescale_dims(unsigned width, unsigned height,
-                                    unsigned *scaled_width,
-                                    unsigned *scaled_height) {
-  if (width <= 16 && height <= 16) {
-    *scaled_width = width;
-    *scaled_height = height;
-    return;
-  }
-  *scaled_width = width ? (width * 4u + 2u) / 5u : 0u;
-  if (width && !*scaled_width) *scaled_width = 1;
-  *scaled_height = height ? (height * 4u + 2u) / 5u : 0u;
-  if (height && !*scaled_height) *scaled_height = 1;
-}
-// Authored-space coordinate onto the 640x480 screen, flooring negatives.
-static inline int dg_prescale_coord(int v) {
-  return (v * 4 - (v < 0 ? 4 : 0)) / 5;
-}
-static inline int dg_prescale_size(int v) { return (v * 4 + 2) / 5; }
-static inline int dg_stage_coord(int v) { return v * 5 / 4; }
-#endif
-// Generated offscreen planes are already rasterized in target pixels. Unlike
-// imported cursor-sized images, their small dimensions must still prescale.
-static inline void dg_prescale_plane_dims(unsigned width, unsigned height,
-                                          unsigned *scaled_width, unsigned *scaled_height) {
-#if defined(DIRECTOR64_NATIVE_STAGE) && DIRECTOR64_NATIVE_STAGE
-  *scaled_width = width; *scaled_height = height;
-#else
-  *scaled_width = width ? (width * 4u + 2u) / 5u : 0;
-  *scaled_height = height ? (height * 4u + 2u) / 5u : 0;
-  if (width && !*scaled_width) *scaled_width = 1;
-  if (height && !*scaled_height) *scaled_height = 1;
-#endif
-}
-#endif
 // Both planes hold whatever the stored layout pads them to, so a tile-packed
 // image's colour plane ends where its tiles do and the coverage plane starts
 // there. Tile counts are multiples of 1024, so the eight-byte alignment the

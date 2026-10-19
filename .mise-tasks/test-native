@@ -56,8 +56,6 @@ for profile in d5 d10 d85; do
         tests/native/test_web_lifecycle.c platforms/web/compositor.c \
         runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c runtime/package/package.c
 done
-compile web_mask_phase_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 -Iplatforms/web \
-    tests/native/test_web_mask_phase.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
 compile lingo_d8 -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_lingo_d8.c runtime/lingo/lingo_runtime.c
 compile lingo_collect tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
 compile lingo_collect_extended_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
@@ -216,4 +214,3 @@ for profile in d10 d85; do
 done
 compile package -Iruntime/package tests/native/test_package.c runtime/package/package.c
 
-compile web_flash_text_hit_prescaled -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 -Iplatforms/web tests/native/test_web_flash_text_hit.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c

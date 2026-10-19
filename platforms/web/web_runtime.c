@@ -554,12 +554,6 @@ EMSCRIPTEN_KEEPALIVE int d64_step(int x, int y, int buttons) {
     return 1;
   if (director.quit)
     return 2;
-#if DG_D10
-  // The page's 640x480 pointer maps into the authored 800x600 stage; the
-  // probe protocol speaks authored coordinates.
-  x = dg_stage_coord(x);
-  y = dg_stage_coord(y);
-#endif
   step(x, y, (unsigned)buttons);
   serve_gain();
 #if DG_D5 || DG_D10
@@ -661,12 +655,7 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y) {
 #if DG_EXTENDED
   if (!booted || values.failed || values.depth || director.text_pending)
     return 0;
-#if DG_D10
-  // The editable-field hit test works in the authored 800x600 space.
-  unsigned sprite = dg_mouse_hit(&director, dg_stage_coord(x), dg_stage_coord(y));
-#else
   unsigned sprite = dg_mouse_hit(&director, x, y);
-#endif
   if (!sprite || sprite >= DG_SPRITES || !dg_text_editable(&director, sprite))
     return 0;
   const dg_member_t *m = dg_member(&director, director.sprites[sprite].value.member);
@@ -677,10 +666,6 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y) {
     return 0;
   dg_bounds(&director, sprite, &text_field_rect[0], &text_field_rect[1],
             &text_field_rect[2], &text_field_rect[3]);
-#if DG_D10
-  for (unsigned i = 0; i < 4; i++)
-    text_field_rect[i] = dg_prescale_coord(text_field_rect[i]);
-#endif
   return sprite;
 #else
   (void)x;
@@ -707,12 +692,7 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_key_field(int x, int y, int anywhere) {
 #if defined(DIRECTOR64_MUCKLAS) || DG_D10
   if (!booted || values.failed || values.depth)
     return 0;
-#if DG_D10
-  // The hit test works in the authored 800x600 space.
-  unsigned first = anywhere ? 1 : dg_mouse_hit(&director, dg_stage_coord(x), dg_stage_coord(y));
-#else
   unsigned first = anywhere ? 1 : dg_mouse_hit(&director, x, y);
-#endif
   unsigned last = anywhere ? DG_SPRITES - 1 : first;
   for (unsigned sprite = first; sprite && sprite <= last && sprite < DG_SPRITES; sprite++)
 #ifdef DIRECTOR64_MUCKLAS
@@ -722,10 +702,6 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_key_field(int x, int y, int anywhere) {
 #endif
       dg_bounds(&director, sprite, &text_field_rect[0], &text_field_rect[1],
                 &text_field_rect[2], &text_field_rect[3]);
-#if DG_D10
-      for (unsigned i = 0; i < 4; i++)
-        text_field_rect[i] = dg_prescale_coord(text_field_rect[i]);
-#endif
       return sprite;
     }
 #else
