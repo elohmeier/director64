@@ -364,4 +364,9 @@ version and signing verification, plus the same startup smoke: 84,000 ticks
 without failures or script alerts. The full check now passes 869 Python tests,
 72 Node tests, 237 Rust tests and the native/Android host contracts. These results
 retain the startup limitations above and add no physical performance evidence;
-the projector movie hold remains in force.
+at that stage, the projector movie hold remained in force.
+
+On 2026-10-19, the user authorized deployment. All fourteen APKs were installed
+on the EF-62N as in-place updates, with installed hashes matching the verified
+builds and existing application identities preserved. No games were launched;
+this deployment adds no physical gameplay or performance qualification.

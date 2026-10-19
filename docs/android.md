@@ -98,7 +98,8 @@ animation state. Original Director 8.5.1 probes establish both behaviors; see
 the [follow-up evidence](performance-audit.md#visibility-and-cursor-follow-up).
 The follow-up also adds standard tool cursors and a bounded background cache.
 Projector interaction stopped at the user's request while it was being used
-for a movie. Further installation and physical checks remain pending.
+for a movie. Installation was deferred until authorization on 2026-10-19;
+physical gameplay checks remain pending.
 
 All fourteen ARM32 APKs are now built from clean source commit `152f450`, with
 matching source/conversion receipts, embedded version names and a common
@@ -108,8 +109,11 @@ remain reusable. Each passes a local 6,000-tick startup smoke: 84,000 ticks tota
 without a runtime failure or script alert. These checks use blank font coverage,
 nominal audio lifetimes and no video decoding; they do not qualify full gameplay
 or device performance. The repaired streams separately pass strict FFmpeg and
-production decoder checks. None of these follow-up APKs has been installed or
-launched on the projector.
+production decoder checks. On 2026-10-19, all fourteen APKs were installed on the
+EF-62N as in-place updates. Each installed APK's SHA-256 matches its verified
+build; application IDs and original installation times remain unchanged.
+No games were launched during this deployment, so physical gameplay and
+performance qualification remain pending.
 
 Löwenzahn 7's long clip comes from an independently recovered copy; each of its
 five short clips contains one explicit 40 ms picture hold. Optik's affected clip
