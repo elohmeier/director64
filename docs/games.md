@@ -1,4 +1,4 @@
-# Game sources
+# Catalogued sources
 
 | Slug | Title | Port |
 | --- | --- | --- |
@@ -23,10 +23,8 @@
 | `loewenzahn-optik` | 25 Jahre Löwenzahn: Laser, Linsen, Flaschenzüge | [Experimental D8.5 port](../games/loewenzahn-optik/README.md) |
 | `lernerfolg-deutsch-1-2` | Lernerfolg Grundschule Deutsch 1-2 | [Experimental D10 port](../games/lernerfolg-deutsch-1-2/README.md) |
 
-Full container hashes, original filenames, identification evidence and inspection
-limits are recorded in [media-inventory.json](media-inventory.json). The
-`fritz-fertig-1` volume identification remains provisional; the other descriptive
-slugs distinguish game identities from ambiguous disc numbering.
-
-Catalogued means the source is organized and can be imported, not that its
-Director version, Xtras or gameplay have been ported.
+Each game's `game.toml` pins its source images by SHA-256;
+[media-inventory.json](media-inventory.json) records container hashes,
+original filenames and identification notes (`fritz-fertig-1`'s volume
+identification is provisional). Catalogued means the source is identified
+and can be extracted, not that it has a port.

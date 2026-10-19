@@ -4,8 +4,8 @@ Commit to `main`. History is a linear series of direct commits; do not open a
 branch for a change. If a change already sits on one, merge it back with
 `git merge --ff-only` and delete the branch.
 
-Never commit game media, files extracted or converted from it, ROMs, captures,
-or links to them. Retail media stays under the ignored `media/`, generated
+Never commit game media, files extracted or converted from it, APKs, web builds,
+captures or links to them. Retail media stays under the ignored `media/`, generated
 output under the ignored `build/` and `dist/`. Machine-specific settings go in
 ignored `*.local.toml` files.
 
@@ -16,7 +16,7 @@ missing from other players. Use original-projector experiments, contemporary
 Macromedia/Adobe documentation, and recovered game requirements to resolve
 ambiguities. Keep synthetic experiments reproducible and record the projector
 version, input, expected output, and execution environment. Wine results are
-original-projector evidence under Wine, not native Windows or N64 validation.
+original-projector evidence under Wine, not native Windows validation.
 Check loaded runtime DLLs as well as the launcher: a thin projector executable
 can advertise a different Director version from its actual playback engine.
 
@@ -33,7 +33,7 @@ versions have different tempo encodings and event semantics.
 
 Corroborate reference behavior with the recovered local game data and focused
 tests. ScummVM implementation agreement is distinct from a successful original
-projector comparison or N64 hardware validation.
+projector comparison or validation on the Android TV.
 
 Capability failures protect builds while implementation is incomplete; they do
 not count as implementing the rejected feature. Replace silent success with

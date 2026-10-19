@@ -1,139 +1,81 @@
-# Input fuzzing
+# Fuzzing, parity and journeys
 
-`director64 fuzz --game <slug>` hunts for crashes and script failures in a
-ported game by driving its web build's probe with randomized input. The probe
-(`dist/<slug>/<source>/director-web-probe`, written by `director64 web`) runs
-the same WebAssembly runtime and converted game as the standalone web player
-under Node (`platforms/web/node/probe.mjs`) and speaks a line-based RPC
-protocol. Episodes boot the game exactly like the player (entry movie, erased
-save image) and inject only events a player could produce, so every reported
-failure is reachable in play.
+All three drive the web build's probe
+(`dist/<slug>/<source>/director-web-probe`, see [web.md](web.md#probe)):
+the same WebAssembly runtime and converted game as the web app, under Node.
+Run `director64 web --game <slug>` first.
+
+## Fuzzing
 
 ```sh
-uv run --locked director64 web --game loewenzahn-1          # builds the probe
 uv run --locked director64 fuzz --game loewenzahn-1 --duration 900 --jobs 4
 uv run --locked director64 fuzz --game findus-workshop --episodes 500 --seed 7
-uv run --locked director64 fuzz --game findus-mucklas --replay build/findus-mucklas/<source>/fuzz/<run>/case-...
+uv run --locked director64 fuzz --game findus-mucklas --replay <case-dir>
 ```
 
-`--probe` names another probe executable; `--prelude FILE` (repeatable)
-gives scripted openings, one chosen per episode and run right after boot, so
-the walk can start deep inside a game.
+| Option | Effect |
+| --- | --- |
+| `--duration S`, `--episodes N` | Stop after S seconds (default 300) or N episodes |
+| `--actions N` | Input actions per episode (default 250) |
+| `--jobs N`, `--seed N` | Parallel probes; base seed (default random) |
+| `--movie NAME` | Entry movie (repeatable) |
+| `--prelude FILE` | Scripted opening run after boot (repeatable, one chosen per episode) |
+| `--replay CASE` | Re-run a recorded case; exits 1 if it still fails |
+| `--no-minimize`, `--output DIR`, `--probe EXE` | Skip minimization; artifact directory; another probe |
 
-## What an episode does
-
-Each episode is a seeded random walk of `--actions` input actions (default 250)
-against a fresh probe process:
-
-- clicks and drags, 80% aimed at visible sprite bounds read back from the probe
-  state, 20% at arbitrary screen points;
-- idle score playback with the pointer parked somewhere;
-- rapid press/release jitter;
-- raw `pad` samples through the shared pointer controller (stick, D-pad,
-  buttons);
-- keyboard text entry: up to 20 characters from the player keyboard's set
-  into a currently editable field while the interpreter is idle and no entry
-  is draining (Willy Werkel player and car names, Mucklas name entry);
-- occasional `reboot`: a restart that keeps persisted saves.
-
-Pointer coordinates stay inside the envelope the shared input controller
-clamps to (`runtime/interaction/input.c`, x 8–630, y 8–470); out-of-range
-coordinates would report unreachable bugs.
-
-What the probe accepts is declared in `FEATURES` in `src/director64/fuzz.py`
-(pad support, button mask, text characters). Director key events have no RPC
-on the web probe, so the `keys` table is empty.
-
-## Failure classes
+Each episode boots the game like the player (entry movie, erased save image)
+and performs a seeded random walk of player-reachable input: clicks and
+drags (mostly aimed at visible sprites), idle playback, press jitter,
+controller samples, text entry into editable fields, and restarts that keep
+saves. Accepted inputs are declared in `FEATURES` in
+`src/director64/fuzz.py`.
 
 | Kind | Detection |
 | --- | --- |
-| `script-error` | non-empty `error` in the probe state, or `NATIVE_FAIL` |
-| `script-alert` | `script_errors` counter increased: a recovered script error |
-| `crash` | probe killed by a signal |
-| `hang` | no state response within the per-command deadline |
-| `protocol` | unparseable state or unexpected exit (also catches fuzzer bugs and WebAssembly traps) |
+| `script-error` | Error in the probe state, or `NATIVE_FAIL` |
+| `script-alert` | `script_errors` increased: a recovered script error, as the projector's alert |
+| `crash` | Probe killed by a signal |
+| `hang` | No state response within the deadline |
+| `protocol` | Unparseable state or unexpected exit |
+| `sanitizer` | ASan/UBSan/LSan report, with a sanitizer probe passed via `--probe` |
 
-The fuzzer also classifies ASan/UBSan/LSan reports as `sanitizer` when a
-probe built with sanitizers is passed through `--probe`.
+Failures are deduplicated by a normalized signature. Each new one writes
+`case-<hash>-<kind>/` under `build/<game>/<source>/fuzz/<run>/` with
+`commands.txt`, `commands.min.txt` (delta-debugged), `report.json` and
+`stderr.txt`; `summary.json` has per-signature counts and movie coverage.
+The run exits non-zero for any failure other than `script-alert`. Replay is
+deterministic. A `script-alert` may still be a port gap: compare it with the
+original before deciding.
 
-A `script-alert` reproduces the original projector's alert-and-continue: the
-runtime discards the Lingo call contexts and the score keeps playing. The
-episode continues, the alert is still recorded with its own case artifact,
-and only non-alert failures make the run exit non-zero. An alert can still
-point at a port gap, so new signatures deserve triage against the original.
+## Parity
 
-Failures are deduplicated by a normalized signature (numbers and addresses
-stripped). The first occurrence writes `case-<hash>-<kind>/` into
-`build/<game>/<source-id>/fuzz/<run>/` with:
-
-- `commands.txt`: the exact probe command stream that failed;
-- `commands.min.txt`: the same failure minimized by bounded delta debugging
-  (unless `--no-minimize`);
-- `report.json`: signature, seed, entry movie, visited movies, final state;
-- `stderr.txt`: probe stderr tail (`NATIVE_TRACE` output, runtime failures).
-
-`summary.json` records per-signature counts and per-movie coverage for the
-whole run; the run exits non-zero when any failure other than a recovered
-`script-alert` was found.
-
-## Triage
-
-Replay is deterministic: the probe seeds its runtime with a fixed value, so
-feeding `commands.min.txt` back always reproduces the same failure.
+`director64 parity` runs the fuzzer's random walk on two probes and compares
+the JSON state after every command. Use it to show that a refactor or
+speed-up does not change behavior.
 
 ```sh
-uv run --locked director64 fuzz --game <slug> --replay <case-dir>   # exits 1 if it still fails
-```
-
-The occurrence count in `summary.json` is a severity hint: a signature hit in
-a third of episodes is something players will run into quickly. A
-`script-error` is a real defect even when the message looks graceful: it halts
-the Lingo runtime. A `script-alert` matches an original script error the
-projector recovered from; compare against the original before deciding
-whether it needs a fix.
-
-The synthetic contracts in `tests/test_fuzz.py` verify the generator against
-a strict protocol double, artifact round-trips, per-seed determinism, and
-minimization.
-
-## Scripted journeys
-
-`director64 journey --game <slug> [NAME]` runs one of a game's scripted
-journeys (`games/<slug>/host/*journey.py`, `full_regressions.py`; default
-`full_journey`) over the same web probe and writes its report under
-`build/<game>/<source-id>/journeys/<name>/`. `--activity` selects Mucklas'
-activity journey.
-
-## State parity between two probes
-
-`director64 parity --game <slug>` drives the fuzzer's random walk against a
-reference probe and replays every command on the working tree's probe,
-comparing the JSON state after each command. A change that should not alter
-behaviour (a refactor, a speed-up) must reproduce the previous build's states
-byte for byte before it claims its gain.
-
-```sh
-uv run --locked director64 web --game findus-workshop          # reference build
+uv run --locked director64 web --game findus-workshop
 cp -r dist/findus-workshop/<source>/web build/findus-workshop/<source>/parity/site-a
-# ... change the converter or runtime, then rebuild ...
+# change the converter or runtime, then:
 uv run --locked director64 web --game findus-workshop
 uv run --locked director64 parity --game findus-workshop --episodes 4 --actions 120
 ```
 
-Side A defaults to the kept web build `parity/site-a` under the source's
-build directory (`--against` names another web build or a probe executable)
-and side B to the web build's probe (`--probe` names another). The summary lists the movies visited and the first diverging
-command per episode with a field-level diff; a differing outcome (a script
-error on one side only) counts as a divergence too. The seed defaults to the
-fuzz baseline seed so runs are comparable across changes.
+Side A defaults to `build/<game>/<source>/parity/site-a` (`--against` names
+another web build or probe); side B to the current web build (`--probe`).
+Options: `--episodes`, `--actions`, `--seed` (default the fuzz baseline
+seed), `--movie`, `--output`. Heap metrics are excluded, instance handles
+are renumbered by first appearance, and text compares case-folded. The
+summary lists the first diverging command per episode with a field diff.
 
-The comparison sees authored state, not the runtime's footprint: the heap
-metrics and the live handle count are excluded, and the state renders a
-script instance as `<instance N>` with N its allocation serial rather than
-its handle. The comparison renumbers those serials by first appearance
-in each side's state stream (starting over at a `reboot`), so a change to
-value size, collector cadence or what the runtime allocates that leaves
-behavior alone leaves the comparison alone, while two globals that share
-an instance on one side and not the other still diverge. Text is compared
-case-folded, as Lingo compares strings and symbols.
+## Journeys
+
+```sh
+uv run --locked director64 journey --game <slug> [NAME]
+```
+
+Runs one of the game's scripted journeys (`games/<slug>/host/*journey.py`,
+`full_regressions.py`; default `full_journey`) and writes its report under
+`build/<game>/<source>/journeys/<name>/`. `--activity` selects Mucklas'
+activity journey. The workshop's journeys (`routes`, `hubs`, `treasure`,
+`exit`, `garden`, `profiles`) come from `games/findus-workshop/tests/full_probe.py`.
