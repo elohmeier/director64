@@ -359,6 +359,8 @@ static void film_child_set(dg_runtime_t *d, unsigned ln, lv_t sprite, lv_t value
   dg_film_layer_t layer;
   dg_film_child_layer(d, parent, channel, &layer);
   dg_film_child_t *child = film_child_find(d, parent, channel);
+  // Releasing an untouched channel already restores the recorded state.
+  if (!child && ln == LN_PUPPET && !lv_truth(r,value)) return;
   if (!child) {
     if (d->film_child_count == DG_FILM_CHILDREN) {
       error(d, "film loop channel capacity", "exceeded"); return;
@@ -593,7 +595,7 @@ void dg_films_present(dg_runtime_t *d,bool advance_roots) {
   }
 }
 static film_node_t *film_ref_node(dg_runtime_t *d,lv_t reference) {
-  unsigned id=(uint32_t)lv_id(reference);
+  unsigned id=lv_type(reference)==LV_NUMBER ? (unsigned)lv_integer(d->values,reference) : (uint32_t)lv_id(reference);
   if(!(id&DG_CHILD_SPRITE))return film_root(d,id);
   unsigned parent=film_child_parent(reference),channel=film_child_channel(reference);
   film_node_t *owner=film_node(d,film_parent_id(d,parent));
@@ -620,6 +622,16 @@ unsigned dg_film_frame(dg_runtime_t *d,lv_t reference,bool last) {
   film_node_t *node=film_ref_node(d,reference);if(!node)return 0;
   const dg_member_t *member=dg_member(d,node->member);
   return last?member->film_count:node->parent?node->pose+1u:dg_film_pose(member,&d->sprites[node->channel])+1u;
+}
+unsigned dg_film_last_channel(dg_runtime_t *d,lv_t reference) {
+  film_node_t *node=film_ref_node(d,reference);if(!node)return 0;
+  const dg_member_t *member=dg_member(d,node->member);unsigned last=0;
+  for(unsigned i=0;i<member->film_track_count;i++)
+    if(member->film_tracks[i].channel>last)last=member->film_tracks[i].channel;
+  for(unsigned f=0;member->film_frames && f<member->film_count;f++)
+    for(unsigned i=0;i<member->film_frames[f].count;i++)
+      if(member->film_frames[f].layers[i].channel>last)last=member->film_frames[f].layers[i].channel;
+  return last;
 }
 bool dg_film_go(dg_runtime_t *d,lv_t reference,unsigned frame) {
   film_node_t *node=film_ref_node(d,reference);if(!node)return false;

@@ -776,7 +776,6 @@ static lv_t d85_system_date(lv_runtime_t *r) {
   return lv_list(r, 6, pairs, true);
 }
 #endif
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
 // the timeoutScript: once timeoutLength ticks pass without a click or a
 // key, the named movie handler runs, and the wait starts over (Löwenzahn
 // 8's yeti game nudges an idle player this way).
@@ -788,6 +787,7 @@ static bool d85_idle_timeout(dg_runtime_t *d) {
     if (lv_start(d->values, d->loaded[i]->code, d->timeout_script, 0, 0, NULL)) return true;
   return false;
 }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
 // A text member's live text: a field's rewritten text, else the authored.
 static const char *d85_member_text(dg_runtime_t *d, const dg_member_t *m) {
   for (unsigned j = 0; j < d->field_count; j++)
@@ -985,6 +985,8 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
     const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
     if (m && (m->type == 3 || m->type == 7)) {
       unsigned align = m->text_style ? m->text_style->align : 0;
+      for (unsigned i = 0; i < d->field_count; i++)
+        if (d->field_members[i] == m->id && d->field_align[i]) align = d->field_align[i] - 1;
       *out = lv_text(r, align == 1 ? "center" : align == 2 ? "right" : "left", true);
       return true;
     }
@@ -1009,7 +1011,6 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
   }
   if (lv_type(owner) == LV_VOID) {
     if (ln == LN_PARAMCOUNT) { *out = lv_num(lv_param_count(r)); return true; }
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
     // The Xtras these ports answer for: Löwenzahn's start movie looks for
     // DirectMedia ("DIRECTME") before it plays its videos.
     if (ln == LN_XTRALIST) {
@@ -1023,13 +1024,10 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
       *out = lv_list(r, 4, items, false);
       return true;
     }
-#endif
     if (ln == LN_IDLEHANDLERPERIOD) { *out = lv_num(d10_idle_period); return true; }
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
     if (ln == LN_TIMEOUTLENGTH) { *out = lv_num((int32_t)d->timeout_length); return true; }
     if (ln == LN_TIMEOUTSCRIPT) { *out = lv_text(r, d->timeout_script, false); return true; }
     if (ln == LN_TIMEOUTLAPSED) { *out = lv_num((int32_t)(d->ticks - d->last_input_tick)); return true; }
-#endif
     if (ln == LN_LASTFRAME) { *out = lv_num(d->movie ? d->movie->frame_count : 0); return true; }
     // The Windows projectors' sound mixer; lip-sync code branches on MacroMix.
     if (ln == LN_SOUNDDEVICE) { *out = lv_text(r, "DirectSound", false); return true; }
@@ -1331,7 +1329,6 @@ static bool d10_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
         (ln == LN_RANDOMSEED) || (ln == LN_USEFASTQUADS) ||
         (ln == LN_SCORESELECTION))
       return true;
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
     if (ln == LN_TIMEOUTLENGTH) {
       int32_t length = lv_integer(r, value);
       d->timeout_length = length > 0 ? (uint32_t)length : 0;
@@ -1344,7 +1341,6 @@ static bool d10_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
       for (char *c = d->timeout_script; *c; c++) *c = (char)tolower((unsigned char)*c);
       return true;
     }
-#endif
   }
   if (lv_type(owner) == LV_VOID && (ln == LN_ACTORLIST)) {
     r->roots[DG_BEHAVIOR_ROOT + DG_SPRITES] = value;
@@ -1399,6 +1395,10 @@ static bool d10_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
     return true;
   }
   if (imaging_set(d, name, owner, value)) return true;
+  // Removing an alert hook restores the default diagnostic path. This is
+  // also used by D8's common movie cleanup, before any hook was installed.
+  if (lv_type(owner) == LV_VOID && ln == LN_ALERTHOOK &&
+      lv_type(value) == LV_NUMBER && lv_numeric(value) == 0) return true;
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
   // Dynamic text members own their box dimensions. Font and foreground
   // changes continue through the shared field state setters below.
@@ -1651,6 +1651,7 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
   if (ln == LN_REGISTER) { *out = lv_num(0); return true; }
   if ((ln == LN_GETOSDIRECTORY) && !argc) { *out = lv_text(r, "C:\\WINDOWS", false); return true; }
   if ((ln == LN_QUICKTIMEVERSION) && !argc) { *out = lv_num(6); return true; }
+  if (eq(name, "isdirectshowinstalled") && argc <= 1) { *out = lv_num(1); return true; }
   // A projector halts by quitting.
   if ((ln == LN_HALT) && !argc) { d->quit = true; return true; }
   // Custom menu bars: the target shows none.
@@ -1791,6 +1792,9 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
                         : (unsigned)m->film_count - 1;
     *out = lv_num(name[7] == 'l' ? (unsigned)m->film_count : pose + 1);
     return true;
+  }
+  if (eq(name,"sprite_lastchannel") && argc == 1) {
+    *out=lv_num(dg_film_last_channel(d,a[0]));return true;
   }
   if ((ln == LN_SPRITE_GO) && argc == 2) {
     unsigned n = lv_type(a[0]) == LV_SPRITE ? (unsigned)lv_id(a[0]) : (unsigned)lv_integer(r, a[0]);
@@ -2073,11 +2077,13 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     // on-disk Silence.aif).
     for (char *p = virtual_name; *p; p++)
       if (*p >= 'A' && *p <= 'Z') *p += 32;
+    const char *resolved = d->platform.stream_name ? d->platform.stream_name(d->context, virtual_name) : virtual_name;
+    if (!resolved) { error(d, "missing packaged streamed sound", virtual_name); return true; }
     d->sound_paused[(unsigned)channel - 1] = false;
     if (d->platform.play_file) {
       sound_host(d)->linked_sound_owner[(unsigned)channel - 1] = d;
       d->sound_puppet[(unsigned)channel - 1] = true;
-      d->platform.play_file(d->context, (unsigned)channel - 1, virtual_name);
+      d->platform.play_file(d->context, (unsigned)channel - 1, resolved);
     } else if (d->platform.trace) {
       char text[128];
       snprintf(text, sizeof(text), "PLAY_FILE channel=%u name=%.80s", (unsigned)channel, virtual_name);
@@ -2192,6 +2198,26 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
       if (*p >= 'A' && *p <= 'Z') *p += 32;
     if (eq(key, "_posx")) strcpy(key, "_x");
     else if (eq(key, "_posy")) strcpy(key, "_y");
+    // Shared source behaviors address optional clips (Selected/Disabled)
+    // on card variants that never contain those clips. An explicit Flash
+    // property operation cannot create a missing display object.
+    int channel = lv_id(a[0]);
+    const dg_member_t *m = channel > 0 && channel < DG_SPRITES
+        ? dg_member(d, d->sprites[channel].value.member) : NULL;
+    const char *target = lv_cstr(r, a[1]);
+    if (m && m->source_xtra == 1 && !m->flash_clip_count && !dg_flash_field_find(m, target)) {
+      bool found = false;
+      for (unsigned f = 0; f < m->film_count && m->film_frames; f++)
+        for (unsigned l = 0; l < m->film_frames[f].count; l++)
+          if (m->film_frames[f].layers[l].name && eq(m->film_frames[f].layers[l].name, target)) found = true;
+      if (!found) {
+        if (d->platform.trace) {
+          char message[128]; snprintf(message, sizeof(message), "FLASH_TARGET_ABSENT sprite=%d name=%.64s", channel, target);
+          d->platform.trace(d->context, message);
+        }
+        *out = lv_num(0); return true;
+      }
+    }
     lv_t object = {0};
     d10_flash_get(d, lv_cstr(r, a[1]), a[0], &object);
     if (lv_type(object) != LV_PROPLIST) {

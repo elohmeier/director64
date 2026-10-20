@@ -22,6 +22,7 @@ media_root = "MEDIA"
 entry_movie = "START"
 
 [player]
+save_paths = true
 saves = ["*.ini", "*.dat", "*.sav", "*.txt"]
 
 [convert]
@@ -37,3 +38,18 @@ member = 21
 handler = "getreturnval"
 source_sha256 = "eabc51791ee869de021d51feae5fb886a262b39cce0bfbd49a7e94d688b59001"
 body = 'return "58404066"'
+
+# The external playable movie bypasses the installation locator's globals.
+[[convert.patch]]
+id = "virtual-application-paths"
+movie = "START.DXR"
+cast = "Internal"
+member = 3
+handler = "startmovie"
+source_sha256 = "50b68a030882310fdc6f9d02df1bb2f8f49aa951c90eb546707628c07d2e8fa1"
+prepend = '''
+global gAppPfad, gCdPfad, gTrenn
+set gAppPfad to "C:\"
+set gCdPfad to "D:\"
+set gTrenn to "\"
+'''

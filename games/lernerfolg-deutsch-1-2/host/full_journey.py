@@ -91,6 +91,7 @@ def run(executable, output):
         process.wait(timeout=60)
     if process.returncode:
         raise ValueError("journey process failed")
+    (output / "states.json").write_text(json.dumps(states, indent=2) + "\n")
     trail = []
     for state in states:
         movie = state.get("movie")
@@ -106,16 +107,22 @@ def run(executable, output):
         raise ValueError("profile creation persisted nothing to the archive")
     # The exercise's prompts must reach their Flash fields laid out: at least
     # the answer cards, with text and a computed height, and the picked card's
-    # Selected state reading back.
+    # Selected state reading back. Card_2A uses its authored `sel` frame 2;
+    # its common behavior also probes optional Selected/Disabled clips that
+    # this particular Flash member does not contain.
     prompts = [f for f in final.get("flash", []) if f.get("field") and f.get("text")]
     if len(prompts) < 2:
         raise ValueError(f"exercise prompts missing from Flash fields: {final.get('flash')}")
     if not all(f.get("textheight", 0) > 0 for f in prompts):
         raise ValueError("exercise prompts have no laid-out height")
-    if not any(
+    selected_clip = any(
         f.get("name", "").lower() == "selected" and f.get("visible")
         for f in final.get("flash", [])
-    ):
+    )
+    before = next((s for s in states[-4]["sprites"] if s["id"] == 20), {})
+    after = next((s for s in final["sprites"] if s["id"] == 20), {})
+    selected_frame = before.get("flash_frame") == 1 and after.get("flash_frame") == 2
+    if not (selected_clip or selected_frame):
         raise ValueError("picking an answer card did not select it")
     (output / "states.json").write_text(json.dumps(states, indent=2) + "\n")
     evidence = {

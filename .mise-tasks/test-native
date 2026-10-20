@@ -61,6 +61,7 @@ compile lingo_d8 -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_lingo_d8.c ru
 compile lingo_collect tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
 compile lingo_collect_extended_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
 compile saves -Iruntime -Itests/native/saves_profile tests/native/test_saves.c runtime/storage/saves.c
+compile scoped_saves -Iruntime -Itests/native/scoped_saves_profile tests/native/test_scoped_saves.c runtime/storage/saves.c
 for test in director director_timing director_state; do
     compile "$test" "tests/native/test_$test.c" runtime/director/director.c runtime/lingo/lingo_runtime.c
 done

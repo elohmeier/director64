@@ -993,6 +993,16 @@ fn convert_member<'c>(
                 }
                 None => (meta.clone(), child(Some(id), "BITD", true)?.unwrap()),
             };
+            // ediM can retain a stale authored rectangle. Its decoded PNG/
+            // JPEG geometry already drives the pixel plane; publish the same
+            // geometry to member lookup and rendering as well.
+            if entry.get("width") != Some(&json!(meta.width)) || entry.get("height") != Some(&json!(meta.height)) {
+                limits.push(json!({"kind":"bitmap-container-bounds","movie":m.movie_name,
+                    "cast":cast_number,"member":member,"authoredWidth":entry.get("width"),
+                    "authoredHeight":entry.get("height"),"width":meta.width,"height":meta.height,
+                    "implemented":true,"original_projector_verified":false}));
+            }
+            entry.extend(meta.to_json());
             if meta.depth == 8 {
                 let mut requested = false;
                 for ((tag, _), table) in m.raw {

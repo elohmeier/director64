@@ -267,6 +267,9 @@ pub fn text_xtra_model(
     out.insert("width".into(), json!(width));
     out.insert("height".into(), json!(height));
     out.insert("regX".into(), json!(0));
+    // The leading descriptor word is the editable flag. The recovered
+    // Fritz player-name and read-only player-list descriptors differ here.
+    out.insert("editable".into(), json!(be32(payload, 0) & 1 != 0));
     out.insert("regY".into(), json!(0));
     out.insert("text".into(), json!(text));
     out.insert("textHex".into(), json!(hex(&text_bytes)));

@@ -389,6 +389,24 @@ impl<'a> Compiler<'a> {
     }
 
     /// Emit ops that push exactly one value, in source evaluation order.
+    fn reference_expr(&mut self, kind: &str, number: &Expr, library: Option<&Expr>) -> Result<(), String> {
+        self.expr(number)?;
+        match library {
+            Some(library) => self.expr(library)?,
+            None => self.emit(op("void", vec![]), 1)?,
+        }
+        let index = self.name(kind);
+        self.emit(op("reference", vec![index]), -1)
+    }
+
+    fn owner_expr(&mut self, node: &Expr) -> Result<(), String> {
+        if let Expr::Reference { kind, number, library } = node {
+            self.reference_expr(kind, number, library.as_deref())
+        } else {
+            self.expr(node)
+        }
+    }
+
     fn expr(&mut self, node: &Expr) -> Result<(), String> {
         match node {
             Expr::Number(Num::Float(value)) => {
@@ -491,7 +509,7 @@ impl<'a> Compiler<'a> {
                 self.emit(op("the", vec![index]), 1)
             }
             Expr::Property { name, kind, value } => {
-                self.expr(&Expr::Reference { kind: kind.clone(), number: value.clone(), library: None })?;
+                self.reference_expr(kind, value, None)?;
                 let index = self.name(name);
                 self.emit(op("get", vec![index]), 0)
             }
@@ -510,7 +528,7 @@ impl<'a> Compiler<'a> {
                 // `the foreColor of word n of member m` its run colour.
                 if let Expr::Chunk { kind, first, last, source } = &**value {
                     if name == "ref" {
-                        return self.expr(source);
+                        return self.owner_expr(source);
                     }
                     if name == "forecolor" {
                         self.expr(source)?;
@@ -522,7 +540,7 @@ impl<'a> Compiler<'a> {
                         return self.emit(op("call_builtin_expr", vec![index, 4]), -3);
                     }
                 }
-                self.expr(value)?;
+                self.owner_expr(value)?;
                 let index = self.name(name);
                 self.emit(op("get", vec![index]), 0)
             }
@@ -547,13 +565,15 @@ impl<'a> Compiler<'a> {
                 Ok(())
             }
             Expr::Reference { kind, number, library } => {
-                self.expr(number)?;
-                match library {
-                    Some(library) => self.expr(library)?,
-                    None => self.emit(op("void", vec![]), 1)?,
+                self.reference_expr(kind, number, library.as_deref())?;
+                // c_field evaluates the text; c_fieldref is reserved for
+                // property owners and assignment targets. Storing a field's
+                // reference in a profile loses the entered name on reload.
+                if kind == "field" {
+                    let index = self.name("text");
+                    self.emit(op("get", vec![index]), 0)?;
                 }
-                let index = self.name(kind);
-                self.emit(op("reference", vec![index]), -1)
+                Ok(())
             }
             Expr::Chunk { kind, first, last, source } => {
                 self.expr(first)?;
@@ -594,12 +614,12 @@ impl<'a> Compiler<'a> {
                 self.emit(op("set_the", vec![index]), -1)
             }
             Expr::Property { name, kind, value } => {
-                self.expr(&Expr::Reference { kind: kind.clone(), number: value.clone(), library: None })?;
+                self.reference_expr(kind, value, None)?;
                 let index = self.name(name);
                 self.emit(op("set", vec![index]), -2)
             }
             Expr::Get(name, value) => {
-                self.expr(value)?;
+                self.owner_expr(value)?;
                 let index = self.name(name);
                 self.emit(op("set", vec![index]), -2)
             }
@@ -609,7 +629,7 @@ impl<'a> Compiler<'a> {
                 self.emit(op("set_index", vec![]), -3)
             }
             Expr::Reference { kind, .. } if kind == "field" || kind == "member" => {
-                self.expr(target)?;
+                self.owner_expr(target)?;
                 let index = self.name("text");
                 self.emit(op("set", vec![index]), -2)
             }

@@ -13,6 +13,7 @@
 #include "game_profile.h"
 #include <ctype.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 enum { SLOT = 65536, HEADER = 32, NAME = 64 };
@@ -99,6 +100,34 @@ static bool matches(const char *entry, const char *name, char *canonical) {
   }
 }
 static bool save_name(const char *name, char canonical[NAME]) {
+  // Paths are virtual. Legacy profiles retain their historical basename
+  // saves; games with per-player folders opt into scoped names. Never accept
+  // parent traversal, and fold Windows/Mac separators consistently.
+  char normalized[256];
+  size_t used = 0;
+  if (name[0] && name[1] == ':') name += 2;
+  while (*name == '/' || *name == '\\' || *name == ':') name++;
+  for (; *name; name++) {
+    if (used + 1 >= sizeof(normalized)) return false;
+    normalized[used++] = (*name == '\\' || *name == ':') ? '/' : (char)tolower((unsigned char)*name);
+  }
+  normalized[used] = 0;
+  for (const char *p = normalized; *p;) {
+    size_t n = strcspn(p, "/");
+    if (!n || (n == 1 && p[0] == '.') || (n == 2 && p[0] == '.' && p[1] == '.')) return false;
+    p += n;
+    if (*p) p++;
+  }
+#ifdef GAME_SAVE_PATHS
+  name = normalized;
+  if (used && normalized[used - 1] == '/' && used < NAME) {
+    memcpy(canonical, normalized, used + 1);
+    return true; // Persistent empty-directory entry, never a host folder.
+  }
+#else
+  name = strrchr(normalized, '/');
+  name = name ? name + 1 : normalized;
+#endif
   if (strlen(name) >= NAME) return false;
   for (unsigned i = 0; i < COUNT(saves); i++)
     if (saves[i] && matches(saves[i], name, canonical)) return true;
@@ -197,8 +226,10 @@ bool game_read_file(const char *name, char *out, unsigned cap, unsigned *length)
       }
     }
   }
+  const char *base = name;
+  for (const char *p = name; *p; p++) if (*p == '/' || *p == '\\' || *p == ':') base = p + 1;
   for (unsigned i = 0; i < COUNT(files); i++)
-    if (files[i][0] && matches(files[i][0], name, NULL)) {
+    if (files[i][0] && matches(files[i][0], base, NULL)) {
       size_t size = strlen(files[i][1]);
       if (size >= cap) return false;
       memcpy(out, files[i][1], size + 1);
@@ -297,7 +328,52 @@ const char *game_nth_file(void *ctx, const char *path, int n) {
   int index = 0;
   for (unsigned i = 0; folder && i < COUNT(folders); i++)
     if (folders[i][0] && !strcmp(folders[i][0], folder) && ++index == n) return folders[i][1];
+#ifdef GAME_SAVE_PATHS
+  // Enumerate each immediate saved child once, including inferred parents.
+  char prefix[NAME];
+  char requested[256];
+  int written = snprintf(requested, sizeof(requested), "%s%s", path,
+      length && (path[length - 1] == '/' || path[length - 1] == '\\' || path[length - 1] == ':') ? "" : "/");
+  if (written < 0 || (size_t)written >= sizeof(requested) || !save_name(requested, prefix)) return "";
+  size_t plen = strlen(prefix);
+  static char child[NAME];
+  for (unsigned i = 0; i < store.count; i++) {
+    const char *saved = game_save_name(i);
+    if (strncmp(saved, prefix, plen) || !saved[plen]) continue;
+    size_t size = strcspn(saved + plen, "/");
+    bool dir = saved[plen + size] == '/';
+    memcpy(child, saved + plen, size);
+    child[size] = dir ? '\\' : 0;
+    child[size + (dir ? 1 : 0)] = 0;
+    bool duplicate = false;
+    for (unsigned j = 0; j < i; j++) {
+      const char *prior = game_save_name(j);
+      if (!strncmp(prior, prefix, plen) && !strncmp(prior + plen, child, size) &&
+          (dir ? prior[plen + size] == '/' : !prior[plen + size])) { duplicate = true; break; }
+    }
+    if (!duplicate && ++index == n) return child;
+  }
+#endif
   return "";
+}
+
+bool game_directory(void *ctx, const char *path, bool create) {
+  if (!path || !*path) return false;
+  if (path[1] == ':' && path[0] != 'C' && path[0] != 'c' && path[0] != 'D' && path[0] != 'd') return false;
+  if (*game_nth_file(ctx, path, 1)) return true;
+  size_t n = strlen(path);
+  if (path[1] == ':' && (n == 2 || (n == 3 && (path[2] == '/' || path[2] == '\\')))) return true;
+#ifdef GAME_SAVE_PATHS
+  char requested[256], canonical[NAME];
+  int written = snprintf(requested, sizeof(requested), "%s%s", path,
+      path[n - 1] == '/' || path[n - 1] == '\\' || path[n - 1] == ':' ? "" : "/");
+  if (written < 0 || (size_t)written >= sizeof(requested) || !save_name(requested, canonical)) return false;
+  if (find(store.data, store.count, canonical) >= 0) return true;
+  return create && game_write_file(requested, "", 0);
+#else
+  (void)create;
+  return false;
+#endif
 }
 
 const char *game_long_date(void *ctx) {

@@ -111,6 +111,20 @@ int main(void) {
     lv_set(&r,NULL,"color",sprite,lv_make(LV_COLOR,(int32_t)inputs[i]));pixel(expected[i]);
   }
 #endif
+#if DG_MODERN
+  // A true-colour fade retains the preceding scene, reaches white, then
+  // reveals the new scene; cached renders must also update as ticks advance.
+  uint32_t previous=c.pixels[0];
+  d.stage_color=0x0000ff;
+  d.palette_fade_serial++;d.palette_fade_start=d.ticks;
+  d.palette_fade_kind=0x40;d.palette_fade_half=2;
+  assert(wc_render(&c,&d,0,0,false,0) && c.pixels[0]==previous);
+  d.ticks+=2;
+  assert(wc_render(&c,&d,0,0,false,0) && c.pixels[0]==0xffffffffu);
+  d.ticks+=2;
+  assert(wc_render(&c,&d,0,0,false,0) && (c.pixels[0]&0xffffffu)==0xff0000u);
+  assert(!c.palette_previous);
+#endif
   lv_set(&r,NULL,"pattern",member,lv_num(65));assert(r.failed);
   wc_release(&c);
   puts("Live score/puppet palette indices and per-cast mutable shape patterns passed");

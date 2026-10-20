@@ -1,13 +1,72 @@
 {
   "schema_version": 1,
-  "journeys": [{
-    "name": "player-registration", "description": "Play the bedroom introduction, choose the first player and require the name popup to open without a text-formatting failure.",
-    "covers": ["startup", "film-loops", "profiles", "name-popup", "runtime-text-style"],
-    "steps": [
-      {"idle": 3600, "expect": {"movie": "R0021.DXR", "frame": 470}, "label": "player-selection"},
-      {"sprite": 27, "settle": 600},
-      {"idle": 1200, "expect": {"movie": "R0021.DXR"}, "label": "name-popup"},
-      {"idle": 3600, "expect": {"movie": "R0021.DXR"}, "label": "popup-remains-responsive"}
-    ]
-  }]
+  "journeys": [
+    {
+      "name": "player-registration",
+      "description": "Register a named player, save the profile, enter the next room and keep its animation running.",
+      "covers": [
+        "startup",
+        "film-loops",
+        "profiles",
+        "name-popup",
+        "runtime-text-style",
+        "text-entry",
+        "save",
+        "navigation",
+        "sustained-playback"
+      ],
+      "steps": [
+        {
+          "idle": 3600,
+          "expect": {
+            "movie": "R0021.DXR",
+            "frame": 470
+          },
+          "label": "player-selection"
+        },
+        {
+          "sprite": 27,
+          "settle": 1800,
+          "expect": {
+            "movie": "R0021.DXR"
+          },
+          "label": "name-popup"
+        },
+        {
+          "command": "text 127 ANNA"
+        },
+        {
+          "idle": 600
+        },
+        {
+          "sprite": 126,
+          "settle": 3600,
+          "expect": {
+            "movie": {
+              "in": [
+                "R0031.DXR",
+                "R0031B.DXR"
+              ]
+            },
+            "/saves/info.dat": {
+              "contains": "ANNA"
+            },
+            "save_generation": {
+              "gte": 10
+            }
+          },
+          "label": "named-player-enters-room"
+        },
+        {
+          "idle": 3600,
+          "expect": {
+            "/saves/info.dat": {
+              "contains": "ANNA"
+            }
+          },
+          "label": "room-playback"
+        }
+      ]
+    }
+  ]
 }

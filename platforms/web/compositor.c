@@ -112,6 +112,8 @@ static void evict(wc_t *c, wc_image_t *image) {
   c->evictions++;
 }
 void wc_release(wc_t *c) {
+  free(c->palette_previous);
+  c->palette_previous = NULL;
 #if DG_D10
   for (unsigned i=0;i<8;i++) { free(c->film_scratch[i]); c->film_scratch[i]=NULL; }
   c->target=NULL; c->film_depth=0;
@@ -268,8 +270,11 @@ const wc_image_t *wc_image(wc_t *c, lv_runtime_t *values, const char *asset,
     dev_print( "DEV invalid native image %s %ux%u ink %u length %u\n", asset, width, height, ink, length);
 #endif
     free(pixels);
-    lv_fail(values, data && pixels ? "invalid native image"
-                                   : "native image allocation");
+    if (data && pixels) {
+      char message[160];
+      snprintf(message,sizeof(message),"invalid native image: %.40s expected=%ux%u bytes=%u",asset,width,height,length);
+      lv_fail(values,message);
+    } else lv_fail(values,"native image allocation");
     return NULL;
   }
   wc_image_t *image = free_slot;
@@ -871,16 +876,27 @@ static const wc_text_style_t *member_text_style(dg_runtime_t *d, const dg_member
 #if DG_MODERN
   const dg_text_style_t *st = m->text_style;
   const char *font = NULL;
+  unsigned size = 0, align = 0;
   for (unsigned j = 0; d && j < d->field_count; j++)
     if (d->field_members[j] == m->id) {
       *scroll = d->field_scroll[j];
       font = d->field_font_changed[j] ? d->field_fonts[j] : NULL;
+      size = d->field_sizes[j];
+      align = d->field_align[j];
       if (d->field_text_changed[j] && m->text_insert_style)
         st = m->text_insert_style;
       break;
     }
-  if (st) {
-    *authored = (wc_text_style_t){st->font_id, st->size, st->align, st->ascent, st->line_height};
+  if (st || font || size || align) {
+    *authored = st ? (wc_text_style_t){st->font_id, st->size, st->align, st->ascent, st->line_height}
+                   : (wc_text_style_t){0, 12, 0, 12, 15};
+    if (size) {
+      unsigned old = authored->size ? authored->size : 12;
+      authored->ascent = (authored->ascent * size + old / 2) / old;
+      authored->line_height = (authored->line_height * size + old / 2) / old;
+      authored->size = size;
+    }
+    if (align) authored->align = align - 1;
     if (font && *font)
       for (unsigned file = 0; file < d->loaded_count; file++) {
         const dg_movie_t *movie = d->loaded[file];
@@ -2080,6 +2096,21 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
     count = WC_POINTERS;
   dg_cursor_t cursor = dg_cursor_current(d);
   dg_update_stage(d);
+  unsigned fade_age = d->ticks - d->palette_fade_start;
+  unsigned fade_half = d->palette_fade_half;
+  bool fading = fade_half && fade_age < fade_half * 2;
+  bool fade_changed = (fading || c->palette_previous) && c->palette_tick != d->ticks;
+  if (c->palette_serial != d->palette_fade_serial || c->owner != d) {
+    free(c->palette_previous);
+    c->palette_previous = NULL;
+    if (fading && c->drawn && c->owner == d) {
+      c->palette_previous = malloc(sizeof(c->scene));
+      if (!c->palette_previous) lv_fail(d->values, "palette fade snapshot allocation failed");
+      else memcpy(c->palette_previous, c->scene, sizeof(c->scene));
+    }
+    c->palette_serial = d->palette_fade_serial;
+    fade_changed = true;
+  }
   uint32_t background = 0;
 #if DG_MODERN
   background = d->stage_color;
@@ -2091,7 +2122,7 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
   bool same_scene = c->drawn && c->owner == d && c->movie == d->movie &&
       c->revision == d->visual_revision && c->background == background &&
       c->externals == externals;
-  if (same_scene && dg_cursor_equal(c->cursor, cursor) && c->pointer_count == count &&
+  if (!fade_changed && same_scene && dg_cursor_equal(c->cursor, cursor) && c->pointer_count == count &&
       !memcmp(c->pointers, pointers, count * sizeof(*pointers)) &&
       !d->values->failed)
     return false;
@@ -2125,6 +2156,15 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
 #endif
     memcpy(c->scene, target(c), sizeof(c->scene));
   }
+  if (fading) {
+    unsigned alpha = fade_age < fade_half ? fade_age * 255 / fade_half
+                                         : (fade_half * 2 - fade_age) * 255 / fade_half;
+    if (fade_age < fade_half && c->palette_previous)
+      memcpy(target(c), c->palette_previous, sizeof(c->scene));
+    uint32_t color = d->palette_fade_kind == 0x40 ? 0xffffffffu : 0xff000000u;
+    for (unsigned i = 0; i < WC_WIDTH * WC_HEIGHT; i++) blend(&target(c)[i], color & 0xffffffu, alpha);
+  } else { free(c->palette_previous); c->palette_previous = NULL; }
+  c->palette_tick = d->ticks;
   for (unsigned i = 0; i < count && !d->values->failed; i++)
     draw_cursor(c, d, cursor, pointers[i]);
   c->drawn = true;

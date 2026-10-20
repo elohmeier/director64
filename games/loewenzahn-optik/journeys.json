@@ -1,15 +1,93 @@
 {
   "schema_version": 1,
-  "journeys": [{
-    "name": "wagon-laptop-topic", "description": "Play the introduction, enter the desk, open the laptop, its first topic menu and the quiz.",
-    "covers": ["startup", "preferences", "navigation", "laptop", "topic-menu", "quiz", "sustained-playback"],
-    "steps": [
-      {"idle": 1800, "expect": {"movie": "BAUWAGEN__VORN.DXR", "save_generation": {"gte": 3}}, "label": "wagon-exterior"},
-      {"click": [372, 348], "settle": 600, "expect": {"movie": "BAUWAGEN__SCHREIBT.DXR"}, "label": "desk"},
-      {"click": [404, 303], "settle": 600, "expect": {"movie": "LAPTOP__LAPTOP_1.DXR"}, "label": "laptop"},
-      {"sprite": 79, "settle": 600, "expect": {"movie": "LAPTOP__LAPTOP_2.DXR", "save_generation": {"gte": 6}}, "label": "first-topic-menu"},
-      {"sprite": 5, "settle": 600, "expect": {"movie": "QUIZ__QUIZ.DXR"}, "label": "quiz"},
-      {"idle": 3600, "expect": {"movie": "QUIZ__QUIZ.DXR"}, "label": "quiz-playback"}
-    ]
-  }]
+  "journeys": [
+    {
+      "name": "wagon-laptop-topic",
+      "description": "Play the introduction, enter the desk, open the laptop, its first topic menu and the quiz.",
+      "covers": [
+        "startup",
+        "preferences",
+        "navigation",
+        "laptop",
+        "topic-menu",
+        "quiz",
+        "sustained-playback"
+      ],
+      "steps": [
+        {
+          "idle": 1800,
+          "expect": {
+            "movie": "BAUWAGEN__VORN.DXR",
+            "save_generation": {
+              "gte": 3
+            }
+          },
+          "label": "wagon-exterior"
+        },
+        {
+          "click": [
+            372,
+            348
+          ],
+          "settle": 600,
+          "expect": {
+            "movie": "BAUWAGEN__SCHREIBT.DXR"
+          },
+          "label": "desk"
+        },
+        {
+          "click": [
+            404,
+            303
+          ],
+          "settle": 600,
+          "expect": {
+            "movie": "LAPTOP__LAPTOP_1.DXR"
+          },
+          "label": "laptop"
+        },
+        {
+          "when": {
+            "frame": 10
+          },
+          "click": [
+            400,
+            300
+          ],
+          "settle": 600,
+          "expect": {
+            "movie": "LAPTOP__LAPTOP_1.DXR",
+            "frame": 11
+          },
+          "label": "skip-laptop-greeting"
+        },
+        {
+          "sprite": 79,
+          "settle": 600,
+          "expect": {
+            "movie": "LAPTOP__LAPTOP_2.DXR",
+            "save_generation": {
+              "gte": 6
+            }
+          },
+          "label": "first-topic-menu"
+        },
+        {
+          "sprite": 5,
+          "settle": 600,
+          "expect": {
+            "movie": "QUIZ__QUIZ.DXR"
+          },
+          "label": "quiz"
+        },
+        {
+          "idle": 3600,
+          "expect": {
+            "movie": "QUIZ__QUIZ.DXR"
+          },
+          "label": "quiz-playback"
+        }
+      ]
+    }
+  ]
 }

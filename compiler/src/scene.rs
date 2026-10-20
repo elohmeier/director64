@@ -315,6 +315,9 @@ pub fn score_tempo(record: &[u8], version: u32, extended: bool) -> Result<u16, S
     if opcode == 0 {
         return Ok(0);
     }
+    if (1..=120).contains(&opcode) {
+        return Ok(opcode as u16);
+    }
     if (version >= 7 || extended) && opcode == 247 {
         return Ok(0);
     }
@@ -1323,7 +1326,7 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                     if palette == 0 {
                         0
                     } else {
-                        if b[5] != 0
+                        if ![0, 0x20, 0x40].contains(&b[5])
                             || u16_at(8) > 1
                             || u16_at(10) > 1
                             || b[12..15].iter().any(|v| *v != 0)
@@ -1405,6 +1408,14 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                         ..Spec::default()
                     }
                 };
+                if c == 5 {
+                    // Native true-colour substitute for palette fades. Keep
+                    // the authored flag and speed; the compositor fades the
+                    // whole scene through black/white rather than recolouring
+                    // converted bitmap indices that no longer exist.
+                    spec.ink = b[5];
+                    spec.blend = b[4];
+                }
                 if modern_fields {
                     spec.loc_z = if c >= 6 { (c - 5) as i16 } else { 0 };
                     spec.tempo = if c == 1 && version == 5 {

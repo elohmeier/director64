@@ -333,8 +333,11 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
         // disc folders; prints its {name: [offset, length, milliseconds]} index.
         "stream-pack" => {
             let mut files = Vec::new();
+            let prefer_wav = args.iter().any(|a| a.to_str() == Some("--prefer-wav"));
+            let prefer_lossless = args.iter().any(|a| a.to_str() == Some("--prefer-lossless"));
             for i in 2..args.len() {
                 let spec = text(i)?;
+                if spec == "--prefer-wav" || spec == "--prefer-lossless" { continue; }
                 let (folder, dir) = spec.split_once('=').ok_or("FOLDER=DIR")?;
                 let mut names: Vec<_> = std::fs::read_dir(dir)
                     .map_err(|e| format!("{dir}: {e}"))?
@@ -349,13 +352,27 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                     })
                     .collect();
                 names.sort_by_key(|e| e.file_name());
+                let wavs: std::collections::BTreeSet<_> = names.iter().filter_map(|e| {
+                    let p = e.path();
+                    (p.extension()?.to_str()?.eq_ignore_ascii_case("wav"))
+                        .then(|| p.file_stem().unwrap().to_string_lossy().to_lowercase())
+                }).collect();
+                let aifs: std::collections::BTreeSet<_> = names.iter().filter_map(|e| {
+                    let p = e.path();
+                    (["aif", "aiff"].contains(&p.extension()?.to_str()?.to_ascii_lowercase().as_str()))
+                        .then(|| p.file_stem().unwrap().to_string_lossy().to_lowercase())
+                }).collect();
                 for entry in names {
                     let name = entry.file_name().to_string_lossy().to_string();
                     let stem = name
                         .rsplit_once('.')
                         .map_or(name.as_str(), |(s, _)| s)
                         .to_lowercase();
-                    files.push((format!("{folder}/{stem}").to_lowercase(), entry.path()));
+                    if prefer_wav && !name.to_ascii_lowercase().ends_with(".wav") && wavs.contains(&stem) { continue; }
+                    if prefer_lossless && ((wavs.contains(&stem) && !name.to_ascii_lowercase().ends_with(".wav")) ||
+                        (!wavs.contains(&stem) && aifs.contains(&stem) && !["aif", "aiff"].contains(&entry.path().extension().unwrap().to_string_lossy().to_ascii_lowercase().as_str()))) { continue; }
+                    let key = if folder.is_empty() { stem } else { format!("{folder}/{stem}") };
+                    files.push((key.to_lowercase(), entry.path()));
                 }
             }
             files.sort_by(|a, b| a.0.cmp(&b.0));

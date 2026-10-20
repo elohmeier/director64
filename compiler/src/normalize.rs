@@ -213,6 +213,7 @@ fn retarget_in(value: &Expr, channel: &str, children: bool) -> Expr {
     match value {
         Expr::The(name) if name == "frame" => Expr::Call("sprite_frame".into(), chan()),
         Expr::The(name) if name == "lastframe" => Expr::Call("sprite_lastframe".into(), chan()),
+        Expr::The(name) if name == "lastchannel" => Expr::Call("sprite_lastchannel".into(), chan()),
         Expr::Unary(op, e) => Expr::Unary(op.clone(), Box::new(retarget_in(e, channel, children))),
         Expr::Binary(op, a, b) => Expr::Binary(
             op.clone(),
@@ -356,7 +357,7 @@ fn resprite(statements: &[Stmt], channel: &str) -> Vec<Stmt> {
                     Expr::Call(name, args)
                         if !matches!(
                             name.as_str(),
-                            "sendsprite" | "sprite_go" | "sprite_frame" | "sprite_lastframe"
+                            "sendsprite" | "sprite_go" | "sprite_frame" | "sprite_lastframe" | "sprite_lastchannel"
                         ) =>
                     {
                         let mut sent = vec![Expr::Var(channel.to_string()), Expr::Sym(name)];

@@ -103,7 +103,7 @@ def player(game: GameSpec) -> dict:
     game.require_port()
     table = game.data.get("player", {})
     known = {"saves", "files", "folders", "long_date", "movie_path", "data_folder",
-             "key_field", "switches", "color_depth", "stream_paths"}
+             "key_field", "switches", "color_depth", "stream_paths", "save_paths"}
     if set(table) - known:
         raise ValueError(f"{game.slug}: unknown [player] keys {sorted(set(table) - known)}")
     return table
@@ -139,6 +139,8 @@ def profile_header(game: GameSpec) -> str:
     ]
     if table.get("saves"):
         lines.append("#define GAME_SAVES " + ", ".join(c_string(n) for n in table["saves"]))
+    if table.get("save_paths"):
+        lines.append("#define GAME_SAVE_PATHS 1")
     if table.get("files"):
         lines.append("#define GAME_FILES " + ", ".join(
             f"{{{c_string(name)}, {c_string(text)}}}" for name, text in table["files"].items()))
@@ -161,6 +163,20 @@ def profile_header(game: GameSpec) -> str:
         entries = [f"{{{c_string(name)}, {c_string(path)}}}" for name, path in folders]
         lines.append("#define GAME_MOVIE_FOLDERS " + ", ".join([*entries, "{NULL,NULL}"]))
         lines.append("#define GAME_STREAM_ROOT " + c_string("C:\\" + port["media_root"] + "\\"))
+        manifest = game.work / "conversion/analysis/source/manifest.json"
+        if manifest.is_file():
+            paths = []
+            for record in json.loads(manifest.read_text())["files"]:
+                folder = Path(record["source_path"]).parent.as_posix()
+                path = "C:\\" + port["media_root"].replace("/", "\\") + "\\"
+                if folder != ".":
+                    path += folder.replace("/", "\\") + "\\"
+                paths.append(f"{{{c_string(record['name'])}, {c_string(path)}}}")
+            lines.append("#define GAME_MOVIE_PATHS " + ", ".join([*paths, "{NULL,NULL}"]))
+    stream_index = game.work / "converted/streams.json"
+    if stream_index.is_file() and (names := json.loads(stream_index.read_text())):
+        lines.append("#define GAME_STREAM_NAMES " + ", ".join(
+            [*(c_string(n) for n in sorted(names)), "NULL"]))
     for key, macro in (("long_date", "GAME_LONG_DATE"), ("movie_path", "GAME_MOVIE_PATH"),
                        ("data_folder", "GAME_DATA_FOLDER")):
         if key in table:

@@ -137,6 +137,8 @@ typedef struct {
   // The last composited scene without its cursors, and the snapshot of it a
   // script kept as a member's image (`member.image = (the stage).image`).
   uint32_t scene[WC_WIDTH * WC_HEIGHT];
+  uint32_t *palette_previous;
+  uint32_t palette_serial, palette_tick;
 #if DG_D10
   uint32_t *film_scratch[8];
   unsigned film_depth;

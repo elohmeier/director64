@@ -1420,6 +1420,7 @@ bool lv_has_property(lv_runtime_t *r, lv_t owner, const char *property) {
 lv_t lv_get(lv_runtime_t *r, lv_frame_t *f, const char *property, lv_t owner) {
   unsigned ln = lv_name_id(r, property);
   (void)f;
+  if (lv_type(owner) == LV_STRING && ln == LN_TEXT) return owner;
   if (lv_type(owner) == LV_VOID && (ln == LN_ITEMDELIMITER)) {
     char text[2] = {(char)r->item_delimiter, 0};
     return lv_text(r, text, false);

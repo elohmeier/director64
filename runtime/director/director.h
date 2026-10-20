@@ -485,6 +485,9 @@ typedef struct {
   bool (*read_file)(void *, const char *, char *, unsigned, unsigned *);
   bool (*write_file)(void *, const char *, const char *, unsigned);
   const char *(*nth_file)(void *, const char *, int);
+  bool (*directory)(void *, const char *, bool create);
+  bool file_paths;
+  const char *(*stream_name)(void *, const char *);
   bool (*sound_busy)(void *, unsigned);
   void (*sound)(void *, unsigned, const dg_member_t *);
   // Pause/resume a channel without losing its position or busy state.
@@ -674,11 +677,13 @@ typedef struct dg_runtime {
   int8_t channel_pan[DG_SOUND_CHANNELS];
   // The legacy idle timeout: the handler named by the timeoutScript runs
   // once no input arrived for timeoutLength ticks.
-  uint32_t timeout_length, last_input_tick;
   // The Amplitude Xtra: curve samples per second and the channel it follows.
   uint16_t amp_resolution, amp_channel;
   // Whether the edited field's own keyDown handlers passed the typed key.
   bool text_passed;
+#endif
+#if DG_D10
+  uint32_t timeout_length, last_input_tick;
   char timeout_script[32];
 #endif
 #if DG_EXTENDED
@@ -711,7 +716,7 @@ typedef struct dg_runtime {
   int8_t sprite_editable[DG_SPRITES]; // 0 inherits the member, +/-1 overrides it.
   unsigned sel_start, sel_end, text_sprite, text_key, text_key_code, text_index;
   char text_replacement[21];
-  bool text_pending, pass_event, cleanup_active, ending_sprites, movie_ready, quit_requested;
+  bool text_pending, text_reset, pass_event, cleanup_active, ending_sprites, movie_ready, quit_requested;
   unsigned input_stage, input_channel;
   uint32_t idle_tick, hover_tick;
   bool right_mouse_down, notice_armed;
@@ -764,9 +769,10 @@ typedef struct dg_runtime {
   char field_fonts[DG_FIELDS][64];
   bool field_text_changed[DG_FIELDS], field_font_changed[DG_FIELDS];
   int field_scroll[DG_FIELDS];
+  uint8_t field_sizes[DG_FIELDS], field_align[DG_FIELDS];
   bool begin_pending[DG_SPRITES];
 #endif
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_D10
   // Folder-qualified movie names run long (LEXIKON_TEIL1__LEXIKON_M_TRAEGHEIT.DXR).
   char next_movie[64], mouse_up_script[64];
 #else
@@ -775,14 +781,13 @@ typedef struct dg_runtime {
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
   // A click since the frame began: the tempo channel's wait for one.
   bool tempo_clicked;
-  // The path `go to movie` named ("@::lexikon:moor"): ports whose files
-  // are folder-qualified resolve its folder (web_runtime.c find_path).
-  char next_movie_path[96];
   // `play movie` returns: the calling movie and frame `play done` resumes.
   char play_return[4][64];
   unsigned play_return_frame[4], play_depth;
 #endif
 #if DG_D10
+  // The original navigation path for folder-qualified packaged movies.
+  char next_movie_path[96];
   dg_film_child_t film_children[DG_FILM_CHILDREN];
   unsigned film_child_count;
   struct dg_film_playback *film_playback;
@@ -797,12 +802,14 @@ typedef struct dg_runtime {
 #endif
   unsigned next_movie_frame;
   dg_file_t files[4];
-  char file_names[4][32];
+  char file_names[4][256];
   uint32_t field_members[DG_FIELDS];
   unsigned field_count;
   uint8_t field_patterns[DG_FIELDS];
   uint32_t active_palette[256];
   bool palette_active, palette_puppet;
+  uint32_t palette_fade_serial, palette_fade_start;
+  uint8_t palette_fade_kind, palette_fade_half;
   dg_cursor_t cursor;
   int sound_level, color_depth, float_precision;
   int click_x, click_y;
@@ -972,6 +979,7 @@ bool dg_film_visual_state(dg_runtime_t *, unsigned parent, const dg_sprite_t *,
 lv_t dg_film_tell(dg_runtime_t *, lv_t parent, unsigned channel);
 bool dg_film_go(dg_runtime_t *, lv_t parent, unsigned frame);
 unsigned dg_film_frame(dg_runtime_t *, lv_t parent, bool last);
+unsigned dg_film_last_channel(dg_runtime_t *, lv_t parent);
 bool dg_film_recorded_layer(dg_runtime_t *, const dg_member_t *, unsigned pose, unsigned channel, dg_film_layer_t *);
 bool dg_film_child_layer(dg_runtime_t *, unsigned parent, unsigned channel, dg_film_layer_t *);
 #endif

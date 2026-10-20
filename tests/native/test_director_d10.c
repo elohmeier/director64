@@ -156,6 +156,8 @@ int main(void) {
  assert(dg_edit_text(&d,5,"B\xC4R"));
  assert(d.text_pending && !strcmp(d.text_replacement,"B\xC4R"));
  d.text_pending=false;
+ lv_set(&r,NULL,"alerthook",(lv_t){0},lv_num(0));
+ assert(!r.failed);
  call("puppettransition",1,(lv_t[]){lv_num(9)});
  assert(!r.failed && d.transition_type==9 && d.transition_duration==15);
  lv_t sprite=lv_make(LV_SPRITE, 1);

@@ -33,6 +33,10 @@ fn extended_d6_keeps_high_frame_rates_separate_from_wait_opcodes() {
         record[6] = opcode;
         assert_eq!(scene::score_tempo(&record, 6, true).unwrap(), 0);
     }
+    for rate in [17, 25, 120] {
+        record[6] = rate;
+        assert_eq!(scene::score_tempo(&record, 6, true).unwrap(), rate as u16);
+    }
 }
 
 #[test]
@@ -158,6 +162,28 @@ fn pinned_startup_initializers_preserve_the_recovered_handler() {
     let mut changed = program;
     changed["handlers"][0]["source_sha256"] = Value::Null;
     assert!(ports::patch_program(&changed, &patch).is_err());
+}
+
+#[test]
+fn indented_guards_and_source_pinned_append_corrections_keep_other_assignments() {
+    let program = json!({"handlers":[{"movie":"MAIN.DXR","member":1,"name":"save",
+        "source_sha256":"pin","body":[
+          {"op":"set","target":["variable","open"],"value":["number",1]},
+          {"op":"if","yes":[{"op":"set","target":["variable","open"],
+           "value":["binary","&",["variable","open"],["string","\\"]]}]}]}]});
+    let patch = json!([{"movie":"MAIN.DXR","member":1,"handler":"save","source_sha256":"pin",
+        "retarget_append":["open","path"],"count":1,
+        "prepend":"if count(items) = 0 then\n  exit\nend if"}]);
+    let fixed = ports::patch_program(&program, &patch).unwrap();
+    let body = &fixed["handlers"][0]["body"];
+    assert_eq!(body[0]["op"], "if");
+    assert_eq!(body[0]["yes"][0]["op"], "return");
+    assert_eq!(body[1], program["handlers"][0]["body"][0]);
+    assert_eq!(body[2]["yes"][0]["target"][1], "path");
+    assert_eq!(body[2]["yes"][0]["value"][2][1], "path");
+    let mut wrong_count = patch;
+    wrong_count[0]["count"] = json!(2);
+    assert!(ports::patch_program(&program, &wrong_count).is_err());
 }
 
 #[test]

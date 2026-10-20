@@ -324,3 +324,35 @@ fn palette_cast_colors_and_archive_pattern_catalog_are_preserved() {
         serde_json::Value::Null
     );
 }
+
+#[test]
+fn embedded_image_geometry_replaces_the_stale_member_rectangle() {
+    // A synthetic 2x1 PNG inside a cast whose authoring rectangle says 1x1.
+    let png = vec![137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,2,0,0,0,1,8,6,0,0,0,244,34,127,138,0,0,0,14,73,68,65,84,120,156,99,248,207,192,240,31,4,1,16,248,3,253,78,149,193,111,0,0,0,0,73,69,78,68,174,66,96,130];
+    let mut cast=vec![0u8;40];be32(&mut cast,0,1);be32(&mut cast,8,28);
+    be16(&mut cast,12,0x8004);be16(&mut cast,18,1);be16(&mut cast,20,1);cast[35]=32;
+    let header=json!({"json":[
+        {"fourCC":"DRCF","id":1,"data":{"minMember":1,"maxMember":1,"frameRate":30}},
+        {"fourCC":"KEY*","id":2,"data":{"usedCount":2,"entryCount":2,"entries":[
+            {"castID":1024,"fourCC":"CAS*","sectionID":3},
+            {"castID":4,"fourCC":"ediM","sectionID":6}]}},
+        {"fourCC":"CAS*","id":3,"data":{"memberIDs":[4]}},
+        {"fourCC":"CASt","id":4,"data":{"type":1,"info":{"name":"pixel"}}}
+    ],"scripts":{},"chunks":[["CASt",4,cast.len()],["ediM",6,png.len()]]});
+    let json=serde_json::to_vec(&header).unwrap();let mut dump=b"D64DUMP1".to_vec();
+    dump.extend((json.len() as u32).to_le_bytes());dump.extend(json);dump.extend(cast);dump.extend(png);
+    let mut fs=Memory::new();fs.mkdir_all("dumps").unwrap();fs.mkdir_all("out/images").unwrap();
+    let key=director64_aot::convert::source::sha256(plan::file_key("TEST.DCR").as_bytes());
+    fs.write(&format!("dumps/{}.dump",&key[..24]),&dump).unwrap();
+    let source=json!({"name":"TEST.DXR","source_path":"TEST.DCR","director_version":850});
+    let paths=serde_json::Map::new();let policy=json!({});
+    let mut sources=Sources{media:"",dumps:"dumps",source_paths:&paths,palettes:HashMap::new()};
+    let job=MovieJob{source:&source,movie_id:1,policy:&policy,recovery:"",output:"out",
+        common_palette:None,common_palette_hash:None,d5_stage_palette:None};
+    let result=convert_movie(&mut fs,&mut sources,&job).unwrap();
+    assert!(result.problems.is_empty(),"{:?}",result.problems);
+    let member=&result.movie["members"][0];
+    assert_eq!((member["width"].as_u64(),member["height"].as_u64()),(Some(2),Some(1)));
+    let bytes=fs.read(&format!("out/images/{}",member["asset"].as_str().unwrap())).unwrap();
+    assert_eq!(&bytes[8..12],&[0,2,0,1]);
+}

@@ -286,7 +286,7 @@ void dg_key(dg_runtime_t *d, unsigned code, unsigned character, bool down) {
     d->key_events[index].character = down ? character : d->key_chars[code];
     d->key_events[index].down = down;
   }
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_D10
   if (down) d->last_input_tick = d->ticks;
 #endif
   if (down) {
@@ -1420,6 +1420,7 @@ static int field(dg_runtime_t *d, uint32_t member) {
   d->field_text_changed[i] = false;
   d->field_font_changed[i] = false;
   d->field_scroll[i] = 0;
+  d->field_sizes[i] = d->field_align[i] = 0;
 #if DG_EXTENDED
   d->field_editable[i] = m && m->editable;
 #endif
@@ -1504,7 +1505,7 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
   unsigned ln = lv_name_id(r, name);
   dg_runtime_t *d = r->context;
 #if DG_D10
-  if (lv_type(owner) == LV_SPRITE && ((uint32_t)lv_id(owner) & DG_CHILD_SPRITE))
+  if (lv_type(owner) == LV_SPRITE && lv_id(owner) >= 0 && ((uint32_t)lv_id(owner) & DG_CHILD_SPRITE))
     return film_child_get(d, ln, owner);
 #endif
 #if DG_EXTENDED
@@ -1566,7 +1567,7 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
       return lv_point(r, d->mouse_x, d->mouse_y);
     if (ln == LN_CURRENTSPRITENUM)
       return lv_num(d->current_event_sprite);
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_D10
     // the pathName is the older name of the moviePath (Optik's back list).
     if ((ln == LN_MOVIEPATH) || (ln == LN_PATHNAME)) {
 #else
@@ -1661,6 +1662,9 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
       return lv_text(r, "C:\\", false);
     if (ln == LN_MACHINETYPE)
       return lv_num(256);
+#if DG_D10
+    if (ln == LN_QUICKTIMEPRESENT) return lv_num(1);
+#endif
 #if DG_EXTENDED
     if (ln == LN_MOUSEDOWNSCRIPT) return lv_text(r, d->mouse_down_script, false);
     if (ln == LN_KEYDOWNSCRIPT) return lv_text(r, d->key_down_script, false);
@@ -1689,8 +1693,10 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
 #if DG_D7_OR_D10
     if (ln == LN_CASTNUM)
       return lv_num(s->value.member ? ((member_cast(d, s->value.member)-1)<<17) | (s->value.member&65535) : 0);
-    // A sprite answers the library of the member it shows; exercise
-    // behaviors keep it to name sibling members in the same library.
+#endif
+#if DG_MODERN
+    // D6 also exposes a sprite's castLibNum; only castNum's packed
+    // multi-library representation changes in D7.
     if (ln == LN_CASTLIBNUM)
       return lv_num(s->value.member ? member_cast(d, s->value.member) : 0);
 #endif
@@ -1865,6 +1871,12 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
       int i = field(d, (uint32_t)lv_id(owner));
       return i >= 0 ? lv_text(r, d->field_fonts[i], false) : (lv_t){0};
     }
+    if (ln == LN_FONTSIZE || ln == LN_ALIGNMENT) {
+      int i = field(d, (uint32_t)lv_id(owner));
+      unsigned size = i >= 0 && d->field_sizes[i] ? d->field_sizes[i] : m && m->text_style ? m->text_style->size : 12;
+      unsigned align = i >= 0 && d->field_align[i] ? d->field_align[i] - 1 : m && m->text_style ? m->text_style->align : 0;
+      return ln == LN_FONTSIZE ? lv_num(size) : lv_text(r, align == 1 ? "center" : align == 2 ? "right" : "left", true);
+    }
     if (ln == LN_SCROLLTOP) {
       int i = field(d, (uint32_t)lv_id(owner));
       return lv_num(i >= 0 ? d->field_scroll[i] : 0);
@@ -2000,7 +2012,7 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
     return;
 #endif
 #if DG_D10
-  if (lv_type(owner) == LV_SPRITE && ((uint32_t)lv_id(owner) & DG_CHILD_SPRITE)) {
+  if (lv_type(owner) == LV_SPRITE && lv_id(owner) >= 0 && ((uint32_t)lv_id(owner) & DG_CHILD_SPRITE)) {
     film_child_set(d, ln, owner, value);
     return;
   }
@@ -2395,6 +2407,23 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
       }
       return;
     }
+    if (ln == LN_FONTSIZE || ln == LN_ALIGNMENT || ln == LN_FONTSTYLE || ln == LN_BOXTYPE) {
+      int i = field(d, (uint32_t)lv_id(owner));
+      if (i < 0) return;
+      if (ln == LN_FONTSIZE) {
+        int size = lv_integer(r, value);
+        if (size < 1 || size > 255) { error(d, "font size range", name); return; }
+        d->field_sizes[i] = (uint8_t)size;
+      } else if (ln == LN_ALIGNMENT) {
+        const char *align = lv_cstr(r, value);
+        d->field_align[i] = eq(align, "center") ? 2 : eq(align, "right") ? 3 : 1;
+      } else if (d->platform.trace) {
+        // Embedded fonts retain their converted face; fixed/adjust text
+        // boxes share the bounded native layout. Keep the approximation visible.
+        d->platform.trace(d->context, ln == LN_FONTSTYLE ? "TEXT_FACE_RETAINED" : "TEXT_BOX_NATIVE_LAYOUT");
+      }
+      return;
+    }
     if (ln == LN_LOOP) {
       const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
       if (!m || (m->type != 6
@@ -2563,13 +2592,41 @@ static unsigned frame_number(dg_runtime_t *d, lv_t value) {
 static bool file_call(dg_runtime_t *d, const char *name, unsigned argc,
                       const lv_t *a, lv_t *out) {
   lv_runtime_t *r = d->values;
+  // FileXtra's older global API uses zero for success/existence. Directory
+  // entries include a trailing separator, as the retail profile scanners expect.
+  if (argc == 1 && (eq(name, "directoryexists") || eq(name, "createdirectory"))) {
+    *out = lv_num(d->platform.directory && d->platform.directory(
+        d->context, lv_cstr(r, a[0]), eq(name, "createdirectory")) ? 0 : -1);
+    return true;
+  }
+  if (argc == 1 && eq(name, "directorytolist")) {
+    *out = (lv_t){0};
+    if (d->platform.directory && !d->platform.directory(d->context, lv_cstr(r, a[0]), false))
+      return true;
+    *out = lv_list(r, 0, NULL, false);
+    r->roots[DG_SCRATCH_ROOT] = *out;
+    for (int i = 1; d->platform.nth_file; i++) {
+      const char *entry = d->platform.nth_file(d->context, lv_cstr(r, a[0]), i);
+      if (!entry || !*entry) break;
+      lv_set_at(r, *out, (unsigned)i, lv_text(r, entry, false));
+    }
+    return true;
+  }
+  if (argc == 1 && eq(name, "fileexists")) {
+    unsigned length = 0;
+    char data[32768];
+    *out = lv_num(d->platform.read_file && d->platform.read_file(
+        d->context, lv_cstr(r, a[0]), data, sizeof(data), &length) ? 0 : -1);
+    return true;
+  }
   if (!strcmp(name, "fileio")) {
     if (argc != 3 || !eq(lv_cstr(r, a[0]), "mnew")) {
       error(d, "invalid FileIO", "constructor");
       return true;
     }
-    const char *mode = lv_cstr(r, a[1]), *file = basename_(lv_cstr(r, a[2]));
-    if (strlen(file) >= 32) {
+    const char *mode = lv_cstr(r, a[1]), *file = lv_cstr(r, a[2]);
+    if (!d->platform.file_paths) file = basename_(file);
+    if (strlen(file) >= sizeof(d->file_names[0])) {
       error(d, "invalid save filename", file);
       return true;
     }
@@ -2577,7 +2634,7 @@ static bool file_call(dg_runtime_t *d, const char *name, unsigned argc,
       if (!d->files[i].used) {
         dg_file_t *f = &d->files[i];
         memset(f, 0, sizeof(*f));
-        snprintf(d->file_names[i], 32, "%s", file);
+        snprintf(d->file_names[i], sizeof(d->file_names[i]), "%s", file);
         f->write = eq(mode, "write") || eq(mode, "append");
         f->append = eq(mode, "append");
         if (!f->write &&
@@ -2677,12 +2734,13 @@ static bool d8_file_call(dg_runtime_t *d, const char *name, unsigned argc,
       error(d, "FileIO filename", name);
       return true;
     }
-    const char *base = basename_(lv_cstr(r, a[1]));
-    if (!*base || strlen(base) >= 32) {
+    const char *base = lv_cstr(r, a[1]);
+    if (!d->platform.file_paths) base = basename_(base);
+    if (!*base || strlen(base) >= sizeof(d->file_names[0])) {
       f->status = -37;
       return true;
     }
-    snprintf(filename, 32, "%s", base);
+    snprintf(filename, sizeof(d->file_names[0]), "%s", base);
     f->position = f->length = 0;
     f->dirty = false;
     if (METHOD("createfile")) {
@@ -2700,7 +2758,7 @@ static bool d8_file_call(dg_runtime_t *d, const char *name, unsigned argc,
       const char *folder = d->platform.data_folder ? d->platform.data_folder(d->context) : NULL;
       if (!f->opened && folder && d->platform.read_data) {
         char shipped[96];
-        int n = snprintf(shipped, sizeof(shipped), "%s/%s", folder, filename);
+        int n = snprintf(shipped, sizeof(shipped), "%s/%s", folder, basename_(filename));
         for (int i = (int)strlen(folder) + 1; i < n && i < (int)sizeof(shipped); i++)
           shipped[i] = (char)toupper((unsigned char)shipped[i]);
         f->opened = d->platform.read_data(d->context, shipped, f->data,
@@ -3335,9 +3393,7 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
       return true;
     }
     snprintf(d->next_movie, sizeof(d->next_movie), "%s", basename_(lv_cstr(r, a[0])));
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
     snprintf(d->next_movie_path, sizeof(d->next_movie_path), "%s", lv_cstr(r, a[0]));
-#endif
     char *dot = strrchr(d->next_movie, '.');
     if (dot && eq(dot, ".dir")) memcpy(dot, ".DXR", 5);
     // The corpus navigates by bare movie stems; registered names carry .DXR.
@@ -3357,7 +3413,7 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     if (argc == 2) {
       snprintf(d->next_movie, sizeof(d->next_movie), "%s",
                basename_(lv_cstr(r, a[1])));
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_D10
       snprintf(d->next_movie_path, sizeof(d->next_movie_path), "%s", lv_cstr(r, a[1]));
 #endif
       char *extension = strrchr(d->next_movie, '.');
@@ -3437,7 +3493,7 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
   if (ln == LN_PUPPETSPRITE) {
     ARITY(2);
 #if DG_D10
-    if (lv_type(a[0]) == LV_SPRITE && ((uint32_t)lv_id(a[0]) & DG_CHILD_SPRITE)) {
+    if (lv_type(a[0]) == LV_SPRITE && lv_id(a[0]) >= 0 && ((uint32_t)lv_id(a[0]) & DG_CHILD_SPRITE)) {
       film_child_set(d, LN_PUPPET, a[0], a[1]);
       return true;
     }
@@ -3571,9 +3627,10 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     *out = lv_text(r, name ? name : "", false);
     return true;
   }
-  if (ln == LN_OPENXLIB) {
+  if (ln == LN_OPENXLIB || eq(name, "closexlib")) {
     ARITY(1);
-    if (!eq(basename_(lv_cstr(r, a[0])), "fileio"))
+    if (!eq(basename_(lv_cstr(r, a[0])), "fileio") &&
+        !eq(basename_(lv_cstr(r, a[0])), "filextra"))
       error(d, "unsupported external library", lv_cstr(r, a[0]));
     return true;
   }
@@ -3922,6 +3979,14 @@ static bool seek_now(dg_runtime_t *d, unsigned frame) {
 #endif
       d->score[ch] = delta->value;
       if(ch==5 && !d->palette_puppet && !palette_command(d,delta->value.member,true))return false;
+      if (ch == 5 && !d->palette_puppet && delta->value.member && delta->value.ink) {
+        d->palette_fade_serial++;
+        d->palette_fade_start = d->ticks;
+        d->palette_fade_kind = delta->value.ink;
+        unsigned speed = delta->value.blend ? delta->value.blend : 1;
+        d->palette_fade_half = (uint8_t)(60 / (speed > 30 ? 30 : speed));
+        if (d->platform.trace) d->platform.trace(d->context, "PALETTE_FADE_TRUECOLOR_SUBSTITUTE");
+      }
 #if DG_MODERN
       unsigned command_tempo = delta->value.tempo;
       if (ch == 1) {
@@ -4492,6 +4557,16 @@ static bool d6_input(dg_runtime_t *d) {
   }
   if (!d->input_stage && d->text_pending) {
     const dg_member_t *m=dg_member(d,d->sprites[d->text_sprite].value.member);
+    if (!m || !dg_text_editable(d, d->text_sprite)) {
+      d->text_pending = d->text_reset = false;
+      if (d->platform.trace) d->platform.trace(d->context, "TEXT_TARGET_DISAPPEARED");
+      return true;
+    }
+    if (d->text_reset) {
+      set(d->values,"text",lv_make(LV_MEMBER, (int32_t)m->id),lv_text(d->values,"",false));
+      d->sel_start = d->sel_end = 0;
+      d->text_reset = false;
+    }
     char text[21];snprintf(text,sizeof(text),"%s",d6_text(d,m));
     unsigned length=(unsigned)strlen(text);
     d->text_key=(unsigned char)d->text_replacement[d->text_index];
@@ -4767,7 +4842,7 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
 bool dg_edit_text(dg_runtime_t *d, unsigned channel, const char *text) {
   if (!channel || channel >= DG_SPRITES || strlen(text) > 20) return false;
   const dg_member_t *m = dg_member(d, d->sprites[channel].value.member);
-  if (!dg_text_editable(d, channel) || d->values->depth || d->text_pending) return false;
+  if (!dg_text_editable(d, channel) || d->text_pending) return false;
   for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
 #if DG_D10
     // The on-screen keyboard types windows-1252 German letters into names
@@ -4786,8 +4861,9 @@ bool dg_edit_text(dg_runtime_t *d, unsigned channel, const char *text) {
     d->text_index=0;
     d->text_sprite=channel;
     d->text_pending=true;
-    d->sel_start=d->sel_end=0;
-    set(d->values,"text",lv_make(LV_MEMBER, (int32_t)m->id),lv_text(d->values,"",false));
+    // Commit at the next input service boundary. A suspended animation
+    // handler must not make an otherwise editable popup impossible to type in.
+    d->text_reset=true;
   }
   return !d->values->failed;
 }
@@ -4864,6 +4940,8 @@ bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
   if (pressed)
     d->tempo_clicked = true;
+#endif
+#if DG_D10
   if (pressed || (!down && d->mouse_released))
     d->last_input_tick = d->ticks;
 #endif
@@ -5315,7 +5393,7 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
       if (d10_timeouts(d))
         continue;
 #endif
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_D10
       if (d85_idle_timeout(d))
         continue;
 #endif

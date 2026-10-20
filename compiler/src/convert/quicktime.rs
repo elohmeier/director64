@@ -64,8 +64,8 @@ pub struct Track {
     /// (media time plus the segment's duration); None without an edit list.
     /// ffmpeg drops every packet that starts at or after it.
     pub edit_end: Option<u64>,
-    /// Multiple audio edits, as (source sample frame, output sample frames).
-    pub audio_edits: Vec<(u64, u64)>,
+    /// Audio edits: media time, presentation duration and unsigned 16.16 rate.
+    pub audio_edits: Vec<(u64, u64, u32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,15 +193,16 @@ fn track(b: &[u8], s: usize, e: usize, movie_timescale: u32) -> R<Track> {
             let at = ls + 8 + i * 12;
             let duration = be32(b, at)? as u64;
             let media = be32(b, at + 4)? as i32;
-            if media < 0 || be32(b, at + 8)? != 65536 {
+            let rate = be32(b, at + 8)?;
+            if media < 0 || rate == 0 || rate > 16 * 65536 || (kind != TrackKind::Audio && rate != 65536) {
                 return Err("unsupported empty/rate-adjusted QuickTime edit".into());
             }
             let frames = rescale(duration, timescale as u64, movie_timescale as u64);
-            if count == 1 {
+            if count == 1 && rate == 65536 {
                 if media != 0 { return Err("unsupported nonzero single QuickTime edit".into()) }
                 t.edit_end = Some(frames);
             } else {
-                t.audio_edits.push((media as u64, frames));
+                t.audio_edits.push((media as u64, frames, rate));
             }
         }
     }
@@ -415,11 +416,29 @@ pub fn audio_wav(bytes: &[u8]) -> R<Option<Vec<u8>>> {
         (other, bits) => return Err(format!("unsupported QuickTime sound {other:?} at {bits} bits")),
     };
     let mut edited = Vec::new();
-    for &(start, length) in &t.audio_edits {
+    for &(start, length, rate) in &t.audio_edits {
         let start = rescale(start, t.rate as u64, t.timescale as u64) as usize * channels;
         let length = rescale(length, t.rate as u64, t.timescale as u64) as usize * channels;
-        let end = start.checked_add(length).ok_or("QuickTime audio edit overflow")?.min(samples.len());
-        edited.extend_from_slice(samples.get(start..end).ok_or("QuickTime audio edit outside samples")?);
+        if rate == 65536 {
+            let end = start.checked_add(length).ok_or("QuickTime audio edit overflow")?.min(samples.len());
+            edited.extend_from_slice(samples.get(start..end).ok_or("QuickTime audio edit outside samples")?);
+        } else {
+            // Resample the selected source interval onto the edit's movie
+            // timeline. HOE1's sound uses 1.0003967x to stay in sync with video.
+            // Interpolate each channel independently, with silence beyond the
+            // source tail instead of reading another channel/outside the file.
+            if length > 64 * 1024 * 1024 { return Err("QuickTime audio edit too large".into()) }
+            for frame in 0..length / channels {
+                let position = frame as u64 * rate as u64;
+                let at = start + (position >> 16) as usize * channels;
+                let fraction = (position & 65535) as i64;
+                for channel in 0..channels {
+                    let a = samples.get(at + channel).copied().unwrap_or(0) as i64;
+                    let b = samples.get(at + channel + channels).copied().unwrap_or(0) as i64;
+                    edited.push(((a * (65536 - fraction) + b * fraction) / 65536) as i16);
+                }
+            }
+        }
     }
     let samples = if t.audio_edits.is_empty() { &samples } else { &edited };
     let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
@@ -575,6 +594,23 @@ mod tests {
         let wav = audio_wav(&movie).unwrap().unwrap();
         let samples: Vec<i16> = wav[44..].chunks(2).map(|p| i16::from_le_bytes([p[0], p[1]])).collect();
         assert_eq!(samples, vec![0, 127 << 8, -128 << 8, 1 << 8]);
+    }
+
+    #[test]
+    fn audio_edit_rate_resamples_onto_the_presentation_timeline() {
+        let source=sound_movie(&[128,160,192,224]);
+        let top=atoms(&source,0,source.len()).unwrap();
+        let (ms,me)=child(&top,b"moov").unwrap();
+        let children=atoms(&source,ms,me).unwrap();
+        let (ts,te)=child(&children,b"trak").unwrap();
+        let edit=atom(b"edts",&full(b"elst",&words(&[1,4,0,32768])));
+        let track=atom(b"trak",&[source[ts..te].to_vec(),edit].concat());
+        let mut mvhd=full(b"mvhd",&words(&[0,0,22050,4]));
+        let mut movie=source[..ms-8].to_vec();
+        mvhd.extend(track);movie.extend(atom(b"moov",&mvhd));
+        let wav=audio_wav(&movie).unwrap().unwrap();
+        let samples:Vec<i16>=wav[44..].chunks_exact(2).map(|p|i16::from_le_bytes([p[0],p[1]])).collect();
+        assert_eq!(samples,vec![0,4096,8192,12288]);
     }
 
     #[test]

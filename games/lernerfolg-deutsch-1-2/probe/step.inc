@@ -8,7 +8,9 @@ static bool step(int x, int y, unsigned buttons) {
       !director.next_movie[0] && !values.depth)
     snprintf(director.next_movie, sizeof(director.next_movie), "%.27s.DXR", director.window_movie_name);
   if (dg_transition_ready(&director)) {
-    if (!enter(find(director.next_movie), director.next_movie_frame ? director.next_movie_frame : 1)) return false;
+    const dg_movie_t *target=find_path(director.next_movie_path,director.next_movie);
+    director.next_movie_path[0]=0;
+    if (!enter(target, director.next_movie_frame ? director.next_movie_frame : 1)) return false;
     dg_window_loaded(&director);
   }
   bool ok = dg_tick(&director, x, y, down, DG_SERVICE_BUDGET);

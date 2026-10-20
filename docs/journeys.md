@@ -34,31 +34,30 @@ regressions; none is an original-projector comparison or Android TV result.
 | Findus Mucklas | `full_journey` with activity; `train-station-soak` | Player creation/reload; clock victory, inventory reward/reload; ten simulated minutes in the reported train-station slowdown scene |
 | Findus ghosts | `player-yard` | Publisher skip, name entry, player save, story to yard, sustained scene playback |
 | Findus circus | `player-yard` | Clown selection, keyboard name entry, save, story to yard, sustained scene playback |
-| Findus birthday | `player-registration` | Bedroom film loops, first-player selection and opening the name popup |
+| Findus birthday | `player-registration` | Bedroom film loops, name entry, saved registration, room entry and sustained playback |
 | Löwenzahn 1 | `full_journey` | Both complete intro clips, volume slider and retained settings, all nine menus/first topics and panorama returns |
 | Löwenzahn 6 | `login-frog-video` | Profile selection, preferences, exterior navigation and frog video playback |
 | Löwenzahn 7 | `login-piano` | Music profile, roof navigation, piano entry and key input |
-| Löwenzahn 8 | `login-dog-registration` | Boat profile, intro skip, pet name entry and registration persistence |
+| Löwenzahn 8 | `login-dog-registration` | Boat profile, intro skip, pet name entry, return/save, reboot and restored dog state |
 | Löwenzahn Advent | `countdown-wagon-desk` | Seasonal start, countdown exit, desk navigation and nutcracker interaction |
 | Löwenzahn Optik | `wagon-laptop-topic` | Intro, desk, laptop, first topic menu, quiz entry and sustained playback |
 | Lernerfolg Deutsch 1–2 | `full_journey` | Name/class selection, saved profile, room and exercise entry, Flash prompt layout and answer selection |
 
-The six additional experimental adapters also register startup journeys:
+The six additional experimental adapters register these routes:
 
 | Port | Journey | Route |
 | --- | --- | --- |
 | Findus garden | `guardian-garden` | Launcher, guardian selection, save generations, garden playback |
-| Fritz & Fertig | `opening-player-screen` | Launcher, player discovery, speech and cue-driven actors |
+| Fritz & Fertig | `opening-player-screen` | Player folder discovery, name entry, story entry, save/reboot and profile resume |
 | Löwenzahn 2 | `intro-wagon` | Launcher and QuickTime introduction to the wagon |
-| Löwenzahn 3 | `opening-login` | Startup checks, login and QuickTime cast selection |
-| Löwenzahn 4 | `rocket-login` | Launcher and rocket/login sequence |
-| Löwenzahn 5 | `opening-login` | DirectSound checks and login introduction |
+| Löwenzahn 3 | `opening-login` | Startup checks, QuickTime cast selection, profile save and wagon bedroom |
+| Löwenzahn 4 | `rocket-login` | Rocket intro, skeleton profile, saved preferences and wagon exterior |
+| Löwenzahn 5 | `opening-login` | Device checks, snail profile, opening story skip and wagon exterior |
 
-Garden's route passes. The others currently expose conversion or startup
-failures documented in [additional-ports.md](additional-ports.md). Their
-later checkpoints are intended routes recovered from source, pending a
-successful run. These failures do not qualify as performance baselines.
-The suite now registers 23 default journeys across 20 games.
+The suite registers 23 default journeys across 20 games. The compatibility
+workarounds and conversion limits are documented in
+[additional-ports.md](additional-ports.md). Each route includes concrete
+state expectations; startup alone does not establish activity coverage.
 
 ## Correctness and failure evidence
 
@@ -101,13 +100,20 @@ uv run --locked director64 journey --game findus-workshop \
   --repeat 3 --baseline build/journeys/before --output build/journeys/after
 ```
 
-Each repetition compares against the same numbered baseline repetition.
+Repeated runs compare median timings across independent cold processes and
+the highest memory measurement across every repetition. Each repetition must
+pass correctness and use the same edition, build, plan, harness, environment
+and command stream. Individual reports and timing ranges remain available;
+`median/report.json` contains the aggregate. Repeated baseline comparisons need at
+least three repetitions and the same repetition count. A single run still
+compares its individual report.
+
 The default gate rejects more than 25% growth in total measured runtime,
 boot time, command p95/maximum, or an individual scene's measured time, and more
 than 10% growth in peak process RSS or Wasm memory capacity.
 `--max-slowdown` and `--max-memory-growth` change these ratios (both at
 least 1). A missing/failed baseline, different edition or repair, changed
-journey, different host/Node environment, or different command streams
+journey, different host/Node environment or harness, or different command streams
 cannot establish a passing comparison. Scene command counts must match.
 Advent also requires the same local calendar date, since it takes seasonal
 paths. No date or gameplay state is injected to bypass its calendar.
@@ -122,28 +128,36 @@ numbers of ticks. Keep other host workloads quiet when comparing performance.
 
 ## Findings and remaining qualification
 
-The initial October 2026 rendered audit exposed these failing checkpoints:
+The 20 October 2026 host validation completed conversion for all 20 default
+editions, then ran all 23 journeys three times for a baseline and three times
+for a comparison: 138 passing rendered runs. All 23 median timing/peak-memory
+comparisons passed the unchanged gates. This checks repeatability of the
+current builds and establishes future baselines; it does not measure an
+improvement against the previously failing builds. The full source-free
+repository checks also pass. Media and generated evidence stay local.
 
-| Port | Failure to investigate |
-| --- | --- |
-| Findus birthday | Player name popup reaches an unimplemented `fontSize` setter |
-| Löwenzahn 7 | Piano key release reads an empty play list and raises a script alert |
-| Löwenzahn 8 | Confirming the pet name returns without registering or retaining it |
-| Lernerfolg Deutsch 1–2 | Map entry references a child outside an active Director film loop |
+The October 2026 audit found and fixed the registration, text, movie-path,
+film-channel, FileXtra, palette-transition, stream-packaging and source-script
+blockers exercised by these routes. Birthday now enters a room after saving;
+the piano guard handles free play's empty task list; the dog name is stored as
+text and restored after reboot; Lernerfolg enters an exercise and selects a
+visible answer. The six new adapters convert and run their registered routes.
 
-These are reproducible port failures/candidates, not claims that the original
-projector behaves differently. Resolve them with focused runtime tests and,
-where behavior is ambiguous, version-verified original-projector evidence.
-Keep the intended checkpoint when fixing a failure. Birthday's route must
-be extended beyond registration once that blocker is removed.
+Best-effort substitutions remain explicit in conversion reports or runtime
+traces. Palette fades use truecolor scene snapshots through black/white with
+approximate timing. Text sizing/alignment work, while unavailable font faces
+and fixed/adjust box differences retain the bounded native layout. The damaged
+Löwenzahn 5 video uses a pinned packet discard and decoder concealment. Missing
+Löwenzahn 6 narration is skipped by one pinned source patch. None of these is
+claimed as recovered original output.
 
 Rendered execution catches compositor errors but cannot prove pixel or
-audible output matches the original. In particular, Löwenzahn 8's linked dog
-animations still need a visual comparison; Circus's imaging puzzle,
-Ghosts' masks/crop and Birthday's text styles need dedicated visual checks.
-Speech timing uses the probe's nominal stream lifetime and nominal font
-layout. The new short routes do not establish completion of every activity
-or every save/reward path; the matrix states their actual scope.
+audible output matches the original. In particular, the linked dog animations,
+Circus imaging puzzle, Ghosts masks/crop, Birthday text styles and palette fade
+timing still need visual comparisons. Packaged streams now use their converted
+audio durations instead of the probe's missing-stream fallback. The routes do
+not establish completion of every activity or every save/reward path; the
+matrix states their actual scope.
 
 For Android TV qualification, follow each registered route on the target
 device with diagnostics enabled, test the controller and text-entry path,

@@ -100,6 +100,11 @@ static void edit_contract(void) {
  assert(lv_numeric(lv_get(&r,NULL,"dragging",lv_make(LV_SPRITE, 1)))==1);
  lv_call(&r,&caller,"puppettransition",4,(lv_t[]){lv_num(1),lv_num(2),lv_num(5),lv_num(0)});
  assert(d.transition_type==1 && d.transition_serial==1);
+ // A queued text edit may outlive an animated popup's sprite.
+ assert(dg_edit_text(&d,3,"NEW"));
+ d.sprites[3].value.member=0;
+ tick(50,50,false);
+ assert(!d.text_pending && !r.failed);
  assert(d.transition_duration==30 && d.transition_chunk==5);
  // Zero time and chunk keep the original quarter-second floor and 1px chunk.
  lv_call(&r,&caller,"puppettransition",4,(lv_t[]){lv_num(10),lv_num(0),lv_num(0),lv_num(1)});

@@ -111,7 +111,8 @@ pub fn executable_program(program: &Value, port: &Port, source_manifest: &Value)
 /// cast and handler; or `all` handlers of that name), pins it by
 /// `source_sha256` (or by `calls`, a call its body must make), and replaces
 /// its `body` with Lingo, sets its `parameters`, or renames a call
-/// (`rename_call = [from, to]`, `count` sites). The program records each
+/// (`rename_call = [from, to]`, `count` sites), or corrects an appended
+/// variable (`retarget_append = [from, to]`, `count` sites). The program records each
 /// patch under compatibility_fixes.
 pub fn patch_program(program: &Value, patches: &Value) -> R<Value> {
     let mut result = program.clone();
@@ -154,6 +155,12 @@ pub fn patch_program(program: &Value, patches: &Value) -> R<Value> {
                     return Err(format!("{} {name}: {count} {from} calls; review required", handler["movie"]));
                 }
             }
+            if let Some([from, to]) = patch["retarget_append"].as_array().map(Vec::as_slice) {
+                let count = retarget_appends(&mut handler["body"], text(from), text(to));
+                if Some(count as u64) != patch["count"].as_u64() {
+                    return Err(format!("{} {name}: {count} appends to {from}; review required", handler["movie"]));
+                }
+            }
             if patch["body"].is_string() && patch["prepend"].is_string() {
                 return Err("patch cannot replace and prepend one handler".into());
             }
@@ -166,7 +173,7 @@ pub fn patch_program(program: &Value, patches: &Value) -> R<Value> {
                 let lines: Vec<(usize, String)> = body
                     .lines()
                     .filter(|l| !l.trim().is_empty())
-                    .map(|l| (line, l.to_string()))
+                    .map(|l| (line, l.trim().to_string()))
                     .collect();
                 let mut statements = lingo::block(&lines).map_err(|e| e.to_string())?;
                 if patch["prepend"].is_string() {
@@ -202,6 +209,23 @@ fn rename_calls(node: &mut Value, from: &str, to: &str) -> usize {
     }
 }
 
+// Fix a recovered `put ... after wrongVariable` without replacing its
+// surrounding handler or changing other assignments to that variable.
+fn retarget_appends(node: &mut Value, from: &str, to: &str) -> usize {
+    if node["op"] == "set" && node["target"] == json!(["variable", from])
+        && node["value"][0] == "binary" && node["value"][1] == "&"
+        && node["value"][2] == json!(["variable", from]) {
+        node["target"][1] = json!(to);
+        node["value"][2][1] = json!(to);
+        return 1;
+    }
+    match node {
+        Value::Array(items) => items.iter_mut().map(|v| retarget_appends(v, from, to)).sum(),
+        Value::Object(object) => object.values_mut().map(|v| retarget_appends(v, from, to)).sum(),
+        _ => 0,
+    }
+}
+
 // ---- The plan ----
 
 /// What the conversion driver does for a port around postprocess_model: the
@@ -222,7 +246,7 @@ pub fn plan(port: &Port, model: &Value) -> R<Value> {
     let mut plan = json!({"measure": measure,
         "streams": convert.get("streams").cloned().unwrap_or(json!([])),
         "data": convert.get("data").cloned().unwrap_or(json!([]))});
-    for key in ["print", "external_media"] {
+    for key in ["print", "external_media", "stream_prefer"] {
         if let Some(value) = convert.get(key) {
             plan[key] = value.clone();
         }

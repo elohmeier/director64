@@ -29,6 +29,12 @@ static bool swa_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
   int i = swa_slot(d, m, true); if (i < 0) return true;
   bool available = m->asset && *m->asset && m->rate && m->samples;
   if (eq(name, "state")) *out = lv_num(swa_state(d, (unsigned)i));
+  else if (eq(name, "percentplayed")) {
+    unsigned state = swa_state(d, (unsigned)i);
+    double position = d->platform.sound_position ? d->platform.sound_position(d->context, d->swa[i].channel) : 0;
+    double duration = m->rate ? (double)m->samples * 1000 / m->rate : 0;
+    *out = lv_num(state == 5 ? 100 : state == 3 && duration > 0 ? fmin(100, position * 100 / duration) : 0);
+  }
   else if (eq(name, "percentstreamed")) *out = lv_num(available ? 100 : 0);
   else if (eq(name, "duration")) *out = lv_num(m->rate ? (double)m->samples * 1000 / m->rate : 0);
   else if (eq(name, "volume")) *out = lv_num(d->swa[i].volume);

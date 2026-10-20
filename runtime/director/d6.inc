@@ -47,6 +47,9 @@ static void d6_erase_field(dg_runtime_t *d, uint32_t id) {
     memcpy(d->field_fonts[i], d->field_fonts[last], sizeof(d->field_fonts[i]));
     d->field_text_changed[i] = d->field_text_changed[last];
     d->field_scroll[i] = d->field_scroll[last];
+    d->field_font_changed[i] = d->field_font_changed[last];
+    d->field_sizes[i] = d->field_sizes[last];
+    d->field_align[i] = d->field_align[last];
     d->field_editable[i] = d->field_editable[last];
     d->field_members[last] = 0;
     d->values->roots[DG_FIELD_TEXT_ROOT + last] = (lv_t){0};
@@ -54,6 +57,8 @@ static void d6_erase_field(dg_runtime_t *d, uint32_t id) {
     memset(d->field_fonts[last], 0, sizeof(d->field_fonts[last]));
     d->field_text_changed[last] = d->field_editable[last] = false;
     d->field_scroll[last] = 0;
+    d->field_font_changed[last] = false;
+    d->field_sizes[last] = d->field_align[last] = 0;
     return;
   }
 }
@@ -67,7 +72,8 @@ bool dg_text_editable(dg_runtime_t *d, unsigned sprite) {
   if (!sprite || sprite >= DG_SPRITES) return false;
   const dg_member_t *m = dg_member(d, d->sprites[sprite].value.member);
   if (!m || (m->type != 3 && m->type != 7)) return false;
-  return d->sprite_editable[sprite] ? d->sprite_editable[sprite] > 0 : d6_member_editable(d, m);
+  return d->sprite_editable[sprite] ? d->sprite_editable[sprite] > 0
+      : (d->sprites[sprite].value.flags & 64) || d6_member_editable(d, m);
 }
 static const char *d6_text(dg_runtime_t *d, const dg_member_t *m) {
   if (!m) return "";

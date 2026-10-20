@@ -25,8 +25,31 @@ launcher_movie = "START.DXR"
 
 [player]
 stream_paths = true
-saves = ["*.usr", "*.lied"]
+saves = ["*.usr", "*.lied", "Loewe_4.ini"]
+folders = [["d:\\setup", "LOEWE4.ICO"]]
 
 [convert]
 streams = ["FREIZEIT=DATA/FREIZEIT", "GALERIE=DATA/GALERIE", "MPEG=DATA/MPEG", "SOUNDS=DATA/SOUNDS", "BASTEL/SOUNDS=DATA/BASTEL/SOUNDS", "BK/SOUNDS=DATA/BK/SOUNDS", "BS/DANDELS=DATA/BS/DANDELS", "BS/SOUNDS=DATA/BS/SOUNDS", "EVO/SOUNDS=DATA/EVO/SOUNDS", "KLAPP/SOUNDS=DATA/KLAPP/SOUNDS", "LABYRINT/SOUNDS=DATA/LABYRINT/SOUNDS", "LEX/S_TEXTE=DATA/LEX/S_TEXTE", "SKELETT/SOUNDS=DATA/SKELETT/SOUNDS", "SLIDE/KANAL=DATA/SLIDE/KANAL", "SPUR/SOUNDS=DATA/SPUR/SOUNDS", "STERNE/SOUND=DATA/STERNE/SOUND", "WELTALL/SOUNDS=DATA/WELTALL/SOUNDS", "STERNE/SOUND/FEEDBS=DATA/STERNE/SOUND/FEEDBS", "SLIDE/BRUECK/SOUND=DATA/SLIDE/BRUECK/SOUND", "SKELETT/SOUNDS/1=DATA/SKELETT/SOUNDS/1", "SKELETT/SOUNDS/2=DATA/SKELETT/SOUNDS/2", "SKELETT/SOUNDS/3=DATA/SKELETT/SOUNDS/3", "SKELETT/SOUNDS/4=DATA/SKELETT/SOUNDS/4", "LABYRINT/SOUNDS/SOMMER=DATA/LABYRINT/SOUNDS/SOMMER"]
 external_media = { root = "DATA", extensions = ["MPG"], bind = "directmedia" }
+
+# The original optical-disc serial, scoped to the verified disc-check handler.
+[[convert.patch]]
+id = "optgraph-serial"
+movie = "CHECKW.DXR"
+cast = "Internal"
+member = 7
+handler = "getregoptimal"
+source_sha256 = "359c5a5963c82803d1f40894bdfa4930bc3187f7b60c646595ed7ebf76369c84"
+body = 'return "13665984"'
+
+# ReadPrefs appends the separator to its FileIO-open flag instead of its
+# directory string. Fix only those two assignments in the verified handler.
+[[convert.patch]]
+id = "preferences-directory-separator"
+movie = "LZ4.CXT"
+cast = "External"
+member = 64
+handler = "readprefs"
+source_sha256 = "ad93f38d230d2b701c6e51f46429e0dfd348012b6f6e3187c344349c526af351"
+retarget_append = ["fileiowasopen", "path"]
+count = 2

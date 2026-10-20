@@ -46,11 +46,18 @@ static void put(lv_t owner,const char *name,lv_t value) {
 int main(void) {
   dg_init(&d,&r,(dg_platform_t){0},NULL,NULL,0,1);
   assert(dg_enter(&d,&movie,1,NULL,0));
+  // A negative ordinary channel must not be mistaken for an encoded child.
+  assert(lv_id(lv_get(&r,NULL,"member",lv_make(LV_SPRITE,-1)))==0);
+  assert(!r.failed);
   for(unsigned i=1;i<=2;i++) {
     d.sprites[i]=(dg_sprite_t){.value={.member=ID(1),.type=16,.blend=100},.visible=true};
     dg_sprite_changed(&d,i);
   }
   dg_films_present(&d,true);
+  assert(dg_film_last_channel(&d,lv_make(LV_SPRITE,1))==300);
+  assert(dg_film_last_channel(&d,lv_num(1))==300);
+  for(unsigned n=1;n<=300;n++)put(child(1,n),"puppet",lv_num(0));
+  assert(d.film_child_count==0);
   lv_t a=child(1,1), empty=child(1,2), high=child(1,300), other=child(2,1);
   assert(get(a,"loch")==12 && get(a,"locv")==23 && get(a,"width")==4);
   assert(lv_id(lv_get(&r,NULL,"member",empty))==ID(99));

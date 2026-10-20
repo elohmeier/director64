@@ -10,5 +10,6 @@ const char *game_save_name(unsigned);
 bool game_read_file(const char *, char *, unsigned, unsigned *);
 bool game_write_file(const char *, const char *, unsigned);
 const char *game_nth_file(void *, const char *, int);
+bool game_directory(void *, const char *, bool);
 const char *game_long_date(void *);
 #endif

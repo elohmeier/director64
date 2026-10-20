@@ -149,6 +149,7 @@ def source_digest(root: Path) -> str:
         "tools/director/afterburner.mjs",
         str(WEBP / "src"), str(FREETYPE),
         "platforms/web/webp_image.c", "src/director64/convert.py",
+        "src/director64/mpeg_recovery.py",
         "src/director64/system_fonts.py", "runtime/director/director.h",
         "runtime/package/package.h", "runtime/lingo/names.txt",
         "runtime/lingo/lingo_bytecode.h", str(DROID_SANS), "package-lock.json",
@@ -319,12 +320,20 @@ class Converter:
             wav = None
             scratch = self.work / "port/sound.wav"
             if path.endswith(".MPG"):
+                recovery = self.table.get("mpeg_recovery", {}).get(path)
+                if recovery:
+                    from .mpeg_recovery import prepare
+                    repaired, receipt = prepare(source_path.read_bytes(), recovery)
+                    source_path = self.work / "port" / (source[:24] + ".mpg")
+                    source_path.write_bytes(repaired)
+                    record["recovery"] = receipt
+                    self.report.setdefault("media_recovery", []).append({"source": path, **receipt})
                 info = json.loads(self.director("mpeg-info", source_path))
                 record["duration"] = info["duration_seconds"]
                 record["width"], record["height"] = info["width"], info["height"]
                 record["video"] = f"{source[:24]}.vp8"
                 self.video_sources.append({"path": source_path, "name": record["video"],
-                                           "mpeg": info})
+                                           "mpeg": info, "recovery": recovery})
                 wav = mpeg_audio(source_path.read_bytes(), info)
             elif path.endswith(".MOV"):
                 info = json.loads(self.director("mov-info", source_path))
@@ -403,7 +412,13 @@ class Converter:
             folders = [f"{name}={extracted / folder}" for name, _, folder in specs
                        if (extracted / folder).is_dir()]
             blob = self.work / "streams.bin"
-            index = json.loads(self.director("stream-pack", blob, *folders))
+            prefer = plan.get("stream_prefer")
+            if prefer not in (None, "wav", "lossless"):
+                raise ValueError(f"unsupported stream duplicate preference: {prefer}")
+            options = [f"--prefer-{prefer}"] if prefer else []
+            index = json.loads(self.director("stream-pack", blob, *options, *folders))
+            if prefer:
+                self.report["stream_duplicate_preference"] = prefer
             data = blob.read_bytes()
             packs["streams"] = {name: (data[at:at + length], rest)
                                 for name, (at, length, *rest) in index.items()}
@@ -461,7 +476,10 @@ class Converter:
 
         def encode(source):
             if "mpeg" in source:
-                return source["name"], encode_mpeg(source["path"].read_bytes(), source["mpeg"])
+                log = (self.work / "port" / (source["name"] + ".recovery.txt")
+                       if source.get("recovery") else None)
+                return source["name"], encode_mpeg(source["path"].read_bytes(), source["mpeg"],
+                                                  recovery_log=log)
             frames = self.work / f"frames-{source['name']}"
             info = json.loads(self.director("cinepak-frames", source["path"], frames))
             try:
@@ -473,6 +491,15 @@ class Converter:
         sources = sorted(sources, key=lambda s: -s["path"].stat().st_size)
         with ThreadPoolExecutor(jobs()) as pool:
             packs["video"] = dict(pool.map(encode, sources))
+        for source in sources:
+            if source.get("recovery"):
+                log = self.work / "port" / (source["name"] + ".recovery.txt")
+                receipt = next(r for r in self.report["media_recovery"]
+                               if r["source_sha256"] == source["recovery"]["sha256"])
+                receipt["decoder_diagnostics"] = [line.split("] ", 1)[-1]
+                                                  for line in log.read_text().splitlines()]
+                receipt["decoded_frames"] = source["mpeg"]["decoded_frames"]
+                receipt["converted_video_strict_decode"] = True
         self.report["videos"] = len(packs["video"])
 
     def write(self, packs: dict) -> None:
@@ -512,15 +539,18 @@ def deflated(data: bytes) -> bytes:
     return b"D64Z" + struct.pack(">I", len(data)) + pack.compress(data) + pack.flush()
 
 
-def ffmpeg(args: list, data: bytes | None = None) -> bytes:
+def ffmpeg(args: list, data: bytes | None = None, *, recovery_log: Path | None = None) -> bytes:
     # Decoder recovery is not a qualified repair of a damaged retail source:
     # fail instead of silently exporting it.
     command = [os.environ.get("FFMPEG", "ffmpeg"), "-hide_banner", "-loglevel", "error",
-               "-xerror", "-err_detect", "explode", *[str(a) for a in args]]
+               *(["-xerror", "-err_detect", "explode"] if recovery_log is None
+                 else ["-err_detect", "ignore_err"]), *[str(a) for a in args]]
     result = subprocess.run(command, input=data, capture_output=True, check=False)
     if result.returncode:
         raise ValueError(f"ffmpeg exited with {result.returncode}: "
                          f"{result.stderr.decode(errors='replace').strip()[-2000:]}")
+    if recovery_log is not None:
+        recovery_log.write_bytes(result.stderr)
     return result.stdout
 
 
@@ -590,13 +620,16 @@ def encode_frames(frames: Path, info: dict) -> bytes:
                            [(t, data) for t, (_, data) in zip(times, encoded, strict=True)])
 
 
-def encode_mpeg(source: bytes, info: dict) -> bytes:
+def encode_mpeg(source: bytes, info: dict, *, recovery_log: Path | None = None) -> bytes:
     """An MPEG-1 movie's picture as VP9 at the source frame rate. Piped program
     streams can omit later PTS; frames retime from display order rather than
     duplicating pictures."""
     ivf = ffmpeg(["-i", "pipe:0", "-an", "-vf", "setpts=N/(FRAME_RATE*TB)", *VP9, "-g", "50",
-                  "-fps_mode", "passthrough", "-f", "ivf", "pipe:1"], source)
+                  "-fps_mode", "passthrough", "-f", "ivf", "pipe:1"], source,
+                 recovery_log=recovery_log)
     width, height, rate, scale, frames = ivf_frames(ivf)
+    if recovery_log is not None:
+        ffmpeg(["-f", "ivf", "-i", "pipe:0", "-f", "null", "-"], ivf)
     if ((info.get("width") and width != info["width"])
             or (info.get("height") and height != info["height"])
             or (info.get("decoded_frames") and len(frames) != info["decoded_frames"])

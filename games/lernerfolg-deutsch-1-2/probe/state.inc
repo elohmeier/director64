@@ -67,6 +67,8 @@ static void state(void) {
     for(unsigned j=0;j<s->value.behavior_count;j++) {if(j)putchar(',');printf("%u",s->value.behaviors[j].script);}
     printf("]");
     const dg_member_t *m=dg_member(&director,s->value.member);
+    if (m && m->source_xtra == 1)
+      printf(",\"flash_frame\":%d", lv_integer(&values,lv_get(&values,NULL,"frame",lv_make(LV_SPRITE,i))));
     if(m && (m->type==3 || m->type==7)) {
       printf(",\"editable\":%s,\"text\":",dg_text_editable(&director,i)?"true":"false");
       quoted(lv_cstr(&values,lv_get(&values,NULL,"text",lv_make(LV_MEMBER, (int32_t)m->id))));

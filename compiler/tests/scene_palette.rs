@@ -51,7 +51,6 @@ fn unsupported_palette_interpolation_and_missing_colors_fail_before_build() {
     };
     for (offset, value) in [
         (5, 0x80),
-        (5, 0x20),
         (5, 4),
         (9, 2),
         (11, 2),
@@ -78,6 +77,21 @@ fn unsupported_palette_interpolation_and_missing_colors_fail_before_build() {
         capabilities::audit(&m, capabilities::Target::Web, None).unwrap()["findings"][0]["code"],
         "palette-member-colors-missing"
     );
+}
+
+#[test]
+fn black_and_white_palette_fades_keep_visual_substitute_metadata() {
+    let p = Profile {version:600,extended:true,full_engine:true};
+    for flag in [0x20,0x40] {
+        let mut m = model(600,-1,-102);
+        m["movies"][0]["score"]["frames"][0]["channels"][0]["bytes"][5] = json!(flag);
+        let scenes = scene::scenes(&m,p).unwrap();
+        assert_eq!(scenes[0].deltas[0].spec.ink, flag);
+        assert_eq!(scenes[0].deltas[0].spec.blend,30);
+        let report=capabilities::audit(&m,capabilities::Target::Web,Some(p)).unwrap();
+        assert!(report["findings"].as_array().unwrap().is_empty());
+        assert_eq!(report["palette_fade_substitutes"][0]["behavior"],"truecolor-scene-fade-substitute");
+    }
 }
 
 #[test]

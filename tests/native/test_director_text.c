@@ -32,6 +32,11 @@ int main(void) {
                  "Findus"));
   assert(!director.field_text_changed[0]);
   assert(director.visual_revision == revision); // Reads must not redraw.
+  assert(lv_integer(&values, lv_get(&values, NULL, "fontsize", member)) == 12);
+  lv_set(&values, NULL, "fontsize", member, lv_num(24));
+  lv_set(&values, NULL, "alignment", member, lv_text(&values, "center", true));
+  assert(lv_integer(&values, lv_get(&values, NULL, "fontsize", member)) == 24);
+  assert(!strcmp(lv_cstr(&values, lv_get(&values, NULL, "alignment", member)), "center"));
   lv_set(&values, NULL, "font", member, lv_text(&values, "Pettson", false));
   assert(!strcmp(lv_cstr(&values, lv_get(&values, NULL, "font", member)),
                  "Pettson"));

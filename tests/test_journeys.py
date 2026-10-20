@@ -37,6 +37,8 @@ def test_every_port_has_registered_journeys():
 def test_expectations_fail_on_absent_values_and_wrong_destinations():
     state = {"movie": "MENU.DXR", "save_generation": 1, "globals": {"name": "ANNA"}}
     journeys.expect(state, {"save_generation": {"gte": 1}, "globals.name": "ANNA"})
+    journeys.expect({"saves": {"player/anna/game.txt": "ANNA"}},
+                    {"/saves/player~1anna~1game.txt": {"contains": "ANNA"}})
     with pytest.raises(ValueError, match="movie"):
         journeys.expect(state, {"movie": "ACTIVITY.DXR"})
     with pytest.raises(ValueError, match="missing"):
@@ -126,7 +128,8 @@ def test_performance_gates_time_memory_and_a_slow_scene():
 
 
 @pytest.mark.parametrize("change", ["source_sha256", "source_image", "plan_sha256",
-                                    "environment", "commands", "status"])
+                                    "environment", "runner_sha256", "harness_sha256",
+                                    "commands", "status"])
 def test_incomparable_baselines_are_rejected(change):
     baseline = baseline_report()
     current = copy.deepcopy(baseline)
@@ -217,3 +220,22 @@ def test_original_mucklas_activity_shortcut_is_preserved(tmp_path, monkeypatch):
                          ["--activity", "--output", str(tmp_path)]) == 0
     assert len(visited) == 1
     assert visited[0]["name"] == "full_journey" and visited[0]["activity"]
+
+
+def test_median_timings_keep_peak_memory_and_every_correctness_failure():
+    reports = [baseline_report() for _ in range(3)]
+    for report, elapsed, memory in zip(
+            reports, [100, 110, 300], [10000, 11000, 10500], strict=True):
+        report['performance'].update(cpu_ms=elapsed, elapsed_ms=elapsed, peak_rss_bytes=memory)
+        for scene in report['performance']['scenes'].values():
+            scene['max_command_ms'] = 10
+    result = journeys.aggregate(reports)
+    assert result['performance']['elapsed_ms'] == 110
+    assert result['performance']['peak_rss_bytes'] == 11000
+    assert result['timing_ranges']['elapsed_ms'] == {'min': 100, 'max': 300}
+    reports[1]['status'] = 'failed'
+    assert journeys.aggregate(reports)['status'] == 'failed'
+    reports[1]['status'] = 'passing'
+    reports[1]['performance']['command_stream_sha256'] = ['different']
+    with pytest.raises(ValueError, match='command streams differ'):
+        journeys.aggregate(reports)

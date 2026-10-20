@@ -488,3 +488,46 @@ end
         'assert(lv_numeric(global("width")) == 120); assert(lv_numeric(global("head")) == 3);'
         ' assert(lv_numeric(global("tail")) == 360); assert(lv_numeric(global("total")) == 21780);',
     )
+
+
+@pytest.mark.parametrize('version', [600, 850])
+def test_field_values_are_text_but_property_and_assignment_owners_are_references(tmp_path, version):
+    source = '''-- cast: Internal; member: 1; type: MovieScript; name: fixture
+on start
+  global profile, fontSeen, afterWrite
+  field("input") = "REX"
+  profile = [#name: field("input")]
+  fontSeen = field("input").font
+  the text of field "input" = "ANNA"
+  afterWrite = field("input")
+end
+'''
+    body = r'''
+static lv_runtime_t r;
+static char text[32];
+static lv_t ref(lv_runtime_t *v,const char *kind,lv_t name,lv_t lib) {
+  (void)lib;assert(!strcmp(kind,"field")&&!strcmp(lv_cstr(v,name),"input"));
+  return lv_make(LV_FIELD,42);
+}
+static lv_t get(lv_runtime_t *v,const char *name,lv_t owner) {
+  assert(lv_type(owner)==LV_FIELD&&lv_id(owner)==42);
+  return lv_text(v,!strcmp(name,"font")?"Face":text,false);
+}
+static void set(lv_runtime_t *v,const char *name,lv_t owner,lv_t value) {
+  assert(lv_type(owner)==LV_FIELD&&lv_id(owner)==42&&!strcmp(name,"text"));
+  snprintf(text,sizeof(text),"%s",lv_cstr(v,value));
+}
+int main(int argc,char **argv) {
+  (void)argc;load_fixture(argv[1]);
+  lv_init(&r,(lv_services_t){.reference=ref,.get=get,.set=set},NULL,global_names,global_count,1);
+  r.current=fixture;assert(lv_start(&r,fixture,"start",1,0,NULL));
+  while(r.depth&&!r.failed)lv_run(&r,1000);
+  if(r.failed)fprintf(stderr,"%s\n",r.error);
+  assert(!r.failed);
+  lv_t profile=r.globals[lv_global_id(&r,"profile")];
+  assert(!strcmp(lv_cstr(&r,lv_get(&r,NULL,"name",profile)),"REX"));
+  assert(!strcmp(lv_cstr(&r,r.globals[lv_global_id(&r,"fontseen")]),"Face"));
+  assert(!strcmp(lv_cstr(&r,r.globals[lv_global_id(&r,"afterwrite")]),"ANNA"));
+}
+'''
+    run_lingo(tmp_path, source, body, version=version, extended=True)

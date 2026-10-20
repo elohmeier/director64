@@ -3,12 +3,14 @@
   "journeys": [
     {
       "name": "opening-login",
-      "description": "Run startup and DirectSound checks into the login introduction, then keep the selection screen running.",
+      "description": "Run device checks, select the snail profile, skip the opening story and enter the wagon exterior.",
       "covers": [
         "startup",
         "sound-device-selection",
         "profile-selection",
-        "sustained-playback"
+        "sustained-playback",
+        "navigation",
+        "film-loops"
       ],
       "steps": [
         {
@@ -30,6 +32,56 @@
             "movie": "LOGIN.DXR"
           },
           "label": "login-playback"
+        },
+        {
+          "click": [
+            150,
+            160
+          ],
+          "settle": 600,
+          "expect": {
+            "globals.gloginlist": "[#schnecke]"
+          },
+          "label": "profile-selected"
+        },
+        {
+          "click": [
+            720,
+            34
+          ],
+          "settle": 3600,
+          "expect": {
+            "movie": "STARTSCR.DXR",
+            "save_generation": {
+              "gte": 2
+            }
+          },
+          "label": "story-selector"
+        },
+        {
+          "idle": 3600,
+          "expect": {
+            "movie": "STARTSCR.DXR"
+          },
+          "label": "selector-playback"
+        },
+        {
+          "click": [
+            400,
+            300
+          ],
+          "settle": 3600,
+          "expect": {
+            "movie": "BAUWAGEN__AUSSEN.DXR"
+          },
+          "label": "wagon-exterior"
+        },
+        {
+          "idle": 3600,
+          "expect": {
+            "movie": "BAUWAGEN__AUSSEN.DXR"
+          },
+          "label": "exterior-playback"
         }
       ]
     }

@@ -3,13 +3,15 @@
   "journeys": [
     {
       "name": "opening-login",
-      "description": "Run startup checks into the login screen and exercise the QuickTime cast selection, preferences and animated player controls.",
+      "description": "Select a profile, enter the introduction and wagon bedroom, verify preferences and sustain playback.",
       "covers": [
         "startup",
         "video-cast-selection",
         "preferences",
         "profile-selection",
-        "sustained-playback"
+        "sustained-playback",
+        "navigation",
+        "save"
       ],
       "steps": [
         {
@@ -31,6 +33,49 @@
             "movie": "LOGIN.DXR"
           },
           "label": "login-playback"
+        },
+        {
+          "click": [
+            140,
+            168
+          ],
+          "settle": 120,
+          "expect": {
+            "globals.gloginlist": "[#igel]"
+          },
+          "label": "profile-selected"
+        },
+        {
+          "click": [
+            365,
+            562
+          ],
+          "settle": 3600,
+          "expect": {
+            "movie": "INTRO.DXR",
+            "save_generation": {
+              "gte": 2
+            }
+          },
+          "label": "profile-saved"
+        },
+        {
+          "click": [
+            400,
+            300
+          ],
+          "settle": 3600,
+          "expect": {
+            "movie": "BWBETT.DXR"
+          },
+          "label": "wagon-bedroom"
+        },
+        {
+          "idle": 3600,
+          "expect": {
+            "movie": "BWBETT.DXR"
+          },
+          "label": "bedroom-playback"
         }
       ]
     }

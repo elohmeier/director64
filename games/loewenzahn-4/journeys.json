@@ -3,13 +3,14 @@
   "journeys": [
     {
       "name": "rocket-login",
-      "description": "Play the rocket introduction into its login section, then keep the animated selection screen running.",
+      "description": "Skip the rocket introduction, select the skeleton profile, enter the wagon exterior and retain preferences.",
       "covers": [
         "startup",
         "navigation",
         "film-loops",
         "profile-selection",
-        "sustained-playback"
+        "sustained-playback",
+        "save"
       ],
       "steps": [
         {
@@ -31,6 +32,55 @@
             "movie": "RAKETEN.DXR"
           },
           "label": "login-playback"
+        },
+        {
+          "click": [
+            400,
+            400
+          ],
+          "settle": 120,
+          "expect": {
+            "frame": 5
+          },
+          "label": "login-controls",
+          "when": {
+            "frame": 144
+          }
+        },
+        {
+          "click": [
+            132,
+            220
+          ],
+          "settle": 120,
+          "expect": {
+            "globals.gloginlist": "[#skelett]"
+          },
+          "label": "profile-selected"
+        },
+        {
+          "click": [
+            719,
+            34
+          ],
+          "settle": 3600,
+          "expect": {
+            "movie": "BAUWAGEN__AUSSEN.DXR",
+            "save_generation": {
+              "gte": 1
+            },
+            "/saves/loewe_4.ini": {
+              "contains": "#skelett"
+            }
+          },
+          "label": "wagon-exterior"
+        },
+        {
+          "idle": 3600,
+          "expect": {
+            "movie": "BAUWAGEN__AUSSEN.DXR"
+          },
+          "label": "exterior-playback"
         }
       ]
     }

@@ -3,34 +3,80 @@
   "journeys": [
     {
       "name": "opening-player-screen",
-      "description": "Play the launcher into the player screen and exercise its directory discovery, queued speech and cue-driven actors.",
+      "description": "Discover player folders, register ANNA, retain the profile across reboot and enter the story.",
       "covers": [
         "startup",
         "profile-discovery",
         "linked-audio",
         "cue-points",
-        "sustained-playback"
+        "sustained-playback",
+        "text-entry",
+        "profile-registration",
+        "save",
+        "reboot",
+        "navigation"
       ],
       "steps": [
         {
+          "idle": 3600,
           "expect": {
-            "movie": "START.DXR"
+            "movie": "A000.DXR",
+            "frame": 3
           },
-          "label": "launcher"
+          "label": "player-discovery"
         },
         {
-          "wait": {
-            "movie": "A000.DXR"
+          "command": "text 21 ANNA"
+        },
+        {
+          "idle": 240
+        },
+        {
+          "sprite": 15,
+          "settle": 1800,
+          "expect": {
+            "movie": "A020.DXR",
+            "save_generation": {
+              "gte": 11
+            },
+            "/saves/spieler~1anna~1game.txt": {
+              "contains": "A020"
+            }
           },
-          "ticks": 3600,
-          "label": "player-screen"
+          "label": "registered-player-story"
+        },
+        {
+          "idle": 3600,
+          "label": "story-playback"
+        },
+        {
+          "command": "reboot"
         },
         {
           "idle": 3600,
           "expect": {
-            "movie": "A000.DXR"
+            "movie": "A000.DXR",
+            "frame": 3,
+            "/saves/spieler~1anna~1game.txt": {
+              "contains": "A020"
+            }
           },
-          "label": "opening-playback"
+          "label": "profile-survives-reboot"
+        },
+        {
+          "click": [
+            240,
+            312
+          ],
+          "settle": 120
+        },
+        {
+          "sprite": 15,
+          "settle": 1800,
+          "expect": {
+            "movie": "A020.DXR"
+          },
+          "label": "saved-player-resumes"
         }
       ]
     }

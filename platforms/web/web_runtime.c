@@ -8,6 +8,7 @@
 #include "web_runtime.h"
 #include "compositor.h"
 #include "game.h"
+#include "stream_name.h"
 #include "pointer.h"
 #include "game_profile.h" // generated from the game's game.toml [player] table
 #ifdef DIRECTOR64_WILLY
@@ -265,6 +266,11 @@ static const char *game_movie_path(void *ctx) {
 #ifdef GAME_MOVIE_PATH
   return GAME_MOVIE_PATH;
 #elif defined(GAME_STREAM_ROOT)
+#ifdef GAME_MOVIE_PATHS
+  static const char *const paths[][2] = {GAME_MOVIE_PATHS};
+  const char *movie = director.movie ? director.movie->code->name : "";
+  for (unsigned i = 0; paths[i][0]; i++) if (!strcmp(paths[i][0], movie)) return paths[i][1];
+#endif
   static const char *const folders[][2] = {GAME_MOVIE_FOLDERS};
   const char *name=director.movie ? director.movie->code->name : "";
   const char *split=strstr(name,"__");
@@ -274,6 +280,15 @@ static const char *game_movie_path(void *ctx) {
   return GAME_STREAM_ROOT;
 #else
   return NULL;
+#endif
+}
+static const char *game_stream_name(void *ctx, const char *name) {
+  (void)ctx;
+#ifdef GAME_STREAM_NAMES
+  static const char *const names[] = {GAME_STREAM_NAMES};
+  return dg_stream_name(names, name);
+#else
+  return name;
 #endif
 }
 // The shipped read-only data folder FileIO reads from, or NULL.
@@ -329,7 +344,7 @@ static const dg_movie_t *find(const char *name) {
   }
   return NULL;
 }
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_D10
 // A movie a folder-qualified port names by path (source.rs
 // policy_source_files: FOLDER__NAME): the folder the path names, then the
 // current movie's own folder, then the plain name.
@@ -489,7 +504,13 @@ EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
                       .video_frame = video_frame},
           (size_t)WEB_IMAGE_BUDGET);
   dg_init(&director, &values,
-          (dg_platform_t){.nth_file = game_nth_file, .long_date = game_long_date,
+          (dg_platform_t){.nth_file = game_nth_file, .directory = game_directory, .long_date = game_long_date,
+#ifdef GAME_SAVE_PATHS
+                          .file_paths = true,
+#endif
+#if DG_D10
+                          .stream_name = game_stream_name,
+#endif
                           .read_file = read_file, .write_file = write_file,
                           .sound = sound, .sound_pause = sound_pause, .sound_busy = sound_busy,
                           .sound_break_loop = sound_break_loop,
@@ -529,7 +550,7 @@ static bool step(int x, int y, unsigned buttons) {
     char movie[sizeof(director.next_movie)];
     snprintf(movie, sizeof(movie), "%s", director.next_movie);
     unsigned frame = director.next_movie_frame;
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_D10
     const dg_movie_t *target = find_path(director.next_movie_path, movie);
     char path[96];
     snprintf(path, sizeof(path), "%s", director.next_movie_path);
@@ -676,7 +697,7 @@ EMSCRIPTEN_KEEPALIVE uint32_t *d64_render_pads(void) {
 static int text_field_rect[4];
 EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y) {
 #if DG_EXTENDED
-  if (!booted || values.failed || values.depth || director.text_pending)
+  if (!booted || values.failed || director.text_pending)
     return 0;
   unsigned sprite = dg_mouse_hit(&director, x, y);
   if (!sprite || sprite >= DG_SPRITES || !dg_text_editable(&director, sprite))

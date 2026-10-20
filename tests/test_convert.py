@@ -94,6 +94,37 @@ def test_stored_images_deflate_as_the_players_inflate_them():
     assert zlib.decompress(packed[8:], -15) == raw
 
 
+def test_stream_duplicates_need_an_explicit_preference_and_root_keys_have_no_slash(tmp_path):
+    from director64.project import converter
+
+    def wav(sample):
+        data = bytes([sample]) * 160
+        return (b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt "
+                + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16)
+                + b"data" + struct.pack("<I", len(data)) + data)
+
+    folder = tmp_path / "sounds"
+    folder.mkdir()
+    first, second = wav(1), wav(2)
+    # Containers are detected by magic: retail files also use misleading suffixes.
+    (folder / "Voice.wav").write_bytes(first)
+    (folder / "Voice.aif").write_bytes(second)
+    target = tmp_path / "streams.bin"
+    command = [*converter(), "director", "stream-pack", str(target)]
+    result = subprocess.run([*command, f"={folder}"], capture_output=True, text=True)
+    assert result.returncode and "two sound files" in result.stderr
+    for flag in ("--prefer-wav", "--prefer-lossless"):
+        result = subprocess.run([*command, flag, f"={folder}"], capture_output=True,
+                                text=True, check=True)
+        assert set(json.loads(result.stdout)) == {"voice"}
+        assert target.read_bytes() == first
+    (folder / "Voice.wav").unlink()
+    (folder / "Voice.mp3").write_bytes(first)
+    subprocess.run([*command, "--prefer-lossless", f"={folder}"], check=True,
+                   capture_output=True)
+    assert target.read_bytes() == second
+
+
 def test_ivf_without_a_keyframe_is_refused():
     header = b"DKIF" + struct.pack("<HHIHHIIII", 0, 32, 0x30395056, 16, 16, 15, 1, 1, 0)
     frame = bytes([0x86, 0, 0])  # profile 0, inter frame

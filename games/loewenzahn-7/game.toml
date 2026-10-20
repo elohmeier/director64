@@ -28,10 +28,13 @@ media_root = "DATA"
 entry_movie = "START"
 
 [player]
+stream_paths = true
 # The preferences file, whatever its spelling ("Löwenzahn 7.usr").
 saves = ["*.usr"]
 
 [convert]
+stream_prefer = "lossless"
+streams = ["ABC=DATA/ABC", "BASTELKE/SOUNDS=DATA/BASTELKE/SOUNDS", "FABRIKSP=DATA/FABRIKSP", "FOTOLADE/SOUNDS=DATA/FOTOLADE/SOUNDS", "FREIZEIT=DATA/FREIZEIT", "FREIZEIT/SOUNDS=DATA/FREIZEIT/SOUNDS", "GALERIE=DATA/GALERIE", "KLAVIER/SOUNDS/SPRECHER=DATA/KLAVIER/SOUNDS/SPRECHER", "KOCHBUCH/SOUNDS=DATA/KOCHBUCH/SOUNDS", "LABYRINT/SOUNDS=DATA/LABYRINT/SOUNDS", "LEXIKON/SOUNDS=DATA/LEXIKON/SOUNDS", "LEXIKON/SOUNDS/KOMPONIS=DATA/LEXIKON/SOUNDS/KOMPONIS", "MOOR=DATA/MOOR", "MOOR/SOUNDS=DATA/MOOR/SOUNDS", "PETERSGA=DATA/PETERSGA", "SCHNITTP=DATA/SCHNITTP", "SCHWEIN1=DATA/SCHWEIN1", "SCHWEINE=DATA/SCHWEINE", "SOUNDMEM/SOUNDS=DATA/SOUNDMEM/SOUNDS", "SOUNDMEM/SOUNDS/SPRECHER=DATA/SOUNDMEM/SOUNDS/SPRECHER", "SOUNDS=DATA/SOUNDS", "WIW=DATA/WIW"]
 # DirectMedia's MPEG-1 movies, wherever the disc keeps them.
 external_media = { root = "DATA", extensions = ["MPG"], bind = "directmedia" }
 
@@ -43,3 +46,19 @@ handler = "getregoptimal"
 all = true
 calls = "glunew"
 body = "return serNum"
+
+# Free play has no task playlist. The source still indexes its first entry
+# when a key is released; keep its release cleanup and skip task scoring.
+[[convert.patch]]
+id = "piano-free-play-empty-list"
+movie = "KLAVIER__KLAVIER.DXR"
+cast = "scripts"
+member = 4
+handler = "mymouseup"
+source_sha256 = "596d282eb85fe3dc245ec58876a1c6f6bc477b3ca329499729354ff149337368"
+prepend = '''
+if count(gPlayList) = 0 then
+  set pClickedOnMe to 0
+  exit
+end if
+'''

@@ -10,6 +10,7 @@ import os
 import platform
 import re
 import signal
+import statistics
 import subprocess
 import sys
 import time
@@ -50,7 +51,9 @@ def plans(game: GameSpec) -> list[dict]:
 def expect(state: dict, expected: dict) -> None:
     for path, wanted in expected.items():
         actual = state
-        for key in path.split("."):
+        keys = ([key.replace("~1", "/").replace("~0", "~") for key in path[1:].split("/")]
+                if path.startswith("/") else path.split("."))
+        for key in keys:
             actual = actual.get(key) if isinstance(actual, dict) else None
         if isinstance(wanted, dict):
             if set(wanted) == {"gte"}:
@@ -187,7 +190,8 @@ def performance(directory: Path) -> dict:
 
 def compare(current: dict, baseline: dict, slowdown: float, memory_growth: float) -> list[str]:
     errors = []
-    for key in ("source_sha256", "source_image", "plan_sha256", "environment"):
+    for key in ("source_sha256", "source_image", "plan_sha256", "environment",
+                "runner_sha256", "harness_sha256"):
         if current.get(key) != baseline.get(key):
             errors.append(f"baseline {key} differs; record a matching baseline")
     if baseline.get("status") != "passing":
@@ -210,6 +214,45 @@ def compare(current: dict, baseline: dict, slowdown: float, memory_growth: float
         elif new["elapsed_ms"] > old["elapsed_ms"] * slowdown:
             errors.append(f"scene {scene} is slower than baseline × {slowdown:g}")
     return errors
+
+
+def aggregate(reports: list[dict]) -> dict:
+    """Median timings across independent cold processes; retain peak memory.
+
+    Every repetition must pass correctness and run the identical command stream.
+    Keep ranges so a noisy benchmark remains visible in the review evidence.
+    """
+    result = {k: v for k, v in reports[0].items() if k != "performance"}
+    result.update(repetitions=len(reports), aggregation="median-time/peak-memory-v1")
+    if any(r["status"] != "passing" for r in reports):
+        return result | {"status": "failed", "error": "one or more repetitions failed",
+                         "repetition_statuses": [r["status"] for r in reports]}
+    for r in reports[1:]:
+        if any(r.get(k) != reports[0].get(k) for k in
+               ("source_sha256", "source_image", "plan_sha256", "environment", "build",
+                "runner_sha256", "harness_sha256")):
+            raise ValueError("repetitions differ in source, plan, environment, build or harness")
+    metrics = [r["performance"] for r in reports]
+    if any(m["command_stream_sha256"] != metrics[0]["command_stream_sha256"] for m in metrics):
+        raise ValueError("repetition command streams differ")
+    combined = dict(metrics[0])
+    ranges = {}
+    for key in ("elapsed_ms", "cpu_ms", "boot_ms", "p95_command_ms", "max_command_ms"):
+        values = [m[key] for m in metrics]
+        combined[key] = statistics.median(values)
+        ranges[key] = {"min": min(values), "max": max(values)}
+    for key in ("peak_rss_bytes", "wasm_bytes"):
+        combined[key] = max(m[key] for m in metrics)
+    combined["scenes"] = {}
+    for scene, first in metrics[0]["scenes"].items():
+        samples = [m["scenes"].get(scene) for m in metrics]
+        if any(s is None or s["commands"] != first["commands"] for s in samples):
+            raise ValueError(f"repetition scene coverage differs: {scene}")
+        combined["scenes"][scene] = first | {
+            key: statistics.median(s[key] for s in samples)
+            for key in ("elapsed_ms", "max_command_ms")}
+    result.update(performance=combined, timing_ranges=ranges)
+    return result
 
 
 def environment() -> dict:
@@ -323,6 +366,8 @@ def main(game: GameSpec | None, argv: list[str]) -> int:
             or not math.isfinite(args.max_slowdown) or args.max_slowdown < 1
             or not math.isfinite(args.max_memory_growth) or args.max_memory_growth < 1):
         parser.error("timeout/repeat must be positive; regression ratios must be finite and >= 1")
+    if args.baseline and args.repeat == 2:
+        parser.error("use at least 3 repetitions for a median timing comparison")
     if args.activity and game and game.slug == "findus-mucklas" and args.name == "suite":
         args.name = "full_journey"
     games = [game] if game else [GameSpec.load(p.parent.name)
@@ -375,11 +420,12 @@ def main(game: GameSpec | None, argv: list[str]) -> int:
         raise ValueError("baseline and output must be different directories")
     results = []
     for selected, plan in cases:
+        repetitions = []
         for repeat in range(args.repeat):
             relative = Path(selected.slug) / plan["name"] / str(repeat + 1)
             try:
                 result = run_case(selected, plan, output / relative, args.timeout,
-                                  baseline / relative if baseline else None,
+                                  baseline / relative if baseline and args.repeat == 1 else None,
                                   args.max_slowdown, args.max_memory_growth)
             except (OSError, ValueError) as error:
                 result = {"game": selected.slug, "journey": plan["name"],
@@ -387,12 +433,37 @@ def main(game: GameSpec | None, argv: list[str]) -> int:
                 (output / relative).mkdir(parents=True, exist_ok=True)
                 (output / relative / "report.json").write_text(json.dumps(result, indent=2) + "\n")
                 print(f"{selected.slug}/{plan['name']}: failed: {error}", flush=True)
-            results.append(result)
-            output.mkdir(parents=True, exist_ok=True)
-            (output / "summary.json").write_text(json.dumps({
+            repetitions.append(result)
+        if args.repeat > 1:
+            try:
+                result = aggregate(repetitions)
+                if baseline and result["status"] == "passing":
+                    path = baseline / selected.slug / plan["name"] / "median/report.json"
+                    if not path.is_file():
+                        raise ValueError(f"missing median baseline: {path}")
+                    old = json.loads(path.read_text())
+                    if (old.get("repetitions") != args.repeat or
+                            old.get("aggregation") != result["aggregation"]):
+                        raise ValueError("baseline repetition count/aggregation differs")
+                    failures = compare(result, old, args.max_slowdown, args.max_memory_growth)
+                    result["performance_gate"] = "failed" if failures else "passing"
+                    if failures:
+                        result.update(status="failed", regressions=failures)
+            except (OSError, ValueError) as error:
+                result = {"game": selected.slug, "journey": plan["name"], "status": "failed",
+                          "error": str(error)}
+            folder = output / selected.slug / plan["name"] / "median"
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "report.json").write_text(json.dumps(result, indent=2) + "\n")
+            print(f"{selected.slug}/{plan['name']} median: {result['status']}", flush=True)
+            for failure in result.get("regressions", []):
+                print("  " + failure, flush=True)
+        results.append(result)
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "summary.json").write_text(json.dumps({
                 "schema_version": 1, "status": "passing" if all(
                     r["status"] == "passing" for r in results) else "failed",
                 "results": results, "unavailable": unavailable,
                 "hardware_qualified": False, "original_projector_compared": False,
-            }, indent=2) + "\n")
+        }, indent=2) + "\n")
     return int(any(r["status"] != "passing" for r in results))
