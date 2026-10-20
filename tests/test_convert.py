@@ -73,7 +73,7 @@ def test_mpeg_export_separates_silence_alignment_and_failures():
 
 
 @needs_ffmpeg
-def test_only_long_wavs_become_opus():
+def test_every_pcm_clip_becomes_opus_with_source_sample_bounds():
     def wav(seconds: float) -> bytes:
         rate, frames = 8000, int(8000 * seconds)
         data = bytes(frames * 2)
@@ -81,10 +81,12 @@ def test_only_long_wavs_become_opus():
                 + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
                 + b"data" + struct.pack("<I", len(data)) + data)
 
-    short = wav(1)
-    assert convert.opus(short) == short
     assert convert.opus(b"ID3 mp3") == b"ID3 mp3"
-    assert convert.opus(wav(convert.OPUS_SECONDS))[:4] == b"OggS"
+    for seconds in (0.01, 0.1, 1, 8):
+        encoded = convert.opus(wav(seconds))
+        assert encoded[:4] == b"OggS"
+        assert b"D64_SOURCE_RATE=8000" in encoded
+        assert f"D64_SOURCE_FRAMES={int(seconds * 8000)}".encode() in encoded
 
 
 def test_stored_images_deflate_as_the_players_inflate_them():
@@ -341,3 +343,12 @@ def test_missing_or_duplicated_handlers_are_rejected():
     for handlers in ([], program["handlers"] * 2):
         with pytest.raises(ValueError, match="identities"):
             check_handlers(source, {"handlers": handlers})
+
+
+@pytest.mark.parametrize(('kind', 'raw'), [
+    ('audio', b'RIFF' + bytes(40)), ('streams', b'RIFF' + bytes(40)),
+    ('images', b'FDI1' + bytes(100)), ('video', b'raw pixels'),
+])
+def test_shipping_packs_refuse_raw_media(kind, raw):
+    with pytest.raises(ValueError, match='refusing to ship raw'):
+        convert.validate_encoded_media(kind, 'fixture', raw)

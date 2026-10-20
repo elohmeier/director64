@@ -8,7 +8,7 @@ import {createInterface} from "node:readline";
 import {join} from "node:path";
 import {pathToFileURL} from "node:url";
 import {videoProbe} from "./video.mjs";
-import {decodeWav, isOpusSound, readOpusHeader} from "../site/audio.js";
+import {decodeWav, isOpusSound, readOpusHeader, isOggOpus, oggOpusInfo} from "../site/audio.js";
 import {validateFlashSound} from "../site/flash-audio.js";
 import {probeMetrics} from "./metrics.mjs";
 
@@ -87,7 +87,8 @@ const module = await createDirector64({
       if (!checkedSounds.has(sound.name)) {
         const bytes = audio(sound.name);
         if (!bytes) throw new Error(`missing Flash event sound ${sound.name}`);
-        const decoded = isOpusSound(bytes) ? readOpusHeader(bytes) : decodeWav(bytes);
+        const decoded = isOpusSound(bytes) ? readOpusHeader(bytes) :
+          isOggOpus(bytes) ? oggOpusInfo(bytes) : decodeWav(bytes);
         if ((decoded.sourceRate ?? decoded.rate) !== sound.rate ||
             (decoded.sourceFrames ?? decoded.frames) !== sound.frames)
           throw new Error(`Flash event sound metadata mismatch ${sound.name}`);

@@ -16,6 +16,7 @@ typedef struct {
 sound_t *sound_retain(sound_t *);
 void sound_release(sound_t *);
 size_t sound_bytes(const sound_t *);
+sound_t *sound_source_bounds(sound_t *, const uint8_t *, size_t);
 bool is_wav(const uint8_t *data, size_t length);
 // A PCM RIFF WAVE file, 8 or 16 bits, mono or stereo, as the converter
 // writes them (platforms/web/site/audio.js decodeWav). NULL when malformed.

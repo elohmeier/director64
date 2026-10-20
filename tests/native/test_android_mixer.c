@@ -31,6 +31,9 @@ void sound_release(sound_t *s) {
   }
 }
 size_t sound_bytes(const sound_t *s) { return s->frames * 2; }
+sound_t *sound_source_bounds(sound_t *s, const uint8_t *d, size_t n) {
+  (void)d; (void)n; return s;
+}
 bool is_wav(const uint8_t *d, size_t n) {
   (void)d;
   (void)n;
@@ -75,11 +78,12 @@ sound_t *decode_media(int fd, uint64_t o, uint64_t n, char *error, size_t cap) {
     stop_voice(0);
     stamp = 30;
   }
+  if (trial == 4) stamp = 10;
   stopping = true;
   sound_t *s = calloc(1, sizeof(*s));
   s->rate = 100;
   s->channels = 1;
-  s->frames = (trial == 0 ? 5 : 60) * 100;
+  s->frames = trial == 4 ? 10 : (trial == 0 ? 5 : 60) * 100;
   s->pcm = calloc(s->frames, 2);
   for (unsigned i = 0; i < s->frames; i++)
     s->pcm[i] = 10000;
@@ -91,7 +95,7 @@ int main(void) {
   sound_pack = &pack;
   stream_pack = &pack;
   output_rate = 100;
-  for (trial = 0; trial < 4; trial++) {
+  for (trial = 0; trial < 5; trial++) {
     stamp = 0;
     stopping = false;
     job_count = 1;
@@ -106,7 +110,7 @@ int main(void) {
       assert(!voices[v].sound);
     else {
       assert(voices[v].sound);
-      assert(voices[v].position == (trial == 0 ? 0 : trial == 1 ? 200 : 600));
+      assert(voices[v].position == (trial == 0 || trial == 4 ? 0 : trial == 1 ? 200 : 600));
       if (trial == 0) {
         float out[20];
         render(NULL, NULL, out, 10);

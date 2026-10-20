@@ -752,8 +752,11 @@ impl<'a> Statements<'a> {
                 } else if low.starts_with("sound ") {
                     let (command, operands) = text[6..].split_once(' ').unwrap_or((&text[6..], ""));
                     let args = Self::parse_list(operands, "invalid sound command")?;
+                    // The classic close verb stops the channel, as stop does.
+                    let command = lower(command);
+                    let command = if command == "close" { "stop" } else { &command };
                     n.insert("op".into(), json!("call"));
-                    n.insert("value".into(), json!(["call", format!("sound_{}", lower(command)), args]));
+                    n.insert("value".into(), json!(["call", format!("sound_{command}"), args]));
                 } else if low.starts_with("when mouseup then ") {
                     n.insert("op".into(), json!("set"));
                     n.insert("target".into(), json!(["the", "mouseupscript"]));

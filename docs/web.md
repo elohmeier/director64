@@ -19,9 +19,14 @@ uv run --locked director64 web --game findus-workshop --serve
 
 The build converts the game ([architecture.md](architecture.md#conversion)),
 validates the package with the C loader, compiles the runtime with `emcc`
-in a pinned Emscripten container (no network), and writes the site to
+in a pinned Emscripten container, and writes the site to
 `dist/<slug>/<source>/web/` with a probe launcher beside it,
 `dist/<slug>/<source>/director-web-probe`.
+
+The first build prepares the pinned SDK's zlib port in the ignored
+`build/tools/emscripten-cache/` and needs network access for that download.
+Game compilation then runs with networking disabled. Packs retain their
+compressed images and Opus audio; the player decodes individual assets as needed.
 
 ## Site contents
 

@@ -1,4 +1,5 @@
 #include "decode.h"
+#include "opus_source.h"
 #include <android/log.h>
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaExtractor.h>
@@ -81,13 +82,42 @@ static double ogg_opus_duration(const uint8_t *data, size_t length) {
 }
 
 double wav_duration(const uint8_t *data, size_t length) {
+  uint32_t rate, frames;
+  if (opus_source(data, length, &rate, &frames)) return (double)frames / rate;
   wav_t wav;
   if (!parse_wav(data, length, &wav))
     return ogg_opus_duration(data, length);
   return (double)(wav.bytes / (wav.bits / 8 * wav.channels)) / wav.rate;
 }
 
+static sound_t *new_sound(unsigned channels, unsigned rate, uint32_t frames);
+sound_t *sound_source_bounds(sound_t *sound, const uint8_t *data, size_t length) {
+  uint32_t rate, frames;
+  if (!sound || !data || !opus_source(data, length, &rate, &frames)) return sound;
+  if (rate == sound->rate && frames == sound->frames) return sound;
+  // Restore source-rate samples so authored loops and Flash envelopes retain
+  // their sample units. Platform Opus output normally runs at 48 kHz.
+  sound_t *out = new_sound(sound->channels, rate, frames);
+  if (out && sound->frames) {
+    for (uint32_t i = 0; i < frames; i++) {
+      double position = (double)i * sound->rate / rate;
+      uint32_t left = position < sound->frames ? (uint32_t)position : sound->frames - 1;
+      uint32_t right = left + 1 < sound->frames ? left + 1 : left;
+      double fraction = position - left;
+      if (fraction > 1) fraction = 1;
+      for (unsigned c = 0; c < sound->channels; c++) {
+        int a = sound->pcm[(size_t)left * sound->channels + c];
+        int b = sound->pcm[(size_t)right * sound->channels + c];
+        out->pcm[(size_t)i * sound->channels + c] = (int16_t)(a + (b - a) * fraction);
+      }
+    }
+  }
+  sound_release(sound);
+  return out;
+}
+
 static sound_t *new_sound(unsigned channels, unsigned rate, uint32_t frames) {
+  if (!channels || frames > SIZE_MAX / channels / 2) return NULL;
   sound_t *s = calloc(1, sizeof(sound_t));
   if (!s)
     return NULL;

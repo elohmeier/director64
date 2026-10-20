@@ -31,6 +31,7 @@ done
 compile xml_optional_alias_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 \
     tests/native/test_xml_optional_alias.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile audio_release tests/native/test_audio_release.c
+compile packed_asset tests/native/test_packed_asset.c platforms/web/packed_asset.c -lz
 compile stream_path tests/native/test_stream_path.c
 compile android_decode -Itests/native/android_stubs tests/native/test_android_decode.c
 compile android_input tests/native/test_android_input.c

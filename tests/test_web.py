@@ -56,7 +56,7 @@ def test_runtime_is_built_for_the_family_switches_and_package():
     assert "_d64_load_package" in exports and "_d64_rpc" in exports
 
 
-def test_site_packs_store_deflated_images_inflated(tmp_path):
+def test_site_packs_keep_images_compressed(tmp_path):
     raw = b"pixels" * 50
     deflate = zlib.compressobj(9, zlib.DEFLATED, -15)
     stored = b"D64Z" + struct.pack(">I", len(raw)) + deflate.compress(raw) + deflate.flush()
@@ -67,8 +67,8 @@ def test_site_packs_store_deflated_images_inflated(tmp_path):
     (source / "images.json").write_text(json.dumps({"a.fdi": [4, len(stored)], "w.fdi": [0, 4]}))
     web.write_pack(source, "images", assets)
     assert json.loads((assets / "images.json").read_text()) == {
-        "w.fdi": [0, 4], "a.fdi": [4, len(raw)]}
-    assert (assets / "images.bin").read_bytes() == b"D64W" + raw
+        "w.fdi": [0, 4], "a.fdi": [4, len(stored)]}
+    assert (assets / "images.bin").read_bytes() == b"D64W" + stored
     with pytest.raises(ValueError, match="length"):
         web.inflated(b"D64Z" + struct.pack(">I", 1) + stored[8:])
 

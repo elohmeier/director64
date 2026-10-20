@@ -67,6 +67,52 @@ export function loopBounds(start, end, frames) {
 export function isOpusSound(bytes) {
   return bytes.length > 8 && bytes[0] === 0x44 && bytes[1] === 0x36 && bytes[2] === 0x34 && bytes[3] === 0x41;
 }
+export function isOggOpus(bytes) {
+  return bytes.length >= 47 && String.fromCharCode(...bytes.subarray(0, 4)) === "OggS" &&
+    String.fromCharCode(...bytes.subarray(28, 36)) === "OpusHead";
+}
+export function oggOpusInfo(bytes) {
+  if (!isOggOpus(bytes)) throw new Error("not Ogg Opus");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const preSkip = view.getUint16(38, true);
+  let granule = 0, sourceRate = 0, sourceFrames = null, at = 0;
+  const decoder = new TextDecoder();
+  while (at < bytes.length) {
+    if (at + 27 > bytes.length || decoder.decode(bytes.subarray(at, at + 4)) !== "OggS")
+      throw new Error("invalid Ogg page");
+    const segments = bytes[at + 26], body = at + 27 + segments;
+    if (body > bytes.length) throw new Error("truncated Ogg lacing");
+    let size = 0;
+    for (let i = at + 27; i < body; i++) size += bytes[i];
+    const end = body + size;
+    if (end > bytes.length) throw new Error("truncated Ogg page");
+    const position = view.getBigInt64(at + 6, true);
+    if (position >= 0n) granule = Number(position);
+    if (decoder.decode(bytes.subarray(body, body + 8)) === "OpusTags") {
+      let p = body + 8;
+      if (p + 4 > end) throw new Error("truncated Opus tags");
+      p += 4 + view.getUint32(p, true);
+      if (p + 4 > end) throw new Error("truncated Opus vendor");
+      const count = view.getUint32(p, true); p += 4;
+      for (let i = 0; i < count; i++) {
+        if (p + 4 > end) throw new Error("truncated Opus comment");
+        const length = view.getUint32(p, true); p += 4;
+        if (p + length > end) throw new Error("truncated Opus comment body");
+        const text = decoder.decode(bytes.subarray(p, p + length)); p += length;
+        if (text.startsWith("D64_SOURCE_RATE=")) sourceRate = Number(text.slice(16));
+        if (text.startsWith("D64_SOURCE_FRAMES=")) sourceFrames = Number(text.slice(18));
+      }
+    }
+    at = end;
+  }
+  const duration = Math.max(0, granule - preSkip) / 48000;
+  if (!sourceRate) sourceRate = view.getUint32(40, true) || 48000;
+  if (sourceFrames == null) sourceFrames = Math.round(duration * sourceRate);
+  if (!Number.isSafeInteger(sourceRate) || sourceRate <= 0 ||
+      !Number.isSafeInteger(sourceFrames) || sourceFrames < 0)
+    throw new Error("invalid Opus source sample bounds");
+  return {rate: sourceRate, frames: sourceFrames, duration: sourceFrames / sourceRate};
+}
 export function readOpusHeader(bytes) {
   const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(4, true);
   const header = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + length)));
@@ -149,7 +195,7 @@ export class AudioEngine {
     }
     const bytes = this.lookup(name);
     if (!bytes) throw new Error(`missing sound ${name}`);
-    if (isOpusSound(bytes)) {
+    if (isOpusSound(bytes) || isOggOpus(bytes)) {
       this.whenLoaded(name);
       return null;
     }
@@ -163,7 +209,9 @@ export class AudioEngine {
     if (entry) return Promise.resolve(entry);
     if (!this.decoding.has(name)) {
       const bytes = this.lookup(name);
-      const decoding = (bytes ? decodeOpusSound(this.context, bytes) : Promise.reject(new Error(`missing sound ${name}`)))
+      const decoding = (bytes ? (isOggOpus(bytes)
+        ? this.context.decodeAudioData(bytes.slice().buffer).then((buffer) => ({buffer, ...oggOpusInfo(bytes)}))
+        : decodeOpusSound(this.context, bytes)) : Promise.reject(new Error(`missing sound ${name}`)))
         .then((decoded) => this.keep(name, decoded))
         .finally(() => this.decoding.delete(name));
       this.decoding.set(name, decoding);
@@ -183,7 +231,7 @@ export class AudioEngine {
   }
   // Starts `start(entry, offset)` now when the sound is ready, or once it is
   // decoded, `offset` seconds in by then, unless the channel moved on.
-  whenReady(channel, name, start) {
+  whenReady(channel, name, start, preserveOnset = false) {
     let entry;
     try {
       entry = this.load(name);
@@ -198,7 +246,8 @@ export class AudioEngine {
     this.whenLoaded(name).then((ready) => {
       if (this.pending[channel] !== token) return;
       this.pending[channel] = null;
-      start(ready, Math.max(0, (token.pausedAt ?? this.context.currentTime) - token.requested - token.held));
+      const late = Math.max(0, (token.pausedAt ?? this.context.currentTime) - token.requested - token.held);
+      start(ready, preserveOnset && ready.frames < ready.rate ? 0 : late);
     }, (error) => {
       if (this.pending[channel] !== token) return;
       this.pending[channel] = null;
@@ -222,7 +271,7 @@ export class AudioEngine {
       this.playback[channel] = {buffer, offset, looping: looping && released == null,
         loopStart: start, loopEnd: end};
       if (!this.paused[channel]) this.startChannel(channel);
-    });
+    }, !looping);
   }
   // A playFile stream (the streams pack): WAV starts at once, as members do;
   // MP3 decodes in the browser first and starts when ready, unless the
@@ -352,6 +401,8 @@ export class AudioEngine {
       if (isOpusSound(bytes)) {
         const {frames, sampleRate} = readOpusHeader(bytes);
         duration = frames / sampleRate;
+      } else if (isOggOpus(bytes)) {
+        duration = oggOpusInfo(bytes).duration;
       } else {
         const {frames, rate} = wavInfo(bytes);
         duration = frames / rate;

@@ -12,6 +12,7 @@ not be redistributed.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import functools
 import hashlib
 import http.server
@@ -68,6 +69,7 @@ EXPORTS = (
     "d64_render_pads",
     "d64_load_package",
     "d64_package_error",
+    "d64_unpack_asset",
 )
 # The asset packs a game plays from.
 PACKS = ("images", "audio", "fonts", "streams", "data", "video", "print")
@@ -77,6 +79,7 @@ SITE_FILES = (
     "player.js",
     "ui.js",
     "audio.js",
+    "packed.js",
     "flash-audio.js",
     "saves.js",
     "video.js",
@@ -215,6 +218,7 @@ def sources(game: GameSpec) -> list[str]:
     )
     return [
         "platforms/web/web_main.c",
+        "platforms/web/packed_asset.c",
         "platforms/web/web_runtime.c",
         "platforms/web/compositor.c",
         "platforms/web/webp_image.c",
@@ -263,6 +267,7 @@ def compile_command(game: GameSpec, output: Path) -> list[str]:
         *sources(game),
         "--js-library",
         "platforms/web/library.js",
+        "-sUSE_ZLIB=1",
         "-sMODULARIZE=1",
         "-sEXPORT_ES6=1",
         "-sEXPORT_NAME=createDirector64",
@@ -287,6 +292,23 @@ def git_revision(root: Path) -> dict:
 
 
 def emscripten(root: Path, engine: str, command: list[str]) -> None:
+    cache = root / "build/tools/emscripten-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    # Seed the pinned image's ordinary sysroot once, then build its pinned
+    # zlib port. Actual game compilation remains offline. The lock also
+    # covers parallel game builds sharing this cache.
+    with (cache.parent / "emscripten-cache.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        stamp = cache / "director64-ready"
+        if not stamp.is_file() or stamp.read_text() != EMSDK_IMAGE + ":zlib":
+            subprocess.run([
+                engine, "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}",
+                "--volume", f"{cache}:/d64-cache",
+                EMSDK_IMAGE, "sh", "-c",
+                "cp -a /emsdk/upstream/emscripten/cache/. /d64-cache/ && "
+                "EM_CACHE=/d64-cache embuilder build zlib",
+            ], check=True)
+            stamp.write_text(EMSDK_IMAGE + ":zlib")
     subprocess.run(
         [
             engine,
@@ -297,9 +319,13 @@ def emscripten(root: Path, engine: str, command: list[str]) -> None:
             f"{os.getuid()}:{os.getgid()}",
             "--volume",
             f"{root}:/workdir",
+            "--volume",
+            f"{cache}:/d64-cache",
             "--workdir",
             "/workdir",
             EMSDK_IMAGE,
+            "env",
+            "EM_CACHE=/d64-cache",
             *command,
         ],
         check=True,
@@ -495,16 +521,9 @@ def inflated(data: bytes) -> bytes:
 
 
 def write_pack(source: Path, kind: str, assets: Path) -> dict:
-    """One asset pack of the converted game into the site, images inflated."""
+    """Copy encoded records unchanged; players decode assets on demand."""
     index = json.loads((source / f"{kind}.json").read_text())
     blob = (source / f"{kind}.bin").read_bytes()
-    if kind == "images":
-        out, rebuilt = bytearray(), {}
-        for name, (offset, length, *rest) in sorted(index.items(), key=lambda e: e[1][0]):
-            data = inflated(blob[offset : offset + length])
-            rebuilt[name] = [len(out), len(data), *rest]
-            out += data
-        index, blob = rebuilt, bytes(out)
     (assets / f"{kind}.bin").write_bytes(blob)
     (assets / f"{kind}.json").write_text(json.dumps(index, separators=(",", ":")) + "\n")
     return {"file": f"assets/{kind}.bin", "index": f"assets/{kind}.json", "bytes": len(blob)}

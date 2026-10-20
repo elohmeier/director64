@@ -189,3 +189,16 @@ test("video duration reads cached metadata without allocating decoded samples", 
   assert.equal(audio.duration("missing"), 0);
   assert.match(audio.errors[0], /missing sound missing/);
 });
+
+test("first-use Opus decoding cannot consume a short one-shot cue", async () => {
+  const {audio, ctx} = engine();
+  let ready;
+  audio.load = () => null;
+  audio.whenLoaded = () => new Promise((resolve) => { ready = resolve; });
+  audio.play(0, "click", false, 0, 0);
+  ctx.currentTime = 1;
+  ready({buffer: {duration: 0.05}, rate: 22050, frames: 1102});
+  await Promise.resolve();
+  assert.equal(ctx.sources.length, 1);
+  assert.equal(ctx.sources[0].offset, 0);
+});

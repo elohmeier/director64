@@ -6,7 +6,7 @@ packs, for the Android TV APK and the web player alike (docs/architecture.md).
 
 Every stage is the Rust converter's (compiler/, `director64-aot`), run on the
 host, except the Director file parse, which is ProjectorRays under Node
-(tools/director/dump.mjs). FFmpeg encodes long sounds as Opus and video as
+(tools/director/dump.mjs). FFmpeg encodes PCM sounds as Opus and video as
 VP9; images pack as lossless WebP where that is smaller (tools/convert/
 webp_tool.c), and the ports that measure their fonts do so with
 tools/convert/font_metrics.c. The manifest is written last, so a directory without one
@@ -42,10 +42,6 @@ GAME_FILES = ("game.d64p", *(f"{kind}.{ext}" for kind in PACKS for ext in ("bin"
 # libwebp lossless method 2 at quality 50: within 5% of its smallest output at
 # a fiftieth of the time.
 WEBP_METHOD, WEBP_QUALITY = 2, 50
-# A sound of OPUS_SECONDS or more (soundtracks, long speech) goes to Ogg Opus,
-# which the players decode in the background; shorter ones stay WAV so they
-# start at once.
-OPUS_SECONDS = 8
 # VP9 profile 0 at constrained quality: CRF 30 up to 600 kbit/s, which on
 # Löwenzahn's noisiest MPEG-1 clip scores above VP8 at 900 kbit/s (SSIM 0.960
 # against 0.957) at 61% of its size. One coded frame per input frame (no
@@ -503,6 +499,9 @@ class Converter:
         self.report["videos"] = len(packs["video"])
 
     def write(self, packs: dict) -> None:
+        for kind in ("images", "audio", "streams", "video"):
+            for name, entry in packs[kind].items():
+                validate_encoded_media(kind, name, entry[0] if isinstance(entry, tuple) else entry)
         out = self.out
         if out.exists():
             shutil.rmtree(out)
@@ -532,6 +531,25 @@ class Converter:
         shutil.copyfile(program, self.game.work / "program.json")
 
 
+def validate_encoded_media(kind: str, name: str, data: bytes) -> None:
+    """Raw media must never slip into a shipping asset pack."""
+    if kind == "images":
+        valid = data[:4] in (b"D64W", b"D64Z")
+    elif kind in ("audio", "streams"):
+        valid = (data[:4] == b"OggS" or data[:3] == b"ID3"
+                 or len(data) >= 2 and data[0] == 0xff and data[1] & 0xe0 == 0xe0)
+    elif kind == "video":
+        try:
+            length = struct.unpack_from("<I", data)[0]
+            valid = json.loads(data[4:4 + length])["codec"] == VP9_CODEC
+        except (ValueError, KeyError, struct.error):
+            valid = False
+    else:
+        raise ValueError(f"unknown media pack: {kind}")
+    if not valid:
+        raise ValueError(f"{kind}/{name}: media is not encoded; refusing to ship raw bytes")
+
+
 def deflated(data: bytes) -> bytes:
     """A stored image as "D64Z", its length (u32 big-endian) and raw deflate
     (compiler/src/convert/files.rs), which the players inflate on load."""
@@ -555,15 +573,27 @@ def ffmpeg(args: list, data: bytes | None = None, *, recovery_log: Path | None =
 
 
 def opus(wav: bytes) -> bytes:
-    """A WAV of OPUS_SECONDS or more as Ogg Opus; anything else as it is."""
+    """Every PCM WAV as Ogg Opus, with exact source sample bounds in tags."""
     if len(wav) < 44 or wav[:4] != b"RIFF":
         return wav
     channels = struct.unpack_from("<H", wav, 22)[0]
-    per_second = struct.unpack_from("<I", wav, 28)[0]
-    if not per_second or (len(wav) - 44) / per_second < OPUS_SECONDS:
-        return wav
+    rate = struct.unpack_from("<I", wav, 24)[0]
+    stride = struct.unpack_from("<H", wav, 32)[0]
+    if not rate or not stride or (len(wav) - 44) % stride:
+        raise ValueError("invalid canonical PCM WAV")
+    frames = (len(wav) - 44) // stride
+    if not frames:
+        # Opus needs an audio packet even for an authored empty sound.
+        # One silent input frame makes it decodable; source tags retain zero.
+        sample = bytes([128 if struct.unpack_from("<H", wav, 34)[0] == 8 else 0]) * stride
+        padded = bytearray(wav + sample)
+        struct.pack_into("<I", padded, 4, len(padded) - 8)
+        struct.pack_into("<I", padded, 40, stride)
+        wav = bytes(padded)
     return ffmpeg(["-f", "wav", "-i", "pipe:0", "-c:a", "libopus", "-b:a",
                    "96k" if channels > 1 else "64k", "-vbr", "on", "-application", "audio",
+                   "-metadata", f"D64_SOURCE_RATE={rate}",
+                   "-metadata", f"D64_SOURCE_FRAMES={frames}",
                    "-f", "ogg", "pipe:1"], wav)
 
 

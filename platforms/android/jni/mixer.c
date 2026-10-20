@@ -326,6 +326,10 @@ static void *decoder(void *arg) {
     else
       sound = decode_media(job.stream ? stream_pack->fd : sound_pack->fd, job.offset,
                            job.length, decode_error, sizeof(decode_error));
+    if (sound) {
+      sound = sound_source_bounds(sound, job.bytes, job.length);
+      if (!sound) snprintf(decode_error, sizeof(decode_error), "could not restore source audio bounds");
+    }
     if (!sound)
       LOG("could not decode %s", job.name);
     pthread_mutex_lock(&lock);
@@ -333,9 +337,15 @@ static void *decoder(void *arg) {
       fail(decode_error, job.name);
     if (sound && !job.stream)
       keep(job.name, sound);
-    if (sound && voices[job.voice].pending == job.token)
+    if (sound && voices[job.voice].pending == job.token) {
+      double position = pending_position(&voices[job.voice], active_now());
+      // A first-use codec startup must not consume an entire short click or
+      // truncate its attack. Video/stream clocks and loops retain their time.
+      if (!job.stream && job.voice < CHANNELS && !job.looping && sound->frames < sound->rate)
+        position = 0;
       start(job.voice, sound_retain(sound), job.looping, job.loop_start, job.loop_end,
-            pending_position(&voices[job.voice], active_now()));
+            position);
+    }
     sound_release(sound);
   }
   pthread_mutex_unlock(&lock);

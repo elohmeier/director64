@@ -54,6 +54,10 @@ The relevant facts concern archive ownership, score extents, palette lookup,
 raw sound extents and rich-text backing images. No ScummVM implementation or
 stock tile pixels are incorporated. The eight Löwenzahn 2 stock tiles are read
 from its original executable, with the owner and byte range independently hashed.
+The classic `sound close` command normalizes to `sound stop`, matching the
+reference's `b_sound` behavior and Löwenzahn 2's recovered logo-skip handler.
+This also covers the game's later uses of that verb; an Android log exposed
+the previously missing service when the publisher screen was clicked early.
 The ProjectorRays version and WASM remain pinned and unchanged; a bounded host
 adapter recovers Afterburner SWA sound resources before normal conversion.
 

@@ -10,6 +10,7 @@ import {Presenter, WakeLock} from "./screen.js";
 import {t} from "./strings.js";
 import {$, ask, hideOverlay, notify, overlay, toast} from "./ui.js";
 import {VideoPlayers} from "./video.js";
+import {unpackAsset} from "./packed.js";
 
 // The stage the runtime draws; an 800x600 game reports its own (d64_stage_width).
 let WIDTH = 640, HEIGHT = 480;
@@ -28,10 +29,10 @@ const MAC_KEYS = {
 // ticks of backlog; time beyond that is dropped rather than rushed through.
 const MAX_STEPS = 4, BACKLOG_TICKS = 12;
 
-function packLookup({blob, index}) {
+function packLookup({blob, index}, unpack = (bytes) => bytes) {
   return (name) => {
     const entry = index[name];
-    return entry ? blob.subarray(entry[0], entry[0] + entry[1]) : null;
+    return entry ? unpack(blob.subarray(entry[0], entry[0] + entry[1])) : null;
   };
 }
 // Text without an authored style prints in the builtin monospace font,
@@ -205,7 +206,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     if (detail.name === "volume" || detail.name === "muted")
       audio.setVolume(settings.get("volume"), settings.get("muted"));
   });
-  const images = packLookup(game.images);
+  const images = packLookup(game.images, (bytes) => unpackAsset(module, bytes));
   const streams = game.streams ?? {index: {}, blob: new Uint8Array()};
   const videos = new VideoPlayers(packLookup(game.video ?? {index: {}, blob: new Uint8Array()}), audio);
   const printing = packLookup(game.print ?? {index: {}, blob: new Uint8Array()});

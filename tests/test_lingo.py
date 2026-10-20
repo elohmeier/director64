@@ -251,3 +251,10 @@ def test_decompiled_pi_call_keeps_local_identifier_distinct():
     assert expression("PI()") == ["call", "pi", []]
     assert expression("pi") == ["variable", "pi"]
     assert expression('"PI"') == ["string", "PI"]
+
+
+def test_legacy_sound_close_uses_the_stop_service():
+    # LZ2 skips its publisher sound with this classic verb. ScummVM
+    # 41ac2b31847622d0662d22c03fe6979e3b43cfbc b_sound also equates the verbs.
+    node = Statements([(39, 'sound close 2')]).block()[0]
+    assert node['value'] == ['call', 'sound_stop', [['number', 2]]]

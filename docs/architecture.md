@@ -35,10 +35,18 @@ standalone per-game web app ([web.md](web.md)).
    text and fonts (including embedded PFR1 fonts), the port's `[convert]`
    corrections, the Lingo compiler and packaging into `game.d64p`.
 4. The driver packs assets: images as lossless WebP where smaller
-   (`tools/convert/webp_tool.c`, vendored libwebp), sounds of 8 s or more as
-   Ogg Opus and video as VP9 (FFmpeg). `tools/convert/font_metrics.c`
+   (`tools/convert/webp_tool.c`, vendored libwebp), every PCM sound as
+   Ogg Opus and video as VP9 (FFmpeg). Already compressed MP3 streams retain
+   their encoding. Images that compress better with deflate keep that form
+   in both APKs and web builds. `tools/convert/font_metrics.c`
    (vendored FreeType) measures fonts where a port needs it.
 5. The C package loader validates the package against the runtime ABI.
+
+Opus uses 64 kbit/s VBR for mono and 96 kbit/s VBR for stereo. Converter tags
+retain the original sample rate and frame count; players preserve authored
+loop and Flash sample bounds when decoding. Short one-shot member cues start
+from their beginning after first-use decoding, so codec startup cannot consume
+the whole effect. Decoded sounds are cached within each player's memory budget.
 
 Host tools build on first use under `build/tools/`. A conversion is reused
 while the converter, runtime ABI, source image and game profile match;
