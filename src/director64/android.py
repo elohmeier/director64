@@ -86,6 +86,11 @@ def library(game: GameSpec) -> str:
     return "d64_" + game.slug.replace("-", "_")
 
 
+def launcher_title(game: GameSpec) -> str:
+    """A short TV label; the catalog keeps the game's full title."""
+    return game.data.get("android", {}).get("title", game.data["title"])
+
+
 # ---- The engine ----
 
 
@@ -170,7 +175,7 @@ def artwork(game: GameSpec, res: Path) -> None:
         font,
         "-gravity",
         "center",
-        f"caption:{game.data['title']}",
+        f"caption:{launcher_title(game)}",
         ")",
     ]
     banner = res / "drawable-xhdpi/banner.png"
@@ -311,6 +316,7 @@ def apk_input_digest(game: GameSpec, abis: list[str]) -> str:
         "source": game.source["sha256"], "abis": abis,
         **game.image_identity,
         "profile": web.profile_entry(game),
+        "launcher_title": launcher_title(game),
         "converter": source_digest(root),
     }, sort_keys=True).encode())
     for path in sorted(paths):
@@ -359,7 +365,7 @@ def build(game: GameSpec, jobs: int, abis: list[str], reconvert: bool) -> Path:
         json.dumps(
             {
                 "slug": game.slug,
-                "title": game.data["title"],
+                "title": launcher_title(game),
                 "library": library(game),
                 "director_version": port["director_version"],
                 "source_sha256": game.source["sha256"],
@@ -381,7 +387,7 @@ def build(game: GameSpec, jobs: int, abis: list[str], reconvert: bool) -> Path:
     (work / "AndroidManifest.xml").write_text(
         (root / "platforms/android/AndroidManifest.xml")
         .read_text()
-        .replace("@TITLE@", escape(game.data["title"], {'"': "&quot;"}))
+        .replace("@TITLE@", escape(launcher_title(game), {'"': "&quot;"}))
     )
     package = "org.director64.tv." + game.slug.replace("-", "_")
     w = work.relative_to(root).as_posix()

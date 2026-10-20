@@ -6,6 +6,9 @@ default_source = "sha256-00ae07ac7e3c"
 
 # A raw .bin of a single Mode 1 data track (2352-byte sectors).
 
+[android]
+title = "Adventskalender"
+
 [[sources]]
 id = "sha256-00ae07ac7e3c"
 file = "Adventskalender.bin"

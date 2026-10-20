@@ -4,6 +4,9 @@ title = "Findus bei den Mucklas"
 status = "experimental"
 default_source = "sha256-ad4c7afb4b19"
 
+[android]
+title = "Mucklas"
+
 [[sources]]
 id = "sha256-ad4c7afb4b19"
 file = "Findus4.iso"

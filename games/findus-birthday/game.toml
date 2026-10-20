@@ -6,6 +6,9 @@ default_source = "sha256-dadd038fff19"
 
 # The volume descriptor overstates the volume (copy protection); the decoy
 # ZDATA/SOUND.X64 runs past the image and reads as zeros there.
+[android]
+title = "Geburtstagskater"
+
 [[sources]]
 id = "sha256-dadd038fff19"
 file = "Geburtstagskater.iso"

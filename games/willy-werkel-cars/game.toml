@@ -4,6 +4,9 @@ title = "Autos bauen mit Willy Werkel"
 status = "experimental"
 default_source = "sha256-938be20a50e2"
 
+[android]
+title = "Autos bauen"
+
 [[sources]]
 id = "sha256-938be20a50e2"
 file = "Autos bauen mit Willy Werkel.zip"

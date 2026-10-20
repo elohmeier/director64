@@ -21,7 +21,9 @@ def repair_game(tmp_path):
         "repairs": [{"file": "repaired.iso", "sha256": hashlib.sha256(repaired).hexdigest(),
                      "bytes": len(repaired), "recipe": "host/media-repair.json"}],
     }
-    game = GameSpec(tmp_path, "fixture", {"port": {"director_version": 850}}, source)
+    game = GameSpec(
+        tmp_path, "fixture", {"title": "Fixture", "port": {"director_version": 850}}, source
+    )
     game.media.parent.mkdir(parents=True)
     game.media.write_bytes(original)
     return game, game.media.parent / "repaired.iso", repaired
@@ -104,6 +106,11 @@ def test_apk_receipt_tracks_selected_image_without_changing_edition(tmp_path, mo
 
     original = receipt()
     assert android.verify_apk(game) == apk
+    game.data["android"] = {"title": "Short TV title"}
+    assert android.apk_input_digest(game, abis) != original["inputs"]
+    with pytest.raises(ValueError, match="stale build receipt"):
+        android.verify_apk(game)
+    del game.data["android"]
     repaired.write_bytes(data)
     assert android.apk_input_digest(game, abis) != original["inputs"]
     with pytest.raises(ValueError, match="stale build receipt"):

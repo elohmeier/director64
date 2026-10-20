@@ -4,6 +4,9 @@ title = "25 Jahre Löwenzahn: Laser, Linsen, Flaschenzüge"
 status = "experimental"
 default_source = "sha256-221da0586845"
 
+[android]
+title = "Optik & Mechanik"
+
 [[sources]]
 id = "sha256-221da0586845"
 file = "Optik-Mechanik.iso"

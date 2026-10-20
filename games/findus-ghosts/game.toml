@@ -5,6 +5,9 @@ status = "experimental"
 default_source = "sha256-05d7ad483501"
 
 # A raw CloneCD image (2352-byte sectors); the importer reads its data track.
+[android]
+title = "Gespenster"
+
 [[sources]]
 id = "sha256-05d7ad483501"
 file = "CD01.img"

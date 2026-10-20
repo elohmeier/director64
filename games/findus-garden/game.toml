@@ -4,6 +4,9 @@ title = "Neues von Pettersson und Findus"
 status = "experimental"
 default_source = "sha256-d13f26cf91cf"
 
+[android]
+title = "Garten"
+
 [[sources]]
 id = "sha256-d13f26cf91cf"
 file = "Petterson.zip"

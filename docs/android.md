@@ -37,6 +37,11 @@ ImageMagick present, the build draws the icon and Google TV banner from
 `games/<slug>/cover.*` (local box art, never committed) or from the title
 alone.
 
+Games can set `title = "Short title"` in their `game.toml`'s `[android]` table for the
+TV launcher, banner and player menu. This keeps the activity name visible
+on narrow TV tiles while the catalog retains the full title. Package names
+and saves are independent of this label.
+
 The APK is signed with a personal key the first build creates at
 `~/.config/director64/android.keystore`. Keep it: updates must be signed with
 the same key to keep the game's saves.

@@ -4,6 +4,9 @@ title = "Lernerfolg Grundschule Deutsch 1-2"
 status = "experimental"
 default_source = "sha256-4c87e10dcc99"
 
+[android]
+title = "Deutsch 1–2"
+
 [[sources]]
 id = "sha256-4c87e10dcc99"
 file = "Deutsch12.iso"

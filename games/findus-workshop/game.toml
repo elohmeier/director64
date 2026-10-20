@@ -4,6 +4,9 @@ title = "Pettersson und Findus"
 status = "supported"
 default_source = "sha256-fc24ffe284ec"
 
+[android]
+title = "Werkstatt"
+
 [[sources]]
 id = "sha256-fc24ffe284ec"
 file = "FINDUS.iso"

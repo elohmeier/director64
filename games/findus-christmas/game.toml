@@ -4,6 +4,9 @@ title = "Pettersson und Findus: Christmas calendar"
 status = "experimental"
 default_source = "sha256-1b087d267195"
 
+[android]
+title = "Weihnachten"
+
 [[sources]]
 id = "sha256-1b087d267195"
 file = "FINDUS3.ISO"
