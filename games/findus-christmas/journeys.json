@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "journeys": [
+    {"name": "full_journey", "legacy": "full_journey", "description": "Open all 24 calendar activities, exercise drag and removal, return to the calendar.", "covers": ["startup", "navigation", "24-activities", "drag", "return"]}
+  ]
+}

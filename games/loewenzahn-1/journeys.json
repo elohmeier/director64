@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "journeys": [
+    {"name": "full_journey", "legacy": "full_journey", "description": "Play both intro clips to completion, drag volume, visit all nine topic menus and return to the panorama.", "covers": ["startup", "video-completion", "volume-drag", "nine-topics", "return"]}
+  ]
+}

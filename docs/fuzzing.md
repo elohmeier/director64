@@ -72,10 +72,19 @@ summary lists the first diverging command per episode with a field diff.
 
 ```sh
 uv run --locked director64 journey --game <slug> [NAME]
+uv run --locked director64 journey --game all --list
+mise run test-journeys --output build/journeys/current
 ```
 
-Runs one of the game's scripted journeys (`games/<slug>/host/*journey.py`,
-`full_regressions.py`; default `full_journey`) and writes its report under
-`build/<game>/<source>/journeys/<name>/`. `--activity` selects Mucklas'
-activity journey. The workshop's journeys (`routes`, `hubs`, `treasure`,
-`exit`, `garden`, `profiles`) come from `games/findus-workshop/tests/full_probe.py`.
+Defaults to the game's registered suite in `games/<slug>/journeys.json`.
+Every playable port has one; `--game all` runs all ports and explicitly
+lists catalogued games without ports as unavailable. The suite checks
+rendering and recovered script alerts, bounds hangs, retains failed inputs,
+and measures command/scene timing and memory. `--baseline DIR` enables
+performance regression gates. See [journeys.md](journeys.md) for the coverage
+matrix, limits, report layout and baseline workflow.
+
+Existing named scripts (`games/<slug>/host/*journey.py`,
+`full_regressions.py`) remain available, including `--activity` for Mucklas'
+`full_journey`. The workshop's `routes`, `hubs`, `treasure`, `exit`, `garden`
+and `profiles` come from `games/findus-workshop/tests/full_probe.py`.

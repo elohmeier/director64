@@ -10,6 +10,10 @@ import {pathToFileURL} from "node:url";
 import {videoProbe} from "./video.mjs";
 import {decodeWav, isOpusSound, readOpusHeader} from "../site/audio.js";
 import {validateFlashSound} from "../site/flash-audio.js";
+import {probeMetrics} from "./metrics.mjs";
+
+const metrics = probeMetrics();
+const startup = metrics.start();
 
 const [site, movie = "START", mode, ...options] = process.argv.slice(2);
 if (!site || mode !== "rpc" || options.some(option => option !== "--state-only")) {
@@ -140,10 +144,15 @@ function checkpoint(context) {
   if (render) module._d64_render(0, 0, 0);
   const error = module.UTF8ToString(module._d64_error());
   if (error) process.stderr.write(`runtime failure after ${context}: ${error}\n`);
-  return !error;
+  const alerts = process.env.DIRECTOR64_PROBE_STRICT && module._d64_script_errors?.();
+  if (alerts) process.stderr.write(`script alert after ${context}: ${
+    module.UTF8ToString(module._d64_last_script_error())}\n`);
+  return !error && !alerts;
 }
 const boot = module.ccall("d64_boot_rpc", "string", ["number"], [42]);
-if (!checkpoint("boot")) process.exit(1);
+const bootOK = checkpoint("boot");
+metrics.end(startup, "boot", module);
+if (!bootOK) process.exit(1);
 await out(boot);
 let status = 0;
 for await (const line of createInterface({input: process.stdin, crlfDelay: Infinity})) {
@@ -156,9 +165,12 @@ for await (const line of createInterface({input: process.stdin, crlfDelay: Infin
         module.HEAPU8.slice(module._d64_flash(), module._d64_flash() + module._d64_flash_bytes()));
     break;
   }
+  const started = metrics.start(line.trimEnd());
   const reply = module.ccall("d64_rpc", "string", ["string"], [line.trimEnd()]);
+  const ok = reply !== "" && checkpoint(JSON.stringify(line.trimEnd()));
+  metrics.end(started, line.trimEnd(), module);
   if (reply === "") { status = 2; break; }
-  if (!checkpoint(JSON.stringify(line.trimEnd()))) { status = 1; break; }
+  if (!ok) { status = 1; break; }
   await out(reply);
 }
 if (!status && module.UTF8ToString(module._d64_error())) status = 1;

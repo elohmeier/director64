@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "journeys": [{
+    "name": "player-yard", "description": "Skip the publisher reel, create a player, play the story into the yard and keep the scene running.",
+    "covers": ["startup", "profiles", "text-entry", "save", "navigation", "sustained-playback"],
+    "steps": [
+      {"idle": 600, "expect": {"movie": "VORSPANN.DXR"}},
+      {"sprite": 149, "settle": 600, "wait": {"movie": "LOGIN.DXR", "frame": 75}, "label": "player-selection"},
+      {"sprite": 54, "settle": 600, "expect": {"movie": "LOGIN.DXR", "frame": 422}, "label": "name-entry"},
+      {"command": "text 60 ANNA"},
+      {"sprite": 61, "settle": 1200, "expect": {"save_generation": {"gte": 1}}, "label": "player-saved"},
+      {"click": [400, 300], "settle": 600},
+      {"wait": {"movie": "HOF.DXR"}, "ticks": 12000, "label": "yard"},
+      {"idle": 3600, "expect": {"movie": "HOF.DXR"}, "label": "yard-playback"}
+    ]
+  }]
+}

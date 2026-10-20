@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "journeys": [{
+    "name": "login-frog-video", "description": "Select the electricity profile, enter the wagon exterior, open the frog topic and play its video.",
+    "covers": ["startup", "profile-selection", "preferences", "navigation", "video", "sustained-playback"],
+    "steps": [
+      {"idle": 3600, "expect": {"movie": "LOGIN.DXR"}},
+      {"click": [140, 250], "settle": 600, "wait": {"movie": "LOGIN.DXR", "frame": 88}},
+      {"sprite": 15, "settle": 600, "expect": {"globals.gloginlist": "[#strom]"}, "label": "profile-selected"},
+      {"sprite": 97, "settle": 600, "expect": {"movie": "AUSSEN.DXR", "save_generation": {"gte": 2}}, "label": "wagon-exterior"},
+      {"click": [176, 370], "settle": 600, "expect": {"movie": "TSFROESC.DXR"}, "label": "frog-video"},
+      {"idle": 600, "expect": {"movie": "TSFROESC.DXR"}, "label": "video-playback"}
+    ]
+  }]
+}

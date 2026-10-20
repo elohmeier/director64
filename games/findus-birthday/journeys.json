@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "journeys": [{
+    "name": "player-registration", "description": "Play the bedroom introduction, choose the first player and require the name popup to open without a text-formatting failure.",
+    "covers": ["startup", "film-loops", "profiles", "name-popup", "runtime-text-style"],
+    "steps": [
+      {"idle": 3600, "expect": {"movie": "R0021.DXR", "frame": 470}, "label": "player-selection"},
+      {"sprite": 27, "settle": 600},
+      {"idle": 1200, "expect": {"movie": "R0021.DXR"}, "label": "name-popup"},
+      {"idle": 3600, "expect": {"movie": "R0021.DXR"}, "label": "popup-remains-responsive"}
+    ]
+  }]
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "journeys": [{
+    "name": "login-dog-registration", "description": "Select a boat profile, skip the intro, open the dog, name it and require registration to persist.",
+    "covers": ["startup", "profile-selection", "preferences", "navigation", "pet-registration", "text-entry", "save"],
+    "steps": [
+      {"idle": 1800, "expect": {"movie": "LOGIN.DXR", "frame": 13}},
+      {"sprite": 5, "settle": 600, "expect": {"globals.gloginlist": "[#mountain]"}, "label": "profile-selected"},
+      {"sprite": 26, "settle": 600, "expect": {"movie": "INTRO.DXR"}},
+      {"click": [400, 400], "settle": 600, "expect": {"movie": "VORNE.DXR", "save_generation": {"gte": 4}}, "label": "wagon-exterior"},
+      {"click": [554, 54], "settle": 600, "expect": {"movie": "TAMAGOTC.DXR", "frame": 185}, "label": "dog-name-entry"},
+      {"command": "text 33 REX"},
+      {"sprite": 32, "settle": 600, "expect": {"globals.gtamagotchi": {"contains": "#name:\"REX\""}, "save_generation": {"gte": 8}}, "label": "dog-registered"},
+      {"idle": 3600, "expect": {"globals.gtamagotchi": {"contains": "#name:\"REX\""}}, "label": "pet-playback"}
+    ]
+  }]
+}

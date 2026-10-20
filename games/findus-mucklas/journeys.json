@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "journeys": [
+    {"name": "full_journey", "legacy": "full_journey", "activity": true, "description": "Create and reload a player, solve the clock puzzle, save and reload its reward.", "covers": ["startup", "profiles", "navigation", "activity", "reward", "save", "reboot", "reload"]},
+    {
+      "name": "train-station-soak", "stage": [640, 480],
+      "description": "Create a player and run ten simulated minutes in the bedroom train station, a reported slowdown scene.",
+      "covers": ["startup", "profiles", "navigation", "train-station", "long-session-performance"],
+      "steps": [
+        {"idle": 18000, "expect": {"movie": "LO.DXR"}},
+        {"sprite": 17, "settle": 600},
+        {"sprite": 40, "settle": 2400, "expect": {"movie": "HUSET.DXR"}, "label": "house"},
+        {"sprite": 14, "settle": 600},
+        {"sprite": 12, "settle": 6000, "expect": {"movie": "TS.DXR"}, "label": "train-station"},
+        {"idle": 3600, "expect": {"movie": "TS.DXR"}, "label": "station-minute-1"},
+        {"idle": 3600, "expect": {"movie": "TS.DXR"}, "label": "station-minute-2"},
+        {"idle": 3600, "expect": {"movie": "TS.DXR"}, "label": "station-minute-3"},
+        {"idle": 3600, "expect": {"movie": "TS.DXR"}, "label": "station-minute-4"},
+        {"idle": 3600, "expect": {"movie": "TS.DXR"}, "label": "station-minute-5"},
+        {"idle": 3600, "expect": {"movie": "TS.DXR"}, "label": "station-minute-6"},
+        {"idle": 3600, "expect": {"movie": "TS.DXR"}, "label": "station-minute-7"},
+        {"idle": 3600, "expect": {"movie": "TS.DXR"}, "label": "station-minute-8"},
+        {"idle": 3600, "expect": {"movie": "TS.DXR"}, "label": "station-minute-9"},
+        {"idle": 3600, "expect": {"movie": "TS.DXR"}, "label": "station-minute-10"}
+      ]
+    }
+  ]
+}

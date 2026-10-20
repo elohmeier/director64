@@ -20,7 +20,7 @@ def run(*args):
 WORKSHOP_JOURNEYS = ("routes", "hubs", "treasure", "exit", "garden", "profiles")
 
 
-def journey(game, argv):
+def legacy_journey(game, name, output, activity=False):
     """A game's scripted journeys (games/<slug>/host/*_journey.py,
     full_regressions.py) over its web build's probe."""
     from .web import probe_path
@@ -35,22 +35,20 @@ def journey(game, argv):
         names += WORKSHOP_JOURNEYS
     if not names:
         raise ValueError(f"{game.slug} has no scripted journeys")
-    parser = argparse.ArgumentParser(prog="director64 journey")
-    default = "full_journey" if "full_journey" in names else names[0]
-    parser.add_argument("name", nargs="?", default=default, choices=names)
-    parser.add_argument("--activity", action="store_true", help="Mucklas' activity journey")
-    args = parser.parse_args(argv)
+    if name not in names:
+        raise ValueError(f"unknown journey {name}; choose from {', '.join(names)}")
     probe = probe_path(game)
-    if args.name in WORKSHOP_JOURNEYS:
-        run(sys.executable, workshop, args.name, "--executable", probe)
+    output.mkdir(parents=True, exist_ok=True)
+    if name in WORKSHOP_JOURNEYS:
+        run(sys.executable, workshop, name, "--executable", probe,
+            "--output", output / "replay.json")
         return 0
-    output = game.work / "journeys" / args.name
-    module = game.host(args.name)
-    extra = [True] if args.activity else []
+    module = game.host(name)
+    extra = [True] if activity else []
     report = module.run(probe, output, *extra)
     print(json.dumps(report))
     if report.get("status", "passing") != "passing":
-        raise ValueError(f"{args.name} failed; inspect {output}")
+        raise ValueError(f"{name} failed; inspect {output}")
     return 0
 
 
@@ -63,7 +61,9 @@ def main(argv=None):
         "--prelude FILE",
         "parity": "Options: --against PROBE --probe PROBE --episodes N --actions N --seed N "
         "--movie NAME --output DIR (side A defaults to the web build kept at parity/site-a)",
-        "journey": "Arguments: [NAME] --activity",
+        "journey": "Arguments: [NAME] --list --output DIR --baseline DIR --repeat N "
+        "--timeout SECONDS --max-slowdown RATIO --max-memory-growth RATIO; "
+        "--game all runs all ports",
         "reference": "Adapter options: --replay PATH --output PATH --windows-version VERSION",
         "convert": "Options: --force --output DIR (default build/<slug>/<source>/converted)",
         "web": "Options: --reconvert --serve --port N (default 18064) --no-build (docs/web.md)",
@@ -103,6 +103,12 @@ def main(argv=None):
             return 0
         if args.command == "extract" and remaining:
             parser.error("unexpected arguments: " + " ".join(remaining))
+        if args.command == "journey" and args.game == "all":
+            from .journeys import main as journeys
+
+            if args.source:
+                raise ValueError("--source requires one selected game")
+            return journeys(None, remaining)
         game = GameSpec.load(args.game, args.source)
         game.activate()
         if args.command == "extract":
@@ -133,7 +139,9 @@ def main(argv=None):
 
             return parity(game, remaining)
         if args.command == "journey":
-            return journey(game, remaining)
+            from .journeys import main as journeys
+
+            return journeys(game, remaining)
         if args.command == "reference":
             run(sys.executable, game.directory / "host/reference_runner.py", "capture", *remaining)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "journeys": [
+    {"name": "hubs", "legacy": "hubs", "description": "Create a player, visit workshop hubs and all twelve constructions, return home.", "covers": ["startup", "navigation", "construction", "return"]},
+    {"name": "profiles", "legacy": "profiles", "description": "Create, save and reload player profiles through the original interface.", "covers": ["profiles", "save", "reboot", "reload"]},
+    {"name": "garden", "legacy": "garden", "description": "Observe repeated farmyard animations and require visible sprite changes.", "covers": ["animation", "repeated-playback"]}
+  ]
+}

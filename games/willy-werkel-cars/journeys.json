@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "journeys": [
+    {"name": "full_journey", "legacy": "full_journey", "description": "Create and reload a player, collect and drag parts, save, rename and reload a car, open the certificate.", "covers": ["startup", "profiles", "navigation", "drag", "save", "reboot", "reload", "printing-notice"]}
+  ]
+}

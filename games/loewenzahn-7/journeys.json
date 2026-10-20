@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "journeys": [{
+    "name": "login-piano", "description": "Select the music profile, enter the wagon roof, open the piano and exercise its keys.",
+    "covers": ["startup", "profile-selection", "preferences", "navigation", "activity", "sustained-playback"],
+    "steps": [
+      {"idle": 1800, "expect": {"movie": "LOGIN.DXR", "frame": 95}},
+      {"sprite": 15, "settle": 600, "expect": {"globals.gloginlist": "[#musik]"}, "label": "profile-selected"},
+      {"sprite": 112, "settle": 600, "expect": {"movie": "BAUWAGEN__DACH.DXR", "save_generation": {"gte": 3}}, "label": "wagon-roof"},
+      {"click": [130, 365], "settle": 600, "expect": {"movie": "KLAVIER__KLAVIER.DXR"}, "label": "piano"},
+      {"click": [300, 400]}, {"click": [400, 400]}, {"click": [500, 400]},
+      {"idle": 3600, "expect": {"movie": "KLAVIER__KLAVIER.DXR"}, "label": "piano-playback"}
+    ]
+  }]
+}

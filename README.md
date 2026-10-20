@@ -67,7 +67,7 @@ Every game command takes `--game <slug>` and optionally `--source <id>`.
 | `director64 repair-media` | Make a separately pinned repaired disc image ([architecture](docs/architecture.md#media-repairs)) |
 | `director64 fuzz` | Randomized input against the web build's probe ([docs/fuzzing.md](docs/fuzzing.md)) |
 | `director64 parity` | Compare two builds state by state |
-| `director64 journey` | Run a game's scripted journeys |
+| `director64 journey` | Run regression journeys with timing and memory reports (`--game all` for every port) |
 | `director64 reference` | Capture the original projector under Wine (workshop only) |
 
 Run them as `uv run --locked director64 ...`. Development checks:
@@ -76,6 +76,7 @@ Run them as `uv run --locked director64 ...`. Development checks:
 mise run check                 # converter build, lint, Python, Node and C tests
 mise run test-native           # runtime and game C tests
 mise run test-android-host     # Android keyboard and JNI checks (JDK 11+)
+mise run test-journeys         # every port's journeys; needs local web builds and media
 ```
 
 ## Outputs
@@ -94,6 +95,7 @@ mise run test-android-host     # Android keyboard and JNI checks (JDK 11+)
 - [Architecture, conversion and `game.toml` reference](docs/architecture.md)
 - [Android TV player](docs/android.md) and [standalone web app](docs/web.md)
 - [Fuzzing, parity and journeys](docs/fuzzing.md)
+- [Per-game journey coverage and performance gates](docs/journeys.md)
 - [Game package format](docs/package-format.md)
 - [Catalogued sources](docs/games.md)
 

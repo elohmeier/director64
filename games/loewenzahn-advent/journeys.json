@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "journeys": [{
+    "name": "countdown-wagon-desk", "calendar": true,
+    "description": "Follow the seasonal start, leave the countdown when present, enter the desk and interact with the nutcracker.",
+    "covers": ["startup", "calendar-date", "navigation", "preferences", "interaction", "sustained-playback"],
+    "steps": [
+      {"idle": 1800, "expect": {"movie": {"in": ["COUNT.DXR", "BW_VORN.DXR"]}}, "label": "seasonal-start"},
+      {"when": {"movie": "COUNT.DXR"}, "sprite": 3, "settle": 600},
+      {"wait": {"movie": "BW_VORN.DXR"}, "label": "wagon-exterior"},
+      {"click": [373, 350], "settle": 600, "expect": {"movie": "BWSCHREI.DXR", "save_generation": {"gte": 3}}, "label": "desk"},
+      {"sprite": 4, "settle": 600, "expect": {"movie": "BWSCHREI.DXR"}, "label": "nutcracker"},
+      {"idle": 3600, "expect": {"movie": "BWSCHREI.DXR"}, "label": "desk-playback"}
+    ]
+  }]
+}

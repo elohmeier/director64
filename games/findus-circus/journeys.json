@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "journeys": [{
+    "name": "player-yard", "description": "Choose a clown, type a player name with Director key events, save and follow the story to the yard.",
+    "covers": ["startup", "profiles", "keyboard", "save", "navigation", "sustained-playback"],
+    "steps": [
+      {"idle": 600, "expect": {"movie": "VORSPANN.DXR"}},
+      {"sprite": 151, "settle": 600},
+      {"wait": {"movie": "LOGIN.DXR", "frame": 45}, "label": "player-selection"},
+      {"sprite": 11, "settle": 600, "expect": {"movie": "LOGIN.DXR", "frame": 181}, "label": "name-entry"},
+      {"command": "key 0 65 1"}, {"command": "key 0 65 0"},
+      {"sprite": 33, "settle": 600},
+      {"idle": 2400, "expect": {"movie": "INTRO.DXR", "save_generation": {"gte": 1}}, "label": "player-saved"},
+      {"sprite": 41, "settle": 2400, "expect": {"movie": "HOFINTRO.DXR"}},
+      {"sprite": 17, "settle": 1200},
+      {"wait": {"movie": "HOF.DXR"}, "ticks": 12000, "label": "yard"},
+      {"idle": 3600, "expect": {"movie": "HOF.DXR"}, "label": "yard-playback"}
+    ]
+  }]
+}

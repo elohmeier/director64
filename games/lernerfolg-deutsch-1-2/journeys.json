@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "journeys": [
+    {"name": "full_journey", "legacy": "full_journey", "description": "Enter a player name, choose class, visit a room and select a laid-out Flash exercise answer.", "covers": ["startup", "profiles", "save", "navigation", "activity", "flash-text", "answer-selection"]}
+  ]
+}

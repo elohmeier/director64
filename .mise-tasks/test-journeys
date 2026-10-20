@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Run every port's rendered gameplay and performance journeys (local media required)"
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+uv run --locked director64 journey --game all "$@"
