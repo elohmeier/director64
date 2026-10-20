@@ -39,7 +39,7 @@ def test_opus_source_grid_survives_resampling(tmp_path, source_tool, rate, frame
     script = '''
 import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
-import {AudioEngine, oggOpusInfo} from './platforms/web/site/audio.js';
+import {AudioEngine, oggOpusInfo, decodeOggOpusSound} from './platforms/web/site/audio.js';
 const bytes = new Uint8Array(readFileSync(process.argv[1]));
 const info = oggOpusInfo(bytes);
 let decodes = 0;
@@ -65,6 +65,12 @@ const entry = await audio.whenLoaded('cue');
 assert.equal(entry.rate, info.rate); assert.equal(entry.frames, info.frames);
 assert.equal(audio.load('cue'), entry); assert.equal(decodes, 1);
 assert.deepEqual(audio.errors, []);
+if (info.frames) {
+  const Decoder = globalThis.AudioDecoder;
+  globalThis.AudioDecoder = class extends Decoder {decode() {}};
+  await assert.rejects(() => decodeOggOpusSound(audio.context, bytes), /incomplete Opus decode/);
+  globalThis.AudioDecoder = Decoder;
+}
 assert.throws(() => oggOpusInfo(bytes.subarray(0, bytes.length - 1)), /truncated/);
 process.stdout.write(JSON.stringify(info));
 '''

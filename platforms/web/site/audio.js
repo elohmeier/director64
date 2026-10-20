@@ -152,9 +152,9 @@ export async function decodeOggOpusSound(context, bytes) {
   }
   return decodeOpusPackets(context, {codec: "opus", sampleRate: 48000, channels: packets[0][9],
     frames: Math.round(info.frames * 48000 / info.rate), sourceRate: info.rate,
-    sourceFrames: info.frames, descriptionBytes: packets[0], chunks, data});
+    sourceFrames: info.frames, descriptionBytes: packets[0], chunks, data}, true);
 }
-async function decodeOpusPackets(context, sound) {
+async function decodeOpusPackets(context, sound, strict = false) {
   const planes = Array.from({length: sound.channels}, () => []);
   let failure = null;
   const decoder = new AudioDecoder({
@@ -176,6 +176,8 @@ async function decodeOpusPackets(context, sound) {
   await decoder.flush();
   decoder.close();
   if (failure) throw failure;
+  if (strict && planes.some(pieces => pieces.reduce((n, piece) => n + piece.length, 0) < sound.frames))
+    throw new Error("incomplete Opus decode");
   const buffer = context.createBuffer(sound.channels, Math.max(1, sound.frames), sound.sampleRate);
   planes.forEach((pieces, c) => {
     const plane = new Float32Array(sound.frames);
