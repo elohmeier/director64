@@ -95,9 +95,27 @@ def test_ogg_equivalence_keeps_packets_timing_and_source_tags():
     # Concatenated logical streams cannot discard their stream identities.
     assert payload_digest(ogg(1) + ogg(2), audio=True) != payload_digest(
         ogg(3) + ogg(4), audio=True)
-    for truncated in [ogg()[:20], ogg()[:-1], ogg()[:47]]:
+    for truncated in [ogg()[:20], ogg()[:-1]]:
         with pytest.raises(ValueError, match="Ogg"):
             payload_digest(truncated, audio=True)
+
+
+def test_header_only_empty_exports_keep_their_bytes_and_zero_duration(tmp_path, pack_tool):
+    def headers(serial):
+        whole = ogg(serial)
+        return whole[:whole.rfind(b"OggS")]
+
+    first, second = headers(1), headers(2)
+    assert payload_digest(first, audio=True) == payload_digest(first, audio=False)
+    assert payload_digest(first, audio=True) != payload_digest(second, audio=True)
+    source, target = packs(tmp_path, {"streams": {"empty/one": [first, 0],
+                                                "empty/two": [second, 0]}})
+    assert stage_packs(source, target)["saved_bytes"] == 0
+    assert (target / "audio.bin").read_bytes() == first + second
+    result = json.loads(subprocess.check_output(
+        [pack_tool, target.parent, "streams", "empty/one", "empty/two"]))
+    assert result["entries"][0] == [0, len(first), 0, zlib.crc32(first), len(first)]
+    assert result["entries"][1] == [len(first), len(second), 0, zlib.crc32(second), len(second)]
 
 
 @pytest.mark.parametrize("entry", [[-1, 3], [0, 999], [0, -1], [0, 1.5], [0, 1, -1]])

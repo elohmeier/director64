@@ -19,7 +19,8 @@ def payload_digest(data: bytes, *, audio: bool) -> bytes:
     """Hash encoded bytes, ignoring only a single Opus stream's Ogg identity.
 
     Packet boundaries, headers, tags, sequence numbers, flags and granules all
-    participate. Chained/multiplexed streams retain byte identity instead.
+    participate. Chained/multiplexed streams and header-only empty exports
+    retain byte identity instead.
     """
     digest = hashlib.sha256()
     if not audio or data[:4] != b"OggS":
@@ -52,7 +53,7 @@ def payload_digest(data: bytes, *, audio: bool) -> bytes:
         if data[at + 5] & 4 and end != len(data):
             return hashlib.sha256(data).digest()
         if end == len(data) and not data[at + 5] & 4:
-            raise ValueError("Ogg stream has no final page")
+            return hashlib.sha256(data).digest()
         at = end
     return digest.digest()
 
