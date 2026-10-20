@@ -121,7 +121,40 @@ export function readOpusHeader(bytes) {
 // Decodes with WebCodecs into a buffer of exactly the header's frames; loop
 // points stay in source frames at the source rate.
 export async function decodeOpusSound(context, bytes) {
-  const sound = readOpusHeader(bytes);
+  return decodeOpusPackets(context, readOpusHeader(bytes));
+}
+export async function decodeOggOpusSound(context, bytes) {
+  const info = oggOpusInfo(bytes), packets = [];
+  let partial = [], at = 0;
+  while (at < bytes.length) {
+    const segments = bytes[at + 26];
+    let p = at + 27 + segments;
+    for (let i = 0; i < segments; i++) {
+      const length = bytes[at + 27 + i];
+      partial.push(bytes.subarray(p, p + length)); p += length;
+      if (length < 255) {
+        const packet = new Uint8Array(partial.reduce((n, part) => n + part.length, 0));
+        let offset = 0;
+        for (const part of partial) {packet.set(part, offset); offset += part.length;}
+        packets.push(packet); partial = [];
+      }
+    }
+    at = p;
+  }
+  if (partial.length || packets.length < 2) throw new Error("incomplete Opus packet");
+  const chunks = [], data = new Uint8Array(packets.slice(2).reduce((n, packet) => n + packet.length, 0));
+  let offset = 0;
+  for (let i = 2; i < packets.length; i++) {
+    // Local FFmpeg exports use 20 ms Opus packets. Output order is retained;
+    // the header's pre-skip and exact source bounds determine audible frames.
+    chunks.push([(i - 2) * 20000, offset, packets[i].length]);
+    data.set(packets[i], offset); offset += packets[i].length;
+  }
+  return decodeOpusPackets(context, {codec: "opus", sampleRate: 48000, channels: packets[0][9],
+    frames: Math.round(info.frames * 48000 / info.rate), sourceRate: info.rate,
+    sourceFrames: info.frames, descriptionBytes: packets[0], chunks, data});
+}
+async function decodeOpusPackets(context, sound) {
   const planes = Array.from({length: sound.channels}, () => []);
   let failure = null;
   const decoder = new AudioDecoder({
@@ -135,7 +168,7 @@ export async function decodeOpusSound(context, bytes) {
     },
     error: (error) => { failure = error; },
   });
-  const description = Uint8Array.from(atob(sound.description), (c) => c.charCodeAt(0));
+  const description = sound.descriptionBytes ?? Uint8Array.from(atob(sound.description), (c) => c.charCodeAt(0));
   decoder.configure({codec: sound.codec, sampleRate: sound.sampleRate, numberOfChannels: sound.channels,
     ...(description.length ? {description} : {})});
   for (const [timestamp, offset, size] of sound.chunks)
@@ -210,7 +243,7 @@ export class AudioEngine {
     if (!this.decoding.has(name)) {
       const bytes = this.lookup(name);
       const decoding = (bytes ? (isOggOpus(bytes)
-        ? this.context.decodeAudioData(bytes.slice().buffer).then((buffer) => ({buffer, ...oggOpusInfo(bytes)}))
+        ? decodeOggOpusSound(this.context, bytes)
         : decodeOpusSound(this.context, bytes)) : Promise.reject(new Error(`missing sound ${name}`)))
         .then((decoded) => this.keep(name, decoded))
         .finally(() => this.decoding.delete(name));
@@ -295,7 +328,9 @@ export class AudioEngine {
       this.errors.push(String(error));
       console.warn(error);
     };
-    if (isOpusSound(bytes)) {
+    if (isOggOpus(bytes)) {
+      decodeOggOpusSound(this.context, bytes).then(({buffer}) => start(buffer), failed);
+    } else if (isOpusSound(bytes)) {
       decodeOpusSound(this.context, bytes).then(({buffer}) => start(buffer), failed);
     } else if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
       try {

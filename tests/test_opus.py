@@ -43,11 +43,20 @@ import {AudioEngine, oggOpusInfo} from './platforms/web/site/audio.js';
 const bytes = new Uint8Array(readFileSync(process.argv[1]));
 const info = oggOpusInfo(bytes);
 let decodes = 0;
+globalThis.EncodedAudioChunk = class {constructor(value) {Object.assign(this, value);}};
+globalThis.AudioDecoder = class {
+  constructor(callbacks) {this.callbacks = callbacks; decodes++;}
+  configure(config) {this.channels = config.numberOfChannels;}
+  decode(chunk) {assert.ok(chunk.data.length > 0);
+    this.callbacks.output({numberOfFrames: 960, copyTo(plane) {plane.fill(0);}, close() {}});}
+  async flush() {}
+  close() {}
+};
 globalThis.AudioContext = class {
   destination = {};
   createGain() {return {connect() {}};}
-  async decodeAudioData(input) {decodes++; assert.ok(input.byteLength > 0);
-    return {length: 48000, numberOfChannels: 1, duration: 1};}
+  createBuffer(numberOfChannels, length, sampleRate) {
+    return {numberOfChannels, length, duration: length / sampleRate, copyToChannel() {}};}
 };
 const audio = new AudioEngine(() => bytes, 2);
 assert.equal(audio.duration('cue'), info.frames / info.rate);
