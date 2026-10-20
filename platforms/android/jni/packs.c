@@ -32,6 +32,22 @@ static int by_name(const void *a, const void *b) {
   return strcmp(((const pack_entry_t *)a)->name, ((const pack_entry_t *)b)->name);
 }
 
+static bool index_number(const json_t *json, unsigned at, uint32_t *out) {
+  if (!at || at >= json->count || json->tokens[at].type != JSON_PRIMITIVE)
+    return false;
+  const json_token_t *token = &json->tokens[at];
+  if (token->start == token->end)
+    return false;
+  uint64_t value = 0;
+  for (size_t i = token->start; i < token->end; i++) {
+    unsigned digit = (unsigned char)json->text[i] - '0';
+    if (digit > 9 || (value = value * 10 + digit) > UINT32_MAX)
+      return false;
+  }
+  *out = (uint32_t)value;
+  return true;
+}
+
 static AAssetManager *assets;
 
 void packs_use(AAssetManager *manager) { assets = manager; }
@@ -70,19 +86,33 @@ bool pack_open(pack_t *pack, const char *kind, char *error, size_t error_cap) {
   }
   json_t json;
   bool ok = json_parse(&json, text, length) && json.tokens[0].type == JSON_OBJECT;
+  unsigned entries = ok ? json_get(&json, 0, "entries") : 0;
+  char blob[32] = {0};
   if (ok) {
-    unsigned members = json.tokens[0].size / 2;
+    unsigned file = json_get(&json, 0, "blob");
+    uint32_t version = 0;
+    json_string(&json, file, blob, sizeof(blob));
+    ok = index_number(&json, json_get(&json, 0, "version"), &version) && version == 1 && entries &&
+         json.tokens[entries].type == JSON_OBJECT &&
+         !(json.tokens[entries].size & 1) &&
+         (json_equals(&json, file, kind) ||
+          (!strcmp(kind, "streams") && json_equals(&json, file, "audio")));
+  }
+  if (ok) {
+    unsigned end = json_next(&json, entries);
+    unsigned members = json.tokens[entries].size / 2;
     pack->entries = calloc(members ? members : 1, sizeof(pack_entry_t));
     size_t name_bytes = 0;
-    for (unsigned i = 1; i < json.count; i = json_next(&json, i + 1))
+    for (unsigned i = entries + 1; i < end; i = json_next(&json, i + 1))
       name_bytes += json.tokens[i].end - json.tokens[i].start + 1;
     pack->names = malloc(name_bytes + 1);
     ok = pack->entries && pack->names;
     char *names = pack->names;
-    for (unsigned i = 1; ok && i < json.count; i = json_next(&json, i + 1)) {
+    for (unsigned i = entries + 1; ok && i < end; i = json_next(&json, i + 1)) {
       unsigned value = i + 1;
-      if (value >= json.count || json.tokens[value].type != JSON_ARRAY ||
-          json.tokens[value].size < 2) {
+      if (json.tokens[i].type != JSON_STRING || value >= end ||
+          json.tokens[value].type != JSON_ARRAY ||
+          json.tokens[value].size < 2 || json.tokens[value].size > 3) {
         ok = false;
         break;
       }
@@ -90,25 +120,26 @@ bool pack_open(pack_t *pack, const char *kind, char *error, size_t error_cap) {
       size_t n = json_string(&json, i, names, json.tokens[i].end - json.tokens[i].start + 1);
       e->name = names;
       names += n + 1;
-      e->offset = (uint64_t)json_number(&json, json_item(&json, value, 0));
-      e->length = (uint32_t)json_number(&json, json_item(&json, value, 1));
-      e->extra = json.tokens[value].size > 2
-                     ? (uint32_t)json_number(&json, json_item(&json, value, 2))
-                     : 0;
+      uint32_t offset = 0;
+      ok = index_number(&json, json_item(&json, value, 0), &offset) &&
+           index_number(&json, json_item(&json, value, 1), &e->length) &&
+           (json.tokens[value].size == 2 ||
+            index_number(&json, json_item(&json, value, 2), &e->extra));
+      e->offset = offset;
     }
   }
   json_free(&json);
   free(text);
   if (!ok) {
-    snprintf(error, error_cap, "%s.json is not a pack index", kind);
+    snprintf(error, error_cap, "%s.json is not a version 1 pack index", kind);
     pack_close(pack);
     return false;
   }
   qsort(pack->entries, pack->count, sizeof(pack_entry_t), by_name);
-  snprintf(path, sizeof(path), "game/%s.bin", kind);
+  snprintf(path, sizeof(path), "game/%s.bin", blob);
   pack->asset = assets ? AAssetManager_open(assets, path, AASSET_MODE_BUFFER) : NULL;
   if (!pack->asset) {
-    snprintf(error, error_cap, "%s.bin is missing", kind);
+    snprintf(error, error_cap, "%s.bin is missing (pack %s)", blob, kind);
     pack_close(pack);
     return false;
   }
@@ -121,14 +152,15 @@ bool pack_open(pack_t *pack, const char *kind, char *error, size_t error_cap) {
     pack->base = (uint64_t)start;
     pack->blob = AAsset_getBuffer(pack->asset);
     if (!pack->blob || pack->fd < 0) {
-      snprintf(error, error_cap, "%s.bin is compressed in the APK", kind);
+      snprintf(error, error_cap, "%s.bin is compressed in the APK (pack %s)", blob, kind);
       pack_close(pack);
       return false;
     }
   }
   for (unsigned i = 0; i < pack->count; i++)
-    if (pack->entries[i].offset + pack->entries[i].length > pack->bytes) {
-      snprintf(error, error_cap, "%s.bin is shorter than its index", kind);
+    if (pack->entries[i].offset > pack->bytes ||
+        pack->entries[i].length > pack->bytes - pack->entries[i].offset) {
+      snprintf(error, error_cap, "%s.bin is shorter than the %s index", blob, kind);
       pack_close(pack);
       return false;
     }

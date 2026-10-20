@@ -82,7 +82,8 @@ def test_apk_receipt_tracks_selected_image_without_changing_edition(tmp_path, mo
     game, repaired, data = repair_game(tmp_path)
     edition = game.source["sha256"]
     for name in (
-        "src/director64/android.py", "src/director64/project.py",
+        "src/director64/android.py", "src/director64/android_packs.py",
+        "src/director64/project.py",
         "src/director64/web.py", web.FONT, "tools/director/validate-package.c",
     ):
         path = tmp_path / name
@@ -106,6 +107,11 @@ def test_apk_receipt_tracks_selected_image_without_changing_edition(tmp_path, mo
 
     original = receipt()
     assert android.verify_apk(game) == apk
+    packer = tmp_path / "src/director64/android_packs.py"
+    packer.write_text("changed packing")
+    with pytest.raises(ValueError, match="stale build receipt"):
+        android.verify_apk(game)
+    packer.write_text("fixture")
     game.data["android"] = {"title": "Short TV title"}
     assert android.apk_input_digest(game, abis) != original["inputs"]
     with pytest.raises(ValueError, match="stale build receipt"):

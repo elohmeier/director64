@@ -1,8 +1,10 @@
 #ifndef DIRECTOR64_ANDROID_PACKS_H
 #define DIRECTOR64_ANDROID_PACKS_H
 // The game's asset packs, as the browser's cache holds them
-// (platforms/web/site/cache.js): <kind>.bin, the assets end to end, and
-// <kind>.json, an index {name: [offset, length, ...]}. They ship in the APK
+// (platforms/web/site/cache.js), compacted at Android staging time. Each
+// <kind>.json is {version: 1, blob: kind, entries: {name: [offset, length, ...]}}.
+// Streams use blob "audio" too. Names may alias a single stored payload.
+// The .bin files ship in the APK
 // under assets/game/, stored uncompressed, so a blob maps in place and the
 // media extractor reads a stream through the APK's file descriptor.
 #include <android/asset_manager.h>

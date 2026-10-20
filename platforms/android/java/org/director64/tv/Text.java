@@ -56,7 +56,10 @@ final class Text {
     byte[] blob;
     try (InputStream index = assets.open("game/fonts.json");
         InputStream data = assets.open("game/fonts.bin")) {
-      entries = new JSONObject(new String(readAll(index), StandardCharsets.UTF_8));
+      JSONObject pack = new JSONObject(new String(readAll(index), StandardCharsets.UTF_8));
+      if (pack.getInt("version") != 1 || !pack.getString("blob").equals("fonts"))
+        throw new IOException("fonts.json is not a version 1 fonts pack index");
+      entries = pack.getJSONObject("entries");
       blob = readAll(data);
     }
     cache.mkdirs();

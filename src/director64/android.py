@@ -5,8 +5,9 @@ engine compiled for Android and the game converted from your own disc.
     director64 android install --game SLUG   adb install it
 
 The game is converted from its disc image (src/director64/convert.py) into
-build/<slug>/<source>/converted/, which the web build shares, and ships
-uncompressed in the APK's assets. The APK contains the converted game and
+build/<slug>/<source>/converted/, which the web build shares. Android staging
+compacts its media blobs, which ship uncompressed for mapping in the APK.
+The APK contains the converted game and
 must not be redistributed.
 """
 
@@ -24,7 +25,8 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from . import web
-from .convert import GAME_FILES, convert, source_digest
+from .android_packs import stage_packs
+from .convert import convert, source_digest
 from .project import GameSpec, container_engine
 
 IMAGE = "director64-android:local"
@@ -308,7 +310,8 @@ def apk_input_digest(game: GameSpec, abis: list[str]) -> str:
     paths.update(game.directory.glob("cover.*"))
     paths.update(game.directory.rglob("*.h"))
     paths.update(root / name for name in (
-        "src/director64/android.py", "src/director64/project.py",
+        "src/director64/android.py", "src/director64/android_packs.py",
+        "src/director64/project.py",
         "src/director64/web.py", str(web.FONT),
         "tools/director/validate-package.c",
     ))
@@ -358,8 +361,8 @@ def build(game: GameSpec, jobs: int, abis: list[str], reconvert: bool) -> Path:
     if assets.exists():
         shutil.rmtree(assets)
     (assets / "game").mkdir(parents=True)
-    for name in GAME_FILES:
-        place(data / name, assets / "game" / name)
+    place(data / "game.d64p", assets / "game/game.d64p")
+    packed = stage_packs(data, assets / "game")
     port = game.data["port"]
     (assets / "game/profile.json").write_text(
         json.dumps(
@@ -404,7 +407,7 @@ rm -rf {w}/out && mkdir -p {w}/out/classes {w}/out/dex {w}/out/gen
 $BUILD_TOOLS/aapt2 compile --dir platforms/android/res -o {w}/out/res.zip
 {overlay}$BUILD_TOOLS/aapt2 link -o {w}/out/base.apk -I $ANDROID_JAR \\
   --manifest {w}/AndroidManifest.xml --rename-manifest-package {package} \\
-  -A {w}/assets --no-compress --java {w}/out/gen \\
+  -A {w}/assets -0 .bin --java {w}/out/gen \\
   --min-sdk-version {MIN_SDK} --target-sdk-version {TARGET_SDK} \\
   --version-code {version_code()} --version-name {version} \\
   {w}/out/res.zip {f"-R {w}/out/game-res.zip" if overlay else ""}
@@ -447,6 +450,7 @@ rm -f {w}/out/aligned.apk {out}.idsig
         "source_sha256": game.source["sha256"], "abis": abis, "inputs": identity,
         **game.image_identity,
         "apk_sha256": web.sha256(apk), "bytes": apk.stat().st_size,
+        "asset_packs": packed,
         "conversion": json.loads((data / "manifest.json").read_text()),
     }
     apk_receipt_path(game).write_text(json.dumps(receipt, indent=2) + "\n")

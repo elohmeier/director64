@@ -27,9 +27,21 @@ A build converts the disc into `build/<game>/<source>/converted/` (shared
 with the web app, see [architecture.md](architecture.md#conversion)),
 compiles the runtime with the NDK (the web runtime's sources and flags plus
 `platforms/android/jni/`), and packages it with aapt2, javac and d8 as
-`org.director64.tv.<slug>`. The game ships uncompressed under
-`assets/game/`. Output: `dist/<game>/<source>/director64-<game>.apk` and an
-`.apk.json` receipt (source, ABIs, input digest, APK hash).
+`org.director64.tv.<slug>`. Under `assets/game/`, encoded media blobs stay
+uncompressed for mapping, while the package and JSON indexes use APK
+compression. Output: `dist/<game>/<source>/director64-<game>.apk` and an
+`.apk.json` receipt (source, ABIs, input digest, APK hash, pack size savings).
+
+Android staging compacts the shared conversion without re-encoding media.
+Each `<kind>.json` is `{version: 1, blob: "<blob>", entries: {name:
+[offset, length, ...]}}`; offsets address `<blob>.bin`. Names with identical
+payloads share a range. Sound members and `playFile` streams both address
+`audio.bin`, with stream durations retained in their own index. There is no
+separate `streams.bin` in the APK. Ogg Opus comparisons ignore only stream
+serial numbers and their dependent page checksums, retaining packet bytes,
+source tags, flags and granules. The first complete original encoded file
+is stored unchanged. Other formats compare byte for byte. Web conversion
+files retain their existing layout.
 
 The version code is the minutes since 2026, so every build installs as an
 update and the TV launcher refreshes its cached icon and banner. With
