@@ -101,11 +101,7 @@ fn continuation_records_reassemble_long_text_in_authored_order() {
         ],
         "FF",
     );
-    assert!(
-        text_xtra_model(&payload(76), &d8, 800)
-            .unwrap_err()
-            .contains("record range")
-    );
+    assert_eq!(text_xtra_model(&payload(76), &d8, 800).unwrap()["text"], "ab");
 }
 
 #[test]
@@ -124,11 +120,9 @@ fn fffe_terminator_and_extension_section_are_accepted_and_recorded() {
     let result = text_xtra_model(&payload(432), &extension, 1000).unwrap();
     assert_eq!(result["text"], "Satz");
     assert_eq!(result["mediaExtension"]["bytes"], 51);
-    assert!(
-        text_xtra_model(&payload(76), &extension, 800)
-            .unwrap_err()
-            .contains("record header")
-    );
+    // Published D8 documents already contain this extension independently
+    // of the text Xtra's later 432-byte descriptor.
+    assert_eq!(text_xtra_model(&payload(76), &extension, 800).unwrap()["text"], "Satz");
 }
 
 #[test]

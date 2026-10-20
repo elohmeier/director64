@@ -424,7 +424,7 @@ impl Expression {
             self.take(Some("of"))?;
             let target = self.parse(7)?;
             value = json!(["chunk", token, first, last, target]);
-        } else if is_name(&token) {
+        } else if is_name(&token) || (token == "," && self.peek() == "(") {
             if self.peek() == "(" {
                 self.take(Some("("))?;
                 value = json!(["call", token, self.args(")")?]);
@@ -707,6 +707,9 @@ impl<'a> Statements<'a> {
                 } else if low.starts_with("delete ") {
                     n.insert("op".into(), json!("delete"));
                     n.insert("target".into(), expression(&text[7..])?);
+                } else if low == "put" {
+                    n.insert("op".into(), json!("trace"));
+                    n.insert("value".into(), json!(["list", []]));
                 } else if low.starts_with("put ") {
                     let mut append = None;
                     for direction in ["after", "before"] {
@@ -1041,6 +1044,10 @@ mod tests {
 
     #[test]
     fn expressions_follow_the_reference_grammar() {
+        // A corrupt or obfuscated bytecode name remains an actual call, so
+        // playback reports it if reached rather than dropping the handler.
+        assert_eq!(expression(",()").unwrap(), json!(["call", ",", []]));
+        assert!(expression("f(,)").is_err());
         assert_eq!(expression("1 + 2 * 3").unwrap(), json!(["binary", "+", ["number", 1], ["binary", "*", ["number", 2], ["number", 3]]]));
         assert_eq!(expression("the loch of sprite 5").unwrap(), json!(["property", "loch", "sprite", ["number", 5]]));
         assert_eq!(expression("the name of menu i").unwrap(), json!(["get", "name", ["call", "menu", [["variable", "i"]]]]));

@@ -88,7 +88,7 @@ pub fn launcher_handlers(source_manifest: &Value) -> R<Vec<Value>> {
 /// The program the runtime executes: the recovered program with the port's
 /// patches, then the launcher's handlers under the launcher movie's name.
 pub fn executable_program(program: &Value, port: &Port, source_manifest: &Value) -> R<Value> {
-    let mut program = patch_program(program, &port.convert["patch"])?;
+    let mut program = program.clone();
     if let Some(movie) = &port.launcher_movie {
         let handlers = program["handlers"]
             .as_array_mut()
@@ -104,7 +104,7 @@ pub fn executable_program(program: &Value, port: &Port, source_manifest: &Value)
             handlers.push(handler);
         }
     }
-    Ok(program)
+    patch_program(&program, &port.convert["patch"])
 }
 
 /// Applies [[convert.patch]] entries. Each names a handler (movie, member,
@@ -154,7 +154,10 @@ pub fn patch_program(program: &Value, patches: &Value) -> R<Value> {
                     return Err(format!("{} {name}: {count} {from} calls; review required", handler["movie"]));
                 }
             }
-            if let Some(body) = patch["body"].as_str() {
+            if patch["body"].is_string() && patch["prepend"].is_string() {
+                return Err("patch cannot replace and prepend one handler".into());
+            }
+            if let Some(body) = patch["body"].as_str().or_else(|| patch["prepend"].as_str()) {
                 let line = list(&handler["body"])
                     .next()
                     .and_then(|s| s["line"].as_u64())
@@ -165,7 +168,11 @@ pub fn patch_program(program: &Value, patches: &Value) -> R<Value> {
                     .filter(|l| !l.trim().is_empty())
                     .map(|l| (line, l.to_string()))
                     .collect();
-                handler["body"] = Value::Array(lingo::block(&lines).map_err(|e| e.to_string())?);
+                let mut statements = lingo::block(&lines).map_err(|e| e.to_string())?;
+                if patch["prepend"].is_string() {
+                    statements.extend(handler["body"].as_array().ok_or("handler body")?.iter().cloned());
+                }
+                handler["body"] = Value::Array(statements);
             }
             fixes.push(json!({"id": patch["id"], "movie": handler["movie"], "member": handler["member"],
                               "handler": name, "source_sha256": handler["source_sha256"]}));
@@ -299,7 +306,7 @@ pub fn postprocess_model(
     match convert["external_media"]["bind"].as_str() {
         None => {}
         Some("linked-movies") => linked_movies(model, fonts, text(&convert["external_media"]["sounds_movie"]))?,
-        Some("linked-sounds") => linked_sounds(model, fonts)?,
+        Some("linked-sounds") => linked_sounds(model, fonts, &convert["external_media"]["path_aliases"] )?,
         Some("directmedia") => directmedia(model, fonts)?,
         Some(other) => return Err(format!("unknown external media binding {other}")),
     }
@@ -453,7 +460,7 @@ fn linked_movies(model: &mut Value, fonts: &PortFonts, sounds_movie: &str) -> R<
         parts(a).cmp(&parts(b))
     });
     let mut by_name = HashMap::new();
-    for record in &records {
+    for record in records.iter().filter(|r| !text(&r["source"]).to_uppercase().ends_with(".AIF")) {
         if by_name.insert(base_name(text(&record["source"])).to_lowercase(), record.clone()).is_some() {
             return Err("ambiguous external filename".into());
         }
@@ -483,6 +490,15 @@ fn linked_movies(model: &mut Value, fonts: &PortFonts, sounds_movie: &str) -> R<
             return Err(format!("invalid linked video duration: {}", member["linkedFile"]));
         }
         let m = member.as_object_mut().ok_or("member")?;
+        if !audio_only && m.get("videoBoundsFromMedia") == Some(&json!(true)) {
+            let width = record["width"].as_u64().ok_or("linked video width missing")?;
+            let height = record["height"].as_u64().ok_or("linked video height missing")?;
+            if width == 0 || height == 0 || width > 4096 || height > 4096 {
+                return Err("linked video dimensions out of bounds".into());
+            }
+            m.insert("width".into(), json!(width)); m.insert("height".into(), json!(height));
+            m.insert("regX".into(), json!(width / 2)); m.insert("regY".into(), json!(height / 2));
+        }
         m.insert("asset".into(), record["video"].clone());
         m.insert("videoAudio".into(), record["audio"].clone());
         m.insert("videoAudioOnly".into(), json!(audio_only));
@@ -515,14 +531,12 @@ fn linked_movies(model: &mut Value, fonts: &PortFonts, sounds_movie: &str) -> R<
 
 /// Linked sounds (Findus' Circus): empty sound members named after an
 /// external "<name>.aif" take that file's converted record.
-fn linked_sounds(model: &mut Value, fonts: &PortFonts) -> R<()> {
-    let mut by_name = HashMap::new();
+fn linked_sounds(model: &mut Value, fonts: &PortFonts, aliases: &Value) -> R<()> {
+    let mut by_name: HashMap<String, Vec<&Value>> = HashMap::new();
     for record in &fonts.external_media {
         let file = base_name(text(&record["source"])).to_lowercase();
         let stem = file.strip_suffix(".aif").ok_or("external sound is not AIFF")?.to_string();
-        if by_name.insert(stem, record.clone()).is_some() {
-            return Err("ambiguous external sound file".into());
-        }
+        by_name.entry(stem).or_default().push(record);
     }
     let mut bound = 0;
     for member in model["movies"]
@@ -534,9 +548,16 @@ fn linked_sounds(model: &mut Value, fonts: &PortFonts) -> R<()> {
         if member["type"] != 6 || member["empty"] != true {
             continue;
         }
-        let Some(record) = by_name.get(&text(&member["name"]).to_lowercase()) else {
+        let Some(candidates) = by_name.get(&text(&member["name"]).to_lowercase()) else {
             continue;
         };
+        let directory = text(&member["linkedDirectory"]).rsplit([':', '\\', '/']).next().unwrap_or("").to_uppercase();
+        let directory = aliases[&directory].as_str().unwrap_or(&directory);
+        let matching: Vec<_> = candidates.iter().filter(|record|
+            text(&record["source"]).rsplit_once('/').is_some_and(|(p,_)| p.eq_ignore_ascii_case(directory))).collect();
+        let record = if matching.len() == 1 { matching[0] }
+            else if candidates.len() == 1 { &candidates[0] }
+            else { return Err(format!("ambiguous external sound file {} in {directory}",member["name"])) };
         if text(&record["audio"]).is_empty() {
             return Err(format!("sound {} did not convert", member["name"]));
         }
@@ -550,6 +571,7 @@ fn linked_sounds(model: &mut Value, fonts: &PortFonts) -> R<()> {
         m.insert("loopEnd".into(), record["frames"].clone());
         m.insert("looping".into(), json!(0));
         m.insert("externalAudio".into(), record["source"].clone());
+        if let Some(cues) = record.get("cuePoints") { m.insert("cuePoints".into(), cues.clone()); }
         bound += 1;
     }
     if bound == 0 {
@@ -608,6 +630,14 @@ fn directmedia(model: &mut Value, fonts: &PortFonts) -> R<()> {
         }
         let m = member.as_object_mut().ok_or("member")?;
         m.insert("type".into(), json!(10));
+        if m.get("videoBoundsFromMedia") == Some(&json!(true)) {
+            for axis in ["width", "height"] {
+                let n = record[axis].as_u64().filter(|n| (1..=4096).contains(n))
+                    .ok_or(format!("invalid external video {axis}"))?;
+                m.insert(axis.into(), json!(n));
+                m.insert(if axis == "width" {"regX"} else {"regY"}.into(), json!(n / 2));
+            }
+        }
         m.insert("sourceType".into(), json!(15));
         m.insert("asset".into(), record["video"].clone());
         m.insert("videoAudio".into(), json!(audio));

@@ -103,7 +103,7 @@ def player(game: GameSpec) -> dict:
     game.require_port()
     table = game.data.get("player", {})
     known = {"saves", "files", "folders", "long_date", "movie_path", "data_folder",
-             "key_field", "switches"}
+             "key_field", "switches", "color_depth", "stream_paths"}
     if set(table) - known:
         raise ValueError(f"{game.slug}: unknown [player] keys {sorted(set(table) - known)}")
     return table
@@ -146,6 +146,21 @@ def profile_header(game: GameSpec) -> str:
         lines.append("#define GAME_FOLDERS " + ", ".join(
             f"{{{c_string(folder[0].lower())}, {c_string(name)}}}"
             for folder in table["folders"] for name in folder[1:]))
+    if table.get("stream_paths"):
+        policy = web_policy(game)
+        folders = []
+        for directory in policy["directories"]:
+            if directory == ".":
+                continue
+            last = directory.rsplit("/", 1)[-1].upper()
+            name = policy.get("folder_aliases", {}).get(last, last).upper()
+            name = "".join(c if c.isascii() and (c.isalnum() or c in "_-") else "_"
+                           for c in name)
+            path = "C:\\" + port["media_root"].replace("/", "\\") + "\\"
+            folders.append((name, path + directory.replace("/", "\\") + "\\"))
+        entries = [f"{{{c_string(name)}, {c_string(path)}}}" for name, path in folders]
+        lines.append("#define GAME_MOVIE_FOLDERS " + ", ".join([*entries, "{NULL,NULL}"]))
+        lines.append("#define GAME_STREAM_ROOT " + c_string("C:\\" + port["media_root"] + "\\"))
     for key, macro in (("long_date", "GAME_LONG_DATE"), ("movie_path", "GAME_MOVIE_PATH"),
                        ("data_folder", "GAME_DATA_FOLDER")):
         if key in table:
@@ -313,6 +328,8 @@ def profile_entry(game: GameSpec) -> dict:
                 "media_root",
                 "entry_movie",
                 "extended_d6",
+                "full_engine",
+                "sources",
                 "launcher_movie",
                 "defer_video",
             )
@@ -356,14 +373,25 @@ def family_defines(game: GameSpec) -> list[str]:
         f"-DDIRECTOR64_DIRECTOR_VERSION={family_version(port['director_version'])}",
         f"-DDIRECTOR64_EXTENDED_D6={int(port.get('extended_d6', False))}",
     ]
+    if port.get("full_engine"):
+        if not port.get("extended_d6"):
+            raise ValueError(f"{game.slug}: full_engine requires extended_d6")
+        defines.append("-DDIRECTOR64_FULL_ENGINE=1")
     # Director 8.5 media conventions inside the D10 family (ink.h masks).
     if port["director_version"] == 850:
         defines.append("-DDIRECTOR64_D85=1")
+    if game.data.get("player", {}).get("stream_paths"):
+        defines.append("-DDIRECTOR64_STREAM_PATHS=1")
+    if port["director_version"] == 850 or port.get("full_engine"):
         # The disc folder the movies sit in, for the moviePath of a movie in a
         # subfolder (Löwenzahn's DATA\LABYRINTH\).
         root = str(port.get("media_root", ".")).strip("./\\")
         if root.isalnum():
             defines.append(f"-DDIRECTOR64_MEDIA_ROOT={root}")
+    if depth := game.data.get("player", {}).get("color_depth"):
+        if depth not in (8, 16, 32):
+            raise ValueError(f"{game.slug}: color_depth must be 8, 16 or 32")
+        defines.append(f"-DDIRECTOR64_COLOR_DEPTH={depth}")
     # An 800x600 game plays its authored stage unscaled (ink.h).
     if native_stage(game):
         defines.append("-DDIRECTOR64_NATIVE_STAGE=1")

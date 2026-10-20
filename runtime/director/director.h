@@ -26,7 +26,7 @@
 #define DG_SPRITES 121
 #define DG_FILES 6
 #define DG_SOUND_CHANNELS 4
-#define DG_MAX_TEMPO 120
+#define DG_MAX_TEMPO 999
 #else
 #define DG_SPRITES 121
 #define DG_FILES 4
@@ -589,7 +589,7 @@ typedef struct dg_runtime {
   struct { uint8_t code, character; bool down; } key_events[32];
   unsigned key_first, key_count, key_event_tick;
   uint8_t key_code, key_character;
-#if DG_D7_OR_D10
+#if DG_D7_OR_D10 || DIRECTOR64_FULL_ENGINE
   bool mouse_hit_valid;
   int mouse_hit_x, mouse_hit_y;
   unsigned mouse_hit_result;
@@ -652,6 +652,8 @@ typedef struct dg_runtime {
   struct { uint32_t member, fixed_rate; uint8_t mode; bool paused; } flash_playback[DG_FIELDS];
   unsigned flash_playback_count;
   struct dg_flash_state *flash_state;
+  struct { uint32_t member; uint16_t volume; uint8_t state, channel; } swa[DG_FIELDS];
+  unsigned swa_count;
 #endif
 #endif
   unsigned drag_sprite;
@@ -803,6 +805,7 @@ typedef struct dg_runtime {
   bool palette_active, palette_puppet;
   dg_cursor_t cursor;
   int sound_level, color_depth, float_precision;
+  int click_x, click_y;
   // Whether the code for a member or behavior script declares any mouse
   // handler. That is a fact about the generated handler table, but reading it
   // walks every handler the owning movie declares, and hit testing asks it

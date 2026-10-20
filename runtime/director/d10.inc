@@ -6,6 +6,9 @@
  * resolution; the window's own score does not tick yet and its visible
  * statistics panel does not render yet — both remain explicit feature work,
  * traced when the game requests them. */
+#ifdef DIRECTOR64_STREAM_PATHS
+#include "stream_path.h"
+#endif
 static const char *d10_path_base(const char *path) {
   const char *base = path;
   for (const char *p = path; *p; p++)
@@ -991,8 +994,16 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
     const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
     if (m && m->type == 14) { *out = lv_num(0); return true; }
     // A sound's length in milliseconds (Circus scales its lip-sync lists).
-    if (m && m->type == 6 && m->rate) {
-      *out = lv_num((int32_t)((uint64_t)m->samples * 1000u / m->rate));
+    if (m && m->type == 6) {
+      *out = lv_num(m->rate ? (int32_t)((uint64_t)m->samples * 1000u / m->rate) : 0);
+      return true;
+    }
+  }
+  if (lv_type(owner) == LV_MEMBER && (eq(name, "linked") || ln == LN_FILENAME)) {
+    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+    if (m && m->type == 6) {
+      *out = ln == LN_FILENAME ? lv_text(r, m->text ? m->text : "", false)
+          : lv_num(m->text && *m->text);
       return true;
     }
   }
@@ -1032,7 +1043,6 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
     if (ln == LN_SYSTEMDATE) { *out = d85_system_date(r); return true; }
 #endif
-    if (ln == LN_CLICKLOC) { *out = lv_point(r, d->mouse_x, d->mouse_y); return true; }
     if ((ln == LN_WINDOWLIST) || (ln == LN_SCORESELECTION)) { *out = lv_list(r, 0, NULL, false); return true; }
     if ((ln == LN_FRAMESOUND1) || (ln == LN_FRAMESOUND2)) {
       uint32_t id = d->score[ln == LN_FRAMESOUND1 ? 4 : 3].member;
@@ -2035,10 +2045,20 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     // The authored path ends "...\voc\NAME.aif"; the converted stream is the
     // virtual "folder/stem" wav64. Never interpret the path as a host path.
     const char *path = lv_cstr(r, a[1]);
+    char virtual_name[192];
+#ifdef DIRECTOR64_STREAM_PATHS
+#define STREAM_TEXT(x) #x
+#define STREAM_ROOT(x) STREAM_TEXT(x)
+    const char *current = d->platform.movie_path ? d->platform.movie_path(d->context) : NULL;
+    if (!current || !dg_stream_path(STREAM_ROOT(DIRECTOR64_MEDIA_ROOT),current,path,virtual_name,sizeof(virtual_name))) {
+      error(d,"unresolved virtual audio path",path); return true;
+    }
+#undef STREAM_ROOT
+#undef STREAM_TEXT
+#else
     const char *base = path, *folder = path;
     for (const char *p = path; *p; p++)
       if (*p == '\\' || *p == '/' || *p == ':') { folder = base; base = p + 1; }
-    char virtual_name[96];
     unsigned folder_length = 0;
     while (folder[folder_length] && folder[folder_length] != '\\' &&
            folder[folder_length] != '/' && folder[folder_length] != ':')
@@ -2047,6 +2067,7 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
              (int)(folder == base ? 0 : folder_length), folder, base);
     char *extension = strrchr(virtual_name, '.');
     if (extension) *extension = 0;
+#endif
     // Windows resolved the authored path case-insensitively; the converted
     // stream set canonicalizes to lowercase (sfx\silence.aif names the
     // on-disk Silence.aif).
@@ -2059,7 +2080,7 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
       d->platform.play_file(d->context, (unsigned)channel - 1, virtual_name);
     } else if (d->platform.trace) {
       char text[128];
-      snprintf(text, sizeof(text), "PLAY_FILE channel=%ld name=%s", channel, virtual_name);
+      snprintf(text, sizeof(text), "PLAY_FILE channel=%u name=%.80s", (unsigned)channel, virtual_name);
       d->platform.trace(d->context, text);
     }
     return true;

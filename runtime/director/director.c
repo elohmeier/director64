@@ -1440,6 +1440,7 @@ static unsigned frame_number(dg_runtime_t *d, lv_t value);
 #include "avm1_native.inc"
 #include "flash_runtime.inc"
 #include "d10.inc"
+#include "swa.inc"
 #endif
 #if DG_EXTENDED
 static lv_t behavior_property(dg_runtime_t *d, unsigned channel, const char *name) {
@@ -1497,6 +1498,9 @@ static __attribute__((noinline)) lv_t marker_list(lv_runtime_t *r, dg_runtime_t 
 #include "film_children.inc"
 #endif
 static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
+#if DG_D10
+  { lv_t value = {0}; if (swa_get((dg_runtime_t *)r->context, name, owner, &value)) return value; }
+#endif
   unsigned ln = lv_name_id(r, name);
   dg_runtime_t *d = r->context;
 #if DG_D10
@@ -1643,6 +1647,8 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
       return lv_num(!d->mouse_down);
     if (ln == LN_CLICKON)
       return lv_num(d->click_on);
+    if (ln == LN_CLICKLOC)
+      return lv_point(r, d->click_x, d->click_y);
     if (ln == LN_TIMER)
       return lv_num(d->ticks - d->timer);
     if (ln == LN_TICKS)
@@ -2006,7 +2012,7 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
   if(d5_set(d,name,owner,value))return;
 #endif
 #if DG_D10
-  if(d10_set(d,name,owner,value))return;
+  if(swa_set(d,name,owner,value) || d10_set(d,name,owner,value))return;
 #endif
   if (lv_type(owner) == LV_VOID) {
 #if DG_MODERN
@@ -2868,7 +2874,7 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
   dg_runtime_t *d = r->context;
 #if DG_D10
   // Window services take precedence over the D6 file-chooser guard.
-  if(d10_call(d,name,argc,a,out))return true;
+  if(swa_call(d,name,argc,a,out) || d10_call(d,name,argc,a,out))return true;
 #endif
 #if DG_EXTENDED
   if (d6_call(d, name, argc, a, out)) return true;
@@ -3680,6 +3686,9 @@ void dg_init(dg_runtime_t *d, lv_runtime_t *r, dg_platform_t platform,
 #else
   d->color_depth = 8;
 #endif
+#ifdef DIRECTOR64_COLOR_DEPTH
+  d->color_depth = DIRECTOR64_COLOR_DEPTH;
+#endif
   d->float_precision = 4;
   lv_init(r,
           (lv_services_t){
@@ -3813,7 +3822,7 @@ static void attach_behaviors(dg_runtime_t *d, unsigned channel,
   unsigned attached = 0;
   for (unsigned n = 0; n < count && !r->failed; n++) {
     const dg_behavior_t *behavior = &behaviors[n];
-#if DG_D10
+#if DG_FAMILY_D10
     // The authored score can reference a deleted script member; the
     // original attaches nothing there. A dangling instance must never
     // resolve by name into another movie's handlers.
@@ -4830,6 +4839,10 @@ bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
   }
 #endif
   bool pressed = down && !d->mouse_down;
+  if (pressed) {
+    d->click_x = x;
+    d->click_y = y;
+  }
 #if DG_D10
   dg_flash_pointer(d,x,y,down);
   if (pressed) {

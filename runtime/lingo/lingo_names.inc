@@ -268,6 +268,7 @@ static const char *const lb_name_text[LB_NAME_COUNT] = {
     "length",
     "line",
     "linecount",
+    "linked",
     "list",
     "listp",
     "literal",

@@ -29,6 +29,15 @@ builds contain the converted game and must not be redistributed.
 | [Löwenzahn Adventskalender](games/loewenzahn-advent/README.md) | 8.5 | Experimental |
 | [25 Jahre Löwenzahn: Optik](games/loewenzahn-optik/README.md) | 8.5 | Experimental |
 | [Lernerfolg Grundschule Deutsch 1-2](games/lernerfolg-deutsch-1-2/README.md) | 10 | Experimental |
+| [Neues von Pettersson und Findus](games/findus-garden/README.md) | 6 | Experimental |
+| [Fritz & Fertig](games/fritz-fertig-1/README.md) | 8.5 | Experimental |
+| [Löwenzahn 2](games/loewenzahn-2/README.md) | 6 | Experimental; build blocked |
+| [Löwenzahn 3](games/loewenzahn-3/README.md) | 6 | Experimental |
+| [Löwenzahn 4](games/loewenzahn-4/README.md) | 7 | Experimental |
+| [Löwenzahn 5](games/loewenzahn-5/README.md) | 8 | Experimental; build blocked |
+
+[Additional-port validation and blockers](docs/additional-ports.md) distinguish
+successful conversions from passing gameplay journeys.
 
 Each port supports one edition, identified by its disc image's SHA-256
 (alternate rips of the same pressing may be listed too).

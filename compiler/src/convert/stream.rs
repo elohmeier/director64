@@ -31,10 +31,20 @@ fn extended_rate(b: &[u8]) -> R<u32> {
 /// A stream the browser can decode, and its length in milliseconds.
 pub fn browser_stream(bytes: &[u8]) -> R<(Vec<u8>, u32)> {
     match bytes.get(..4) {
+        Some(b"FORM") if bytes.get(8..12) == Some(b"AIFC") => {
+            let wav = super::quicktime::aiff_wav(bytes)?;
+            let duration = wav_milliseconds(&wav)?;
+            Ok((wav, duration))
+        }
         Some(b"FORM") => aiff_to_wav(bytes),
         Some(b"RIFF") => Ok((bytes.to_vec(), wav_milliseconds(bytes)?)),
         Some(head) if head[..3] == *b"ID3" || (head[0] == 0xff && head[1] & 0xe0 == 0xe0) => {
             Ok((bytes.to_vec(), mp3_milliseconds(bytes)?))
+        }
+        _ if bytes.get(4..8) == Some(&3u32.to_be_bytes()) => {
+            let audio = super::swa::decode(bytes)?;
+            let milliseconds = audio.sound.frames as u64 * 1000 / audio.sound.rate as u64;
+            Ok((super::swa::wav(&audio.sound), milliseconds as u32))
         }
         _ => Err("unrecognized audio container".into()),
     }

@@ -150,18 +150,25 @@ pub fn text_xtra_model(
     let mut segments: Vec<(u64, Vec<u8>)> = Vec::new();
     let mut p = 25usize;
     let mut extension: Option<usize> = None;
+    let mut native_cache = false;
     let mut truncated_tail = false;
-    // The document structure Director 8.5 introduced with its larger text
-    // Xtra (the FFFE extension, continued text segments) stays through D10.
-    let d10 = version >= 850;
+    // Published D8 documents already use FFFE extensions; this is
+    // independent of the larger descriptor introduced with Director 8.5.
+    let enhanced = version >= 800;
     while p + 1 < xmed.len() {
+        if version == 800 && matches!(xmed.get(p..p + 5), Some(b"\x03TXcp" | b"\x03TXcl")) {
+            if xmed.len() - p < 64 { return Err("truncated XMED TXcp section".into()) }
+            extension = Some(xmed.len() - p);
+            native_cache = true;
+            break;
+        }
         if xmed.len() - p == 3 && xmed[p..] == [3, 70, 70] {
             break;
         }
-        if d10 && xmed.len() - p == 5 && xmed[p] == 3 && &xmed[p + 1..] == b"FFFE" {
+        if enhanced && xmed.len() - p == 5 && xmed[p] == 3 && &xmed[p + 1..] == b"FFFE" {
             break;
         }
-        if d10
+        if enhanced
             && xmed[p] == 3
             && xmed.get(p + 1..p + 26) == Some(&b"FFFE0000000600040001\x0177AA"[..])
         {
@@ -171,6 +178,9 @@ pub fn text_xtra_model(
         let header = xmed
             .get(p + 1..p + 21)
             .ok_or("invalid XMED record header")?;
+        if !enhanced && header.starts_with(b"FFFE") {
+            return Err("invalid XMED record header".into());
+        }
         if xmed[p] != 3
             || !header
                 .iter()
@@ -181,10 +191,10 @@ pub fn text_xtra_model(
         let kind = hex_digits(&header[..4]).unwrap();
         let length = hex_digits(&header[4..12]).unwrap() as usize;
         let count = hex_digits(&header[12..]).unwrap();
-        let continued = kind == 2 && d10;
+        let continued = kind == 2;
         // Some Director 8.5 documents end two bytes short: the trailing style
         // record 297 without its last byte and the closing 0x03.
-        let short_tail = d10 && kind == 297 && length >= 2 && xmed.len() + 1 == p + 20 + length;
+        let short_tail = version >= 700 && kind == 297 && length >= 2 && xmed.len() + 1 == p + 20 + length;
         if !short_tail
             && (length < 1 || length > xmed.len() - p - 20 || xmed.get(p + 20 + length) != Some(&3))
             || (records.iter().any(|r| r.0 == kind) && !continued)
@@ -210,7 +220,7 @@ pub fn text_xtra_model(
     }
     let tail = xmed.len() - p;
     let closed = truncated_tail || (xmed.get(p) == Some(&3) && (tail == 1 || tail == 3));
-    if (extension.is_none() && !closed && !(d10 && tail == 5))
+    if (extension.is_none() && !closed && !(enhanced && tail == 5))
         || !records.iter().any(|r| r.0 == 0)
         || !records.iter().any(|r| r.0 == 1)
     {
@@ -235,7 +245,7 @@ pub fn text_xtra_model(
         if !valid {
             return Err("invalid XMED text length".into());
         }
-        if d10 && *offset as usize != text_bytes.len() {
+        if enhanced && *offset as usize != text_bytes.len() {
             return Err("XMED text segments out of order".into());
         }
         let raw = &bytes[comma.unwrap() + 1..];
@@ -277,7 +287,9 @@ pub fn text_xtra_model(
         json!(records.iter().map(|r| r.0).collect::<Vec<_>>()),
     );
     if let Some(bytes) = extension {
-        out.insert("mediaExtension".into(), json!({"bytes": bytes, "note": "D10 FFFE layout section retained undecoded in mediaHex"}));
+        out.insert("mediaExtension".into(), json!({"bytes": bytes, "note": if native_cache {
+            "D8 TXcp section retained undecoded in mediaHex; text and styles recovered from Paige records"
+        } else { "D10 FFFE layout section retained undecoded in mediaHex" }}));
     }
     Ok(out)
 }

@@ -152,6 +152,31 @@ pub fn reference<'a>(
                 format!("film cast relocation index {encoded} outside owner cast {owner} table")
             })?;
         if let Some(cast) = entry.as_i64().filter(|&cast| cast > 0) {
+            if !movie["casts"].as_array().into_iter().flatten().any(|c| int(&c["number"]) == cast) {
+                // An imported external film can address a local library in
+                // its owning movie (e.g. the owner's sound-effects cast).
+                // Bind only when every importer gives that slot one identity.
+                let mut target: Option<(&Value, i64)> = None;
+                for host in movies.iter().filter(|host| host["casts"].as_array().into_iter().flatten()
+                    .any(|c| c["file"] == movie["name"] && host["name"] != movie["name"]))
+                {
+                    let Some(lib) = host["casts"].as_array().into_iter().flatten()
+                        .find(|c| int(&c["number"]) == cast) else {
+                            return Err(format!("imported film cast {cast} is absent in {}",host["name"]));
+                        };
+                    let candidate = if lib["file"] == host["name"] { (host, cast) }
+                        else {
+                            let source = movies.iter().find(|m| m["name"] == lib["file"])
+                                .ok_or("imported film references an absent cast file")?;
+                            (source, 1)
+                        };
+                    if target.is_some_and(|(m,c)| m["name"] != candidate.0["name"] || c != candidate.1) {
+                        return Err(format!("imported film cast {cast} depends on its active movie"));
+                    }
+                    target = Some(candidate);
+                }
+                if let Some(target) = target { return Ok(target) }
+            }
             return Ok((movie, cast));
         }
         if let Some(file) = entry["file"].as_str() {
@@ -189,7 +214,7 @@ pub fn reference<'a>(
 /// compose the current channel states at runtime rather than freezing them.
 pub fn needs_runtime(movie: &Value, member: &Value, _movies: &[Value]) -> Result<bool, String> {
     let version = int(&movie["directorVersion"]);
-    Ok((version >= 850 || version == 10) && member["filmScore"].is_object())
+    Ok((version >= 850 || version == 10 || movie["fullEngine"] == true) && member["filmScore"].is_object())
 }
 
 /// One flattened frame of a film loop. `states` are the channels' latest
@@ -273,7 +298,7 @@ pub fn compose_film_frame(
             // Macromedia MX2004 Using Director, p202; recovered v13 films
             // contain these records alongside their ordinary sprite deltas.
             // Sound channels above are deliberately retained.
-            if version >= 13 {
+            if version >= 11 {
                 continue;
             }
             let empty_cast = channel >= 2 && bei16(&b, 0) == -2 && !b[2..].iter().any(|&v| v != 0);
@@ -356,7 +381,7 @@ pub fn compose_film_frame(
         } else {
             (cw, ch)
         };
-        if int(&child["type"]) == 8 && version == 13 {
+        if int(&child["type"]) == 8 && version >= 11 {
             if opacity == 0 {
                 continue;
             }
@@ -373,8 +398,8 @@ pub fn compose_film_frame(
                     limits,
                 );
                 continue;
-            } else if ![0, 8].contains(&ink) {
-                return Err("film-loop ink".into());
+            } else if ![0, 8, 32].contains(&ink) {
+                return Err(format!("film-loop ink {ink} on shape {child_cast}:{n}"));
             }
             let left = bei16(&b, 14) - loop_left;
             let top = bei16(&b, 12) - loop_top;
@@ -392,7 +417,7 @@ pub fn compose_film_frame(
                 .as_array()
                 .and_then(|p| p.get(b[2] as usize))
             {
-                Some(rgb) if d85 && b[20] & 0x10 == 0 => {
+                Some(rgb) if version == 11 || (d85 && b[20] & 0x10 == 0) => {
                     let rgb = int(rgb);
                     [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8]
                 }
@@ -458,7 +483,7 @@ pub fn compose_film_frame(
         // A nested loop draws its own frame at the parent's frame index. Only
         // for Director 8.5 so far: Lernerfolg (D10) defers its nested loop
         // to native composition, and widening needs that room checked.
-        let nested = int(&child["type"]) == 2 && int(&movie["directorVersion"]) == 850;
+        let nested = int(&child["type"]) == 2 && (600..=850).contains(&int(&movie["directorVersion"]));
         let nested_asset = if nested {
             let Some(frames) = child["filmAssets"].as_array() else {
                 if !break_cycles {
@@ -483,13 +508,13 @@ pub fn compose_film_frame(
         } else {
             None
         };
-        if int(&child["type"]) != 1 && !nested {
-            return Err("film-loop non-bitmap/script child".into());
+        if ![1, 12].contains(&int(&child["type"])) && !nested {
+            return Err(format!("film-loop non-bitmap/script child {child_cast}:{n} type {}", child["type"]));
         }
         let allowed =
-            [0, 8, 36].contains(&ink) || (version == 7 && ink == 2) || (version == 13 && ink == 9);
+            [0, 8, 32, 36].contains(&ink) || (version == 7 && ink == 2) || (version == 13 && ink == 9);
         if !allowed {
-            return Err("film-loop ink".into());
+            return Err(format!("film-loop ink {ink} on bitmap {child_cast}:{n}"));
         }
         let mut mask: Option<(Vec<u8>, i64, i64)> = None;
         // Director 8.5 masks are trimmed to their own bounds and placed by

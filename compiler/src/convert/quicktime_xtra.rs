@@ -57,13 +57,30 @@ pub fn metadata(
     owner: &str,
     policy: &Value,
 ) -> Result<Value, String> {
+    if payload.get(..4) == Some(&[0x10, 0, 0x10, 7]) {
+        if payload.len() < 76 || ![[0x3a, 0x50, 0, 0], [0x1a, 0x50, 0, 0]].contains(&payload[4..8].try_into().unwrap()) || payload[8..16] != [0; 8] {
+            return Err("unsupported Director 6 QuickTime Xtra controls".into());
+        }
+        let n = u32::from_be_bytes(payload[16..20].try_into().unwrap()) as usize;
+        if n == 0 || payload.len() != 20 + n + 56 { return Err("invalid Director 6 QuickTime path extent".into()) }
+        let mut identity = [0u8; 56]; identity[7] = 1; identity[15] = 1;
+        if payload[20 + n..] != identity { return Err("unsupported Director 6 QuickTime transform".into()) }
+        let authored = super::js::latin1(&payload[20..20 + n]);
+        let filename = authored.rsplit([':', '\\', '/']).next().unwrap_or("");
+        if filename.is_empty() { return Err("empty Director 6 QuickTime filename".into()) }
+        let folder = authored.strip_suffix(filename).unwrap_or("").trim_end_matches([':', '\\', '/']);
+        return Ok(json!({"type":10,"sourceType":15,"quickTimeSerialization":6,
+            "linkedDirectory":folder,"linkedFile":filename,
+            "linkedSourceCandidates":media_candidates(folder,filename,owner,policy),
+            "width":0,"height":0,"regX":0,"regY":0,"videoBoundsFromMedia":true,"videoFlags":8}));
+    }
     if payload.len() != 54 || payload[..4] != [0x11, 0, 0x11, 4] || file.is_empty() {
         return Err("unsupported QuickTime Xtra serialization".into());
     }
     let flags = u32::from_be_bytes(payload[4..8].try_into().unwrap());
     let width = u16::from_be_bytes(payload[48..50].try_into().unwrap());
     let height = u16::from_be_bytes(payload[50..52].try_into().unwrap());
-    if width == 0 || height == 0 {
+    if (width == 0) != (height == 0) {
         return Err("empty QuickTime Xtra bounds".into());
     }
     // These authored controls need additional geometry or native controller
@@ -81,5 +98,6 @@ pub fn metadata(
         "linkedDirectory":directory,"linkedFile":file,
         "linkedSourceCandidates":media_candidates(directory,file,owner,policy),
         "width":width,"height":height,"regX":width/2,"regY":height/2,
+        "videoBoundsFromMedia":width == 0 && height == 0,
         "videoFlags":video_flags}))
 }

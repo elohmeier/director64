@@ -26,6 +26,33 @@ fn truthy(v: &Value) -> bool {
     }
 }
 
+fn font_scope(movie: &Value) -> Vec<String> {
+    std::iter::once(movie["name"].as_str().unwrap_or("").to_string())
+        .chain(movie["casts"].as_array().into_iter().flatten()
+            .filter_map(|c| c["file"].as_str().map(str::to_string))).collect()
+}
+
+fn scoped_font(aliases: &HashMap<String, Vec<usize>>, fonts: &[Value], scope: &[String], name: &str)
+    -> Result<Option<usize>, String>
+{
+    let Some(indices) = aliases.get(&name.to_lowercase()) else { return Ok(None) };
+    let rank = |i: usize| fonts[i]["sources"].as_array().into_iter().flatten()
+        .filter_map(|s| s["movie"].as_str())
+        .map(|m| if scope.first().is_some_and(|own| own == m) { 2 }
+            else if scope.iter().any(|s| s == m) { 1 } else { 0 }).max().unwrap_or(0);
+    let highest = indices.iter().map(|i| rank(*i)).max().unwrap_or(0);
+    let mut matches: Vec<_> = indices.iter().copied().filter(|i| rank(*i) == highest).collect();
+    matches.sort_unstable(); matches.dedup();
+    // Several unrelated movies may embed different versions or subsets of
+    // one family. With no visible owner, its original identity is unavailable;
+    // report that through the normal missing-font path instead of guessing.
+    if highest == 0 && matches.len() > 1 { return Ok(None) }
+    if matches.len() != 1 {
+        return Err(format!("{}: ambiguous embedded font {name} in visible cast libraries", scope.first().map_or("", String::as_str)));
+    }
+    Ok(matches.first().copied())
+}
+
 /// Binds text members' styles to the recovered fonts, records each font's
 /// sizes as variants and returns the fidelity limits found.
 pub fn bind_text_fonts(
@@ -33,23 +60,18 @@ pub fn bind_text_fonts(
     fonts: &mut [Value],
     field_styles: bool,
 ) -> Result<Vec<Value>, String> {
-    let mut aliases: HashMap<String, usize> = HashMap::new();
+    let mut aliases: HashMap<String, Vec<usize>> = HashMap::new();
     for (index, font) in fonts.iter().enumerate() {
         for alias in font["aliases"].as_array().into_iter().flatten() {
             let key = alias.as_str().unwrap_or("").to_lowercase();
-            if aliases.get(&key).is_some_and(|&other| other != index) {
-                return Err(format!(
-                    "ambiguous embedded font {}",
-                    alias.as_str().unwrap_or("")
-                ));
-            }
-            aliases.insert(key, index);
+            aliases.entry(key).or_default().push(index);
         }
     }
     let mut variants: Vec<BTreeSet<i64>> = vec![BTreeSet::new(); fonts.len()];
     let mut limits = Vec::new();
     for movie in movies.iter_mut() {
         let movie_name = movie["name"].clone();
+        let scope = font_scope(movie);
         for member in movie["members"].as_array_mut().into_iter().flatten() {
             let Some(t) = member.get("typography").filter(|t| !t.is_null()).cloned() else {
                 continue;
@@ -57,9 +79,7 @@ pub fn bind_text_fonts(
             let paragraph = &t["paragraphs"][int(&t["paragraphRuns"][0]["index"]) as usize];
             let mut style = |index: i64| -> Result<Value, String> {
                 let s = &t["styles"][index as usize];
-                let font = aliases
-                    .get(&s["font"].as_str().unwrap_or("").to_lowercase())
-                    .copied();
+                let font = scoped_font(&aliases, fonts, &scope, s["font"].as_str().unwrap_or(""))?;
                 let size = &s["pointSize"];
                 let size_f = size.as_f64().unwrap_or(f64::NAN);
                 if !is_integer(size) || !(1.0..=255.0).contains(&size_f) {
@@ -111,7 +131,7 @@ pub fn bind_text_fonts(
                     .as_str()
                     .unwrap_or("")
                     .to_string();
-                if !aliases.contains_key(&font.to_lowercase()) && !missing.contains(&font) {
+                if scoped_font(&aliases, fonts, &scope, &font)?.is_none() && !missing.contains(&font) {
                     missing.push(font);
                 }
             }
@@ -182,6 +202,7 @@ pub fn bind_text_fonts(
     if field_styles {
         for movie in movies.iter_mut() {
             let movie_name = movie["name"].clone();
+            let scope = font_scope(movie);
             let casts = movie["casts"].clone();
             for member in movie["members"].as_array_mut().into_iter().flatten() {
                 if member.get("typography").is_some_and(|t| !t.is_null()) {
@@ -200,10 +221,10 @@ pub fn bind_text_fonts(
                     .get(cast_index as usize)
                     .and_then(|c| c["fontMap"].get(s["sourceFontId"].to_string()))
                     .cloned();
-                let font = mapped
-                    .as_ref()
-                    .and_then(|m| aliases.get(&m.as_str().unwrap_or("").to_lowercase()))
-                    .copied();
+                let font = match mapped.as_ref() {
+                    Some(m) => scoped_font(&aliases, fonts, &scope, m.as_str().unwrap_or(""))?,
+                    None => None,
+                };
                 let (cast, number) = (member["cast"].clone(), member["number"].clone());
                 let Some(f) = font else {
                     let name = mapped
@@ -401,7 +422,7 @@ pub fn text_reachability(movies: &[Value], scripts: &[(String, String)]) -> Valu
 /// cannot stand in for the full face when AVM1 or Lingo changes the text.
 /// Font zero is reserved for deliberate legacy substitutes, not this path.
 pub fn bind_flash_fonts(movies: &[Value], fonts: &mut [Value]) -> Result<Vec<Value>, String> {
-    let mut aliases = HashMap::new();
+    let mut aliases: HashMap<String, Vec<usize>> = HashMap::new();
     for (index, font) in fonts.iter().enumerate() {
         let number = font["number"].as_u64().unwrap_or(0);
         if number == 0 || number >= 255 {
@@ -413,16 +434,12 @@ pub fn bind_flash_fonts(movies: &[Value], fonts: &mut [Value]) -> Result<Vec<Val
             .flatten()
             .filter_map(Value::as_str)
         {
-            if aliases
-                .insert(alias.to_lowercase(), index)
-                .is_some_and(|old| old != index)
-            {
-                return Err(format!("ambiguous Flash font identity {alias}"));
-            }
+            aliases.entry(alias.to_lowercase()).or_default().push(index);
         }
     }
     let mut limits = Vec::new();
     for movie in movies {
+        let scope = font_scope(movie);
         for member in movie["members"].as_array().into_iter().flatten() {
             let mut missing = BTreeSet::new();
             for field in member["flashFields"]
@@ -442,7 +459,7 @@ pub fn bind_flash_fonts(movies: &[Value], fonts: &mut [Value]) -> Result<Vec<Val
                         movie["name"], member["cast"], member["number"]
                     ));
                 }
-                let Some(&index) = aliases.get(&name.to_lowercase()) else {
+                let Some(index) = scoped_font(&aliases, fonts, &scope, name)? else {
                     missing.insert(name.to_string());
                     continue;
                 };

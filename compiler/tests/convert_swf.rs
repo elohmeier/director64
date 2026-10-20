@@ -168,6 +168,16 @@ fn swf(body: &[u8], frames: u16) -> Vec<u8> {
 }
 
 #[test]
+fn flash_one_static_vectors_retain_the_pending_background_frame_at_end() {
+    let body=concat(&[&tag(9,&[255,255,255]),&tag(1,&[]),&tag(9,&[255,255,255])]);
+    let result=flash_frames(&swf(&body,2)).unwrap();
+    assert_eq!(result.frames.len(),2);
+    assert_eq!(result.frames[0],result.frames[1]);
+    // Without a pending frame command, a missing ShowFrame stays a failure.
+    assert!(flash_frames(&swf(&tag(1,&[]),2)).is_err());
+}
+
+#[test]
 fn long_flash_timelines_stream_frames_without_retaining_rgba() {
     let body = tag(1, &[]).repeat(359);
     let mut count = 0;

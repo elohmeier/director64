@@ -1,0 +1,65 @@
+{
+  "director_version": 800,
+  "directories": [
+    ".",
+    "BASTEL",
+    "BAUWAGEN",
+    "DALLI",
+    "EBBEFLUT",
+    "FZ",
+    "GALERIE",
+    "IGWATT",
+    "IRAD",
+    "KOCH",
+    "LEX",
+    "MED",
+    "OPTIK",
+    "RIECH",
+    "SCHNECK",
+    "TNASE",
+    "TS1",
+    "TS2",
+    "TS3",
+    "TS4",
+    "TS5",
+    "TS6",
+    "WATTWURM",
+    "WETT",
+    "WIW",
+    "ZAHNRAD"
+  ],
+  "director_files": 75,
+  "source_sha256": "47cce9143e6fcc4c1026d75fd39c7804e8e0c281cdfc8ee92791f0a25f78d4e4",
+  "extended_d6": true,
+  "native_stage": true,
+  "folder_qualified_names": true,
+  "full_engine": true,
+  "external_cast_aliases": {
+    "U000BIDEO.CXT": "VIDEO.CXT"
+  },
+  "sound_resource_copies": [
+    {
+      "movie": "RIECH__RIECH.DXR",
+      "cast": 3,
+      "member": 60,
+      "source_sha256": "01a2259f57d7e2ce550489f521b414791899bb4920123be0863b0565da0ab446",
+      "file": "BASTEL/ERFINDER.DCR",
+      "resource": 903,
+      "replacement_sha256": "4ff208d2c6a085eb71f6d4676435e5df5ab0e8825725755ea47983446cce60e0"
+    }
+  ],
+  "counts": {
+    "bitmap_references": 4229,
+    "bytecode_sites": 51393,
+    "files": 75,
+    "handlers": 2358,
+    "members": 6607,
+    "movie_references": 22,
+    "resources": 15203,
+    "score_bytes": 1751733,
+    "score_chunks": 131,
+    "scripts": 971,
+    "sound_references": 132,
+    "unresolved_recovery_records": 6235
+  }
+}

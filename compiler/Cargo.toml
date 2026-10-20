@@ -14,7 +14,7 @@ name = "director64-aot"
 path = "src/main.rs"
 
 [dependencies]
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["preserve_order", "unbounded_depth"] }
 sha2 = "0.10"
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 # Shockwave bitmaps stored as JPEG (ediM).

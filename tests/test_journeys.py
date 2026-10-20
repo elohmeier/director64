@@ -30,8 +30,8 @@ def test_every_port_has_registered_journeys():
                 assert sum("label" in step for step in plan["steps"]) >= 2
                 assert any("movie" in step.get("expect", {}) or "movie" in step.get("wait", {})
                            for step in plan["steps"])
-    assert len(runnable) == 14
-    assert len(unavailable) == 6
+    assert len(runnable) == 20
+    assert len(unavailable) == 0
 
 
 def test_expectations_fail_on_absent_values_and_wrong_destinations():
@@ -185,8 +185,8 @@ def test_suite_continues_after_failure_and_records_catalogued_games(tmp_path, mo
     monkeypatch.setattr(journeys, "run_case", run_case)
     assert journeys.main(None, ["--output", str(tmp_path)]) == 1
     summary = json.loads((tmp_path / "summary.json").read_text())
-    assert len(set(visited)) == 14
-    assert len(summary["unavailable"]) == 6
+    assert len(set(visited)) == 20
+    assert len(summary["unavailable"]) == 0
     assert summary["status"] == "failed"
 
 
@@ -196,7 +196,7 @@ def test_all_journeys_can_be_listed_without_game_media():
                             env=os.environ | {"DIRECTOR64_WORK_DIR": "unused"})
     assert result.returncode == 0, result.stderr
     assert "findus-birthday/player-registration" in result.stdout
-    assert "fritz-fertig-1: unavailable" in result.stdout
+    assert "fritz-fertig-1/opening-player-screen" in result.stdout
 
 
 def test_worker_rejects_a_plan_edited_during_a_suite(tmp_path):

@@ -398,7 +398,7 @@ pub fn write(
     out.0.extend_from_slice(b"D64P");
     out.u16(FORMAT);
     out.u16(profile.version);
-    out.u16(u16::from(profile.extended));
+    out.u16(u16::from(profile.extended) | (u16::from(profile.full_engine) << 1));
     out.u16(sections.len() as u16);
     out.0.extend_from_slice(&abi);
     out.u32(0);

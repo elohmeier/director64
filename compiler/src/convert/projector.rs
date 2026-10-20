@@ -18,6 +18,7 @@ fn le32(b: &[u8], at: usize) -> usize {
 
 pub fn projector_view(input: &[u8], selection: Option<&Value>) -> Result<View, String> {
     let mut candidates = Vec::new();
+    let mut mirrors = Vec::new();
     if input.len() >= 44 {
         for offset in 0..=input.len() - 44 {
             if &input[offset..offset + 4] != b"XFIR" || &input[offset + 8..offset + 16] != b"39VMpami" {
@@ -27,12 +28,27 @@ pub fn projector_view(input: &[u8], selection: Option<&Value>) -> Result<View, S
             let imap_length = le32(input, offset + 16);
             let map_offset = le32(input, offset + 24);
             if length < 36 || length > input.len() - offset - 8 || imap_length != 24
-                || map_offset < offset + 44 || map_offset > offset + length - 24
                 || input.get(map_offset..map_offset + 4) != Some(b"pamm")
             {
                 return Err("invalid embedded projector archive bounds".into());
             }
+            if map_offset < offset + 44 || map_offset > offset + length - 24 {
+                mirrors.push(offset);
+                continue;
+            }
             candidates.push(offset);
+        }
+    }
+    // A projector can append an exact copy of its PE resource movie while
+    // retaining the original absolute mmap offsets. Only the owning archive
+    // is a separate movie; reject any nonidentical out-of-container view.
+    for offset in mirrors {
+        let size = le32(input, offset + 4) + 8;
+        if !candidates.iter().any(|&original| {
+            size == le32(input, original + 4) + 8
+                && input[offset..offset + size] == input[original..original + size]
+        }) {
+            return Err("invalid embedded projector archive mirror".into());
         }
     }
     let archives: Vec<Value> = candidates

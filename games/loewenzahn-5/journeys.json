@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "journeys": [
+    {
+      "name": "opening-login",
+      "description": "Run startup and DirectSound checks into the login introduction, then keep the selection screen running.",
+      "covers": [
+        "startup",
+        "sound-device-selection",
+        "profile-selection",
+        "sustained-playback"
+      ],
+      "steps": [
+        {
+          "expect": {
+            "movie": "START.DXR"
+          },
+          "label": "launcher"
+        },
+        {
+          "wait": {
+            "movie": "LOGIN.DXR"
+          },
+          "ticks": 6000,
+          "label": "login"
+        },
+        {
+          "idle": 3600,
+          "expect": {
+            "movie": "LOGIN.DXR"
+          },
+          "label": "login-playback"
+        }
+      ]
+    }
+  ]
+}

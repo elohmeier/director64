@@ -63,7 +63,8 @@ fn cast_file_name(file_path: &str) -> String {
         .next()
         .unwrap_or("")
         .to_uppercase();
-    super::source::canonical_name(&last)
+    if !last.is_empty() && !last.contains('.') { format!("{last}.CXT") }
+    else { super::source::canonical_name(&last) }
 }
 /// The converted name of an external cast a movie links. With folder-
 /// qualified names (source::policy_source_files) a cast resolves as Director
@@ -346,7 +347,8 @@ pub fn convert_movie(fs: &mut dyn Files, sources: &mut Sources, job: &MovieJob) 
         );
         let empty_internal = link.is_none()
             && file_path.is_empty()
-            && int(&library["maxMember"]) < int(&library["minMember"]);
+            && (int(&library["maxMember"]) == 0
+                || int(&library["maxMember"]) < int(&library["minMember"]));
         let mut cast = Map::new();
         cast.insert("number".into(), json!(i + 1));
         cast.insert("name".into(), library["name"].clone());
@@ -540,7 +542,7 @@ pub fn convert_movie(fs: &mut dyn Files, sources: &mut Sources, job: &MovieJob) 
     let shape_palette = file
         .chunks
         .iter()
-        .find(|c| c.fourcc == "CLUT")
+        .find(|c| c.fourcc == "CLUT" && !c.data.is_empty())
         .map(|c| c.data.clone());
     let palette_bytes = match shape_palette {
         Some(bytes) => bytes,
@@ -678,6 +680,18 @@ fn palette_repair<'c>(
 
 /// The first of the movie's own castlibs whose member `number` is a palette,
 /// with how many castlibs hold one there: (castlib, CLUT bytes, candidates).
+fn palette_fallback(m: &Member<'_>, policy: &Value, meta: &super::bitmap::Meta,
+    cast: i64, member: i64, limits: &mut Vec<Value>) -> R<Option<Vec<u8>>> {
+    if policy["invalid_palette_fallback"] != "systemMac" { return Ok(None) }
+    // ScummVM's true-colour bitmap renderer chooses systemMac when a
+    // source palette ID is absent from the loaded palette table. Keep the
+    // source defect and the lack of original-projector comparison visible.
+    limits.push(json!({"kind":"invalid-source-palette-system-mac", "movie":m.movie_name,
+        "cast":cast,"member":member,"sourceCast":meta.palette_cast,"sourceMember":meta.palette,
+        "original_projector_verified":false}));
+    Ok(Some(builtin_palette(0, meta.depth)?))
+}
+
 fn palette_search<'c>(
     m: &Member<'c>,
     child: &Child<'c>,
@@ -802,6 +816,10 @@ fn convert_member<'c>(
             set(entry, "asset", json!(asset));
             set(entry, "useAlpha", json!(true));
             set(entry, "richTextBackground", json!(rich.background));
+            set(entry, "richTextSourceBounds", json!([rich.source_width, rich.source_height]));
+            if rich.trailing_rows != 0 {
+                set(entry, "richTextTrailingRows", json!(rich.trailing_rows));
+            }
             if let Some(text) = child(Some(id), "RTE1", false)? {
                 set(entry, "text", json!(js::latin1(text)));
             }
@@ -933,8 +951,10 @@ fn convert_member<'c>(
                             match sources.external_palette(fs, &resolved, meta.palette) {
                                 Ok(bytes) => bytes,
                                 Err(error) => {
-                                    palette_repair(m, child, &meta, cast_number, member, limits)?
-                                        .ok_or(error)?
+                                    match palette_repair(m, child, &meta, cast_number, member, limits)? {
+                                        Some(bytes) => bytes,
+                                        None => palette_fallback(m, policy, &meta, cast_number, member, limits)?.ok_or(error)?,
+                                    }
                                 }
                             },
                         );
@@ -955,10 +975,10 @@ fn convert_member<'c>(
                         };
                         palette = match child(cast_id, "CLUT", true) {
                             Ok(found) => found.map(<[u8]>::to_vec),
-                            Err(error) => Some(
-                                palette_repair(m, child, &meta, cast_number, member, limits)?
-                                    .ok_or(error)?,
-                            ),
+                            Err(error) => Some(match palette_repair(m, child, &meta, cast_number, member, limits)? {
+                                Some(bytes) => bytes,
+                                None => palette_fallback(m, policy, &meta, cast_number, member, limits)?.ok_or(error)?,
+                            }),
                         };
                     }
                 }
@@ -1091,14 +1111,37 @@ fn convert_member<'c>(
             };
             if compressed.is_some() || version == 500 || (classic.is_some() && !paired) {
                 let sound = if let Some(mp3) = compressed {
-                    let sound = super::mp3::decode_shockwave_cast(mp3)?;
+                    let sound = if mp3.get(4..8) == Some(&3u32.to_be_bytes()) {
+                        let audio = super::swa::decode(mp3)?;
+                        set(entry, "cuePoints", json!(audio.cues));
+                        audio.sound
+                    } else {
+                        super::mp3::decode_shockwave_cast(mp3)?
+                    };
                     set(entry, "sourceEncoding", json!("MPEG3"));
                     sound
                 } else {
-                    sound_resource(match classic {
+                    let original = match classic {
                         Some(bytes) => bytes,
                         None => child(Some(id), "snd ", true)?.unwrap(),
-                    })?
+                    };
+                    if let Some(pin) = policy["sound_resource_copies"].as_array().into_iter().flatten()
+                        .find(|p| p["movie"] == m.movie_name && p["cast"] == cast_number && p["member"] == member)
+                    {
+                        if pin["source_sha256"] != sha256(original) || original.len() != 82 {
+                            return Err("sound recovery source changed".into());
+                        }
+                        let donor = sources.dump(fs, pin["file"].as_str().ok_or("sound recovery file")?)?;
+                        let data = &donor.chunk("snd ", pin["resource"].as_i64().ok_or("sound recovery resource")?)
+                            .ok_or("missing sound recovery resource")?.data;
+                        if pin["replacement_sha256"] != sha256(data) || data.get(..78) != original.get(..78) {
+                            return Err("sound recovery copy identity/header changed".into());
+                        }
+                        limits.push(obj(vec![("kind", json!("source-sound-recovered-copy")),
+                            ("movie", json!(m.movie_name)), ("cast", json!(cast_number)), ("member", json!(member)),
+                            ("source", pin.clone()), ("original_projector_verified", json!(false))]));
+                        sound_resource(data)?
+                    } else { sound_resource(original)? }
                 };
                 let mut h = vec![0u8; 84];
                 for (offset, value) in [
@@ -1119,6 +1162,13 @@ fn convert_member<'c>(
                 let s = child(Some(id), "sndS", false)?;
                 if h.is_none() && s.is_none() {
                     set(entry, "empty", json!(true));
+                    if int(&m.info["info"]["flags"]) & 1 != 0 {
+                        let directory = cast_string(bytes, 2)?;
+                        let file = cast_string(bytes, 3)?;
+                        set(entry, "linkedDirectory", json!(directory));
+                        set(entry, "linkedFile", json!(file));
+                        set(entry, "text", json!(format!("{directory}:{file}")));
+                    }
                     return Ok(());
                 }
                 let (Some(h), Some(s)) = (h, s) else {
@@ -1132,7 +1182,26 @@ fn convert_member<'c>(
             }
             let bits = be32(&header, 68)? as f64;
             let channels = be32(&header, 76)? as f64;
-            let frames = be32(&header, 40)? as f64;
+            let mut frames = be32(&header, 40)? as f64;
+            let declared = frames * bits / 8.0 * channels;
+            // The raw PCM stream's physical extent determines playback length
+            // (ScummVM sound.cpp MoaSoundFormatDecoder). Some published casts
+            // retain a stale numFrames while size and PCM frame width still
+            // describe the complete sndS. Never pad or invent missing samples.
+            if (samples.len() as f64) < declared && [8.0, 16.0].contains(&bits)
+                && [1.0, 2.0].contains(&channels)
+                && be32(&header, 4)? as usize == samples.len()
+                && be32(&header, 72)? as f64 == bits / 8.0
+                && be32(&header, 80)? as f64 == channels * bits / 8.0
+                && samples.len() % (channels * bits / 8.0) as usize == 0
+            {
+                set(entry, "sourceDeclaredFrames", json!(frames as u64));
+                frames = samples.len() as f64 / (channels * bits / 8.0);
+                limits.push(obj(vec![("kind", json!("source-sound-frame-count")),
+                    ("movie", json!(m.movie_name)), ("cast", json!(cast_number)),
+                    ("member", json!(member)), ("sourceFrames", entry["sourceDeclaredFrames"].clone()),
+                    ("frames", json!(frames as u64)), ("original_projector_verified", json!(false))]));
+            }
             let declared = frames * bits / 8.0 * channels;
             // Director 8.5 and later can pad sndS with a zero prefix (458
             // bytes in the Findus 8.5 casts) ahead of the declared frames.
@@ -1170,7 +1239,13 @@ fn convert_member<'c>(
                 set(entry, "loopEnd", json!(frames as i64));
             }
             if int(&entry["loopEnd"]) as f64 > frames {
-                return Err("sound loop exceeds sample frames".into());
+                if entry["looping"] != 0 {
+                    return Err("sound loop exceeds sample frames".into());
+                }
+                let source_loop_end = entry["loopEnd"].clone();
+                set(entry, "sourceLoopEnd", source_loop_end);
+                set(entry, "loopStart", json!(0));
+                set(entry, "loopEnd", json!(frames as u64));
             }
             if let Some(cues) = child(Some(id), "cupt", false)? {
                 let count = if cues.len() >= 4 {
@@ -1368,6 +1443,43 @@ fn convert_member<'c>(
                     .insert("mediaHex".into(), json!(js::hex(x)));
             }
             match xtra.symbol.as_str() {
+                "SWA" => {
+                    let owner = sources.source_paths.get(m.source_name)
+                        .and_then(Value::as_str).unwrap_or(m.source_name);
+                    let root = files::join(sources.media, &files::parent(owner));
+                    set(entry, "sourceType", json!(15));
+                    set(entry, "type", json!(6));
+                    set(entry, "text", json!(js::latin1(&payload[20..])));
+                    let Some(path) = super::swa::optional_linked_path(fs, &root, payload)? else {
+                        // Preserve a shipped but unresolved SWA slot. Its native
+                        // preload/play state is 9 (file error), with no invented
+                        // PCM or duration. The source audit retains its path.
+                        set(entry, "empty", json!(true));
+                        set(entry, "missingLinkedAudio", json!(true));
+                        limits.push(obj(vec![("kind", json!("source-missing-linked-audio")),
+                            ("movie", json!(m.movie_name)), ("cast", json!(cast_number)),
+                            ("member", json!(member)), ("path", entry["text"].clone()),
+                            ("runtimeState", json!(9)), ("original_projector_verified", json!(false))]));
+                        return Ok(());
+                    };
+                    let source = fs.read(&path)?;
+                    let audio = super::swa::decode(&source)?;
+                    let wav = super::swa::wav(&audio.sound);
+                    let digest = sha256(&wav)[..24].to_string();
+                    set(entry, "sourceType", json!(15));
+                    set(entry, "type", json!(6));
+                    set(entry, "sourceEncoding", json!("SWA3"));
+                    set(entry, "sourceAudioSha256", json!(sha256(&source)));
+                    set(entry, "asset", json!(format!("{digest}.wav64")));
+                    set(entry, "frames", json!(audio.sound.frames));
+                    set(entry, "rate", json!(audio.sound.rate));
+                    set(entry, "channels", json!(audio.sound.channels));
+                    set(entry, "loopStart", json!(0));
+                    set(entry, "loopEnd", json!(audio.sound.frames));
+                    set(entry, "looping", json!(0));
+                    set(entry, "cuePoints", json!(audio.cues));
+                    write_asset(fs, &files::join(output, &format!("wav/{digest}.wav")), &wav)?;
+                }
                 "cursor" => {
                     set(
                         entry,
@@ -1644,7 +1756,7 @@ fn convert_member<'c>(
                         limits.push(obj(l));
                     }
                 }
-                "quickTimeMedia" => {
+                "quickTimeMedia" | "QuickTimeMedia" => {
                     let directory = cast_string(bytes, 2)?;
                     let file = cast_string(bytes, 3)?;
                     let owner = sources

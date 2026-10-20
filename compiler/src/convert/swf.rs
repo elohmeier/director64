@@ -2685,7 +2685,12 @@ fn timeline(
             }
         } else if tag == 43 {
             labels.push(json!({"frame": frame_count + 1, "name": js::latin1(payload).trim_end_matches('\0')}));
-        } else if tag == 1 {
+        } else if tag == 1 || (tag == 0 && b[3] == 1 && frame_count + 1 == declared_frames
+            && tags.iter().rposition(|t| t.tag == 1).is_some_and(|i|
+                i + 2 < tags.len() && tags[i + 1..tags.len() - 1].iter().all(|t| t.tag == 9))) {
+            // Flash 1 publications can terminate their final declared frame
+            // at End, after only background-colour tags. Keep that final
+            // display-list pose; do not relax counts for truncated timelines.
             if !payload.is_empty() {
                 return Err("unsupported SWF frame payload".into());
             }
@@ -2991,8 +2996,8 @@ pub fn vector_shape_pixels(envelope: &[u8]) -> R<VectorShape> {
         return Err("unsupported vectorShape XMED envelope".into());
     }
     let scene = timeline(&envelope[12..], None, None)?;
-    if scene.frames.len() != 1 {
-        return Err("vectorShape must have one SWF frame".into());
+    if scene.frames.is_empty() || scene.frames.iter().any(|f| f != &scene.frames[0]) {
+        return Err("vectorShape must have one static SWF pose".into());
     }
     if scene.counts != (0, 0, 0)
         || scene.audio.is_some()

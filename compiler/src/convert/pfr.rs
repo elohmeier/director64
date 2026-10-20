@@ -138,7 +138,10 @@ pub fn parse(b: &[u8]) -> R<Font> {
             let kind = p.u8()?;
             let data = b.get(p.p..p.p + size).ok_or("truncated PFR")?;
             match kind {
-                1 => return Err("unsupported PFR outline font".into()),
+                // Optional pre-rendered bitmap strikes do not replace the
+                // outline character table below. Export the original cubic
+                // outlines; retain strike bytes in the source PFR artifact.
+                1 => {},
                 2 => {
                     let end = data.iter().position(|&c| c == 0).unwrap_or(data.len());
                     name = Some(&data[..end]);

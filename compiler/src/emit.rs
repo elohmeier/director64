@@ -168,7 +168,7 @@ pub fn compile_program(program: &Program, names: &Names) -> Result<Compiled, Str
         .enumerate()
         .map(|(i, n)| (n.clone(), i))
         .collect();
-    if globals.len() > 1024 {
+    if globals.len() > 2048 {
         return Err("global budget exceeded".into());
     }
     let custom_calls: HashSet<String> = handlers.iter().map(|h| h.name.clone()).collect();

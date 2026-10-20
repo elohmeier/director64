@@ -266,6 +266,7 @@ left
 length
 line
 linecount
+linked
 list
 listp
 literal

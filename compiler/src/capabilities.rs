@@ -66,6 +66,7 @@ pub fn profile(model: &Value) -> Result<Profile, String> {
     Ok(Profile {
         version,
         extended: model["extendedD6"].as_bool().unwrap_or(false),
+        full_engine: model["fullEngine"].as_bool().unwrap_or(false),
     })
 }
 
@@ -231,7 +232,8 @@ pub fn audit(model: &Value, target: Target, selected: Option<Profile>) -> Result
             scores.push((&film["filmScore"], Some(film)));
         }
         for (score, film) in scores {
-            let record_size = if film.is_some() { 48 } else { record_size };
+            let record_size = film.and_then(|f| f["filmScore"]["recordSize"].as_u64())
+                .map_or(record_size, |n| n as usize);
             for (index, frame) in score["frames"].as_array().into_iter().flatten().enumerate() {
                 for channel in frame["channels"].as_array().into_iter().flatten() {
                     let channel_number = number(&channel["channel"], 0);

@@ -1,7 +1,7 @@
 schema_version = 1
 slug = "fritz-fertig-1"
 title = "Fritz & Fertig"
-status = "catalogued"
+status = "experimental"
 default_source = "sha256-d3a2ac348afa"
 
 [[sources]]
@@ -10,3 +10,30 @@ file = "FritzFertig.01.iso"
 sha256 = "d3a2ac348afa513e224001190b94220dfb54d3a0d32f27c81f9787bbd245e7c0"
 bytes = 713625600
 kind = "iso9660"
+
+[recovery]
+director_version = 850
+media_root = "MEDIA"
+
+[port]
+extended_d6 = true
+director_version = 850
+media_root = "MEDIA"
+entry_movie = "START"
+
+[player]
+saves = ["*.ini", "*.dat", "*.sav", "*.txt"]
+
+[convert]
+external_media = { root = "MEDIA", extensions = ["AIF"], bind = "linked-sounds", path_aliases = { "Z_C001_200" = "Z_C001_2" } }
+streams = ["Z_A000=MEDIA/Z_A000", "Z_A010=MEDIA/Z_A010", "Z_A020=MEDIA/Z_A020", "Z_A035=MEDIA/Z_A035", "Z_B000=MEDIA/Z_B000", "Z_B001=MEDIA/Z_B001", "Z_B010=MEDIA/Z_B010", "Z_B015=MEDIA/Z_B015", "Z_B020=MEDIA/Z_B020", "Z_B020S=MEDIA/Z_B020S", "Z_B025=MEDIA/Z_B025", "Z_B030=MEDIA/Z_B030", "Z_B030S=MEDIA/Z_B030S", "Z_B035=MEDIA/Z_B035", "Z_B040=MEDIA/Z_B040", "Z_B040S=MEDIA/Z_B040S", "Z_B045=MEDIA/Z_B045", "Z_B050=MEDIA/Z_B050", "Z_B050S=MEDIA/Z_B050S", "Z_B055=MEDIA/Z_B055", "Z_B060=MEDIA/Z_B060", "Z_B060S=MEDIA/Z_B060S", "Z_B070=MEDIA/Z_B070", "Z_B070S=MEDIA/Z_B070S", "Z_B075=MEDIA/Z_B075", "Z_B080=MEDIA/Z_B080", "Z_C000=MEDIA/Z_C000", "Z_C001=MEDIA/Z_C001", "Z_C001_200=MEDIA/Z_C001_2", "Z_C005=MEDIA/Z_C005", "Z_C010=MEDIA/Z_C010", "Z_C100=MEDIA/Z_C100", "Z_C105=MEDIA/Z_C105", "Z_C110=MEDIA/Z_C110", "Z_C120=MEDIA/Z_C120", "Z_C130=MEDIA/Z_C130", "Z_C140=MEDIA/Z_C140", "Z_C150=MEDIA/Z_C150", "Z_C160=MEDIA/Z_C160", "Z_C200=MEDIA/Z_C200", "Z_C205=MEDIA/Z_C205", "Z_C210=MEDIA/Z_C210", "Z_C220=MEDIA/Z_C220", "Z_C230=MEDIA/Z_C230", "Z_C240=MEDIA/Z_C240", "Z_C250=MEDIA/Z_C250", "Z_C300=MEDIA/Z_C300", "Z_C305=MEDIA/Z_C305", "Z_C310=MEDIA/Z_C310", "Z_C320=MEDIA/Z_C320", "Z_C330=MEDIA/Z_C330", "Z_C340=MEDIA/Z_C340", "Z_D000=MEDIA/Z_D000", "Z_D100=MEDIA/Z_D100", "Z_D200=MEDIA/Z_D200", "Z_D210S=MEDIA/Z_D210S", "Z_D220=MEDIA/Z_D220", "Z_D300=MEDIA/Z_D300", "Z_D310=MEDIA/Z_D310", "Z_D320S=MEDIA/Z_D320S", "Z_D330S=MEDIA/Z_D330S", "Z_D340=MEDIA/Z_D340", "Z_D400=MEDIA/Z_D400"]
+
+# The original disc check expects this Optgraph serial.
+[[convert.patch]]
+id = "optgraph-serial"
+movie = "START.DXR"
+cast = "Internal"
+member = 21
+handler = "getreturnval"
+source_sha256 = "eabc51791ee869de021d51feae5fb886a262b39cce0bfbd49a7e94d688b59001"
+body = 'return "58404066"'

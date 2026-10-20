@@ -1,0 +1,39 @@
+{
+  "director_version": 600,
+  "directories": [
+    ".",
+    "DATA"
+  ],
+  "director_files": 37,
+  "source_sha256": "a90d31062bfb8514df01bd6a5ffff47e7417e5ebe43006b571a289cfd7149653",
+  "extended_d6": true,
+  "native_stage": true,
+  "projector": "WIN95.EXE",
+  "counts": {
+    "bitmap_references": 2067,
+    "bytecode_sites": 31569,
+    "files": 37,
+    "handlers": 1950,
+    "members": 4057,
+    "movie_references": 102,
+    "resources": 9920,
+    "score_bytes": 741518,
+    "score_chunks": 101,
+    "scripts": 990,
+    "sound_references": 192,
+    "unresolved_recovery_records": 101
+  },
+  "invalid_palette_fallback": "systemMac",
+  "startup_movie": "START.DXR",
+  "shape_pattern_library": {
+    "path": "WIN95.EXE",
+    "sha256": "219f1e8653adb5b27274046fc4e96205b7e2327e0f009614ac76b7e8d7f803b5",
+    "inline": {
+      "offset": 1331099,
+      "bytes": 3213,
+      "sha256": "00470e173547b357256c78a1acd37048c76802142ff82bf37443df60ad706202",
+      "palette": "systemWin"
+    }
+  },
+  "full_engine": true
+}

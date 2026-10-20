@@ -28,6 +28,62 @@ fn u32le(b: &[u8], p: usize) -> R<u32> {
     ))
 }
 
+/// Director 6's monolithic Windows player stores its eight stock tiles as
+/// big-endian byte counts followed by BITD planes. The policy pins the exact
+/// owning executable and archive, rather than embedding recovered pixels.
+pub fn inline_tile(bytes: &[u8], spec: &Value, index: usize) -> R<(usize, usize, Vec<u8>)> {
+    let start = spec["offset"].as_u64().ok_or("inline texture offset")? as usize;
+    let length = spec["bytes"].as_u64().ok_or("inline texture length")? as usize;
+    let data = bytes.get(start..start.checked_add(length).ok_or("inline texture extent")?)
+        .ok_or("inline texture archive outside engine")?;
+    if spec["sha256"] != sha256(data).as_str() || spec["palette"] != "systemWin" || index >= 8 {
+        return Err("inline texture archive identity changed".into());
+    }
+    let palette = super::bitmap::decode_palette(&super::bitmap::windows_palette(8, false)?)?;
+    let mut at = 0;
+    let mut selected = None;
+    for slot in 0..8 {
+        let prefix = data.get(at..at + 4).ok_or("truncated inline texture length")?;
+        let n = u32::from_be_bytes(prefix.try_into().unwrap()) as usize;
+        at += 4;
+        if n == 0 || n > 65536 { return Err("inline texture size".into()) }
+        let encoded = data.get(at..at.checked_add(n).ok_or("inline texture extent")?)
+            .ok_or("truncated inline texture plane")?;
+        at += n;
+        let (w, h) = if slot == 0 { (64, 32) } else { (16, 16) };
+        let mut end = encoded.len();
+        if end != w * h {
+            let (mut input, mut output) = (0, 0);
+            while output < w * h {
+                let control = *encoded.get(input).ok_or("truncated inline texture command")?;
+                input += 1;
+                let repeat = control & 128 != 0;
+                let count = if repeat { 257 - control as usize } else { control as usize + 1 };
+                input += if repeat { 1 } else { count };
+                if input > encoded.len() || count > w * h - output {
+                    return Err("invalid inline texture run".into());
+                }
+                output += count;
+            }
+            // The old player's seventh static plane retains a single zero
+            // allocation terminator after its complete 256-pixel stream.
+            if input != end && encoded.get(input..) != Some(&[0]) {
+                return Err("trailing inline texture commands".into());
+            }
+            end = input;
+        }
+        let plane = super::bitmap::decode_packbits(&encoded[..end], w * h)?;
+        if slot == index {
+            let rgba = plane.pixels.iter().flat_map(|i| {
+                let [r, g, b] = palette[*i as usize]; [r, g, b, 255]
+            }).collect();
+            selected = Some((w, h, rgba));
+        }
+    }
+    if at != data.len() { return Err("trailing inline texture archive bytes".into()) }
+    selected.ok_or_else(|| "inline texture index".into())
+}
+
 /// Uncompressed Windows PJ00/PJ01 runtime component table. The footer
 /// locates a 24-byte header followed by 52-byte component records; each
 /// record stores its absolute file offset, byte count and NUL-terminated
@@ -372,7 +428,7 @@ pub fn bind(
                 Some((
                     tile["asset"]
                         .as_str()
-                        .ok_or("VWTL bitmap has no converted pixels")?
+                        .ok_or_else(|| format!("{} cast {cast_number} pattern {pattern}: VWTL bitmap {cast}:{} has no converted pixels: {tile}", movie["name"], reference["member"]))?
                         .to_string(),
                     reference["rect"].clone(),
                     tile["patternSource"].clone(),
@@ -471,7 +527,12 @@ pub fn bind(
                 };
                 library = Some(bytes);
             }
-            let (w, h, rgba) = dib(pe_bitmap(library.as_ref().unwrap(), (pattern - 37) as u16)?)?;
+            let bytes = library.as_ref().unwrap();
+            let (w, h, rgba) = if policy["shape_pattern_library"]["inline"].is_object() {
+                inline_tile(bytes, &policy["shape_pattern_library"]["inline"], (pattern - 57) as usize)?
+            } else {
+                dib(pe_bitmap(bytes, (pattern - 37) as u16)?)?
+            };
             brush_asset(w, h, &rgba)?
         };
         let asset = movie::image_asset_name(&bytes);

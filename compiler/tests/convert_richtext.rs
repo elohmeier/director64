@@ -87,8 +87,19 @@ fn malformed_rich_text_fails_at_the_format_boundary() {
             "{commands:?}"
         );
     }
-    assert!(decode(&meta, &bitmap(3, 1, &[0, 0])).is_err());
     let mut scrolling = meta.clone();
     scrolling[19] = 1;
-    assert!(decode(&scrolling, &bitmap(2, 1, &[0, 0])).is_err());
+    assert!(decode(&scrolling, &bitmap(2, 1, &[15, 2])).unwrap().pixels.iter().all(|b| *b == 0));
+}
+
+#[test]
+fn viewport_crops_or_pads_the_backing_bitmap_and_complete_retained_rows_are_bounded() {
+    let cropped = decode(&metadata(2, 1), &bitmap(3, 2, &[15, 3, 0, 0, 0, 0])).unwrap();
+    assert_eq!((cropped.width, cropped.height), (2, 1));
+    assert_eq!((cropped.source_width, cropped.source_height, cropped.trailing_rows), (3, 2, 1));
+    assert_eq!(cropped.pixels, [255, 0, 0, 255].repeat(2));
+    let padded = decode(&metadata(3, 2), &bitmap(2, 1, &[15, 2])).unwrap();
+    assert_eq!(&padded.pixels[..8], &[255, 0, 0, 255].repeat(2));
+    assert!(padded.pixels[8..].iter().all(|b| *b == 0));
+    assert!(decode(&metadata(2, 1), &bitmap(2, 1, &[15, 2, 15])).is_err());
 }

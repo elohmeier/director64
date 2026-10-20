@@ -1,7 +1,7 @@
 schema_version = 1
 slug = "loewenzahn-2"
 title = "Löwenzahn 2"
-status = "catalogued"
+status = "experimental"
 default_source = "sha256-a90d31062bfb"
 
 # Two pressings: the July 1998 disc replaced the April one (exchange
@@ -21,3 +21,23 @@ file = "Loewenzahn_2_1998-04-20.iso"
 sha256 = "79ad17950520a6600d9319a5d70075a81f845afabe1150c130a84cf1f1dcd03e"
 bytes = 557144064
 kind = "iso9660"
+
+[recovery]
+director_version = 600
+media_root = "MEDIA"
+
+[port]
+sources = ["sha256-a90d31062bfb"]
+extended_d6 = true
+full_engine = true
+director_version = 600
+media_root = "MEDIA"
+defer_video = true
+entry_movie = "START"
+launcher_movie = "START.DXR"
+
+[player]
+saves = ["LOEWE_2.INI", "*.lied"]
+
+[convert]
+external_media = { root = "MEDIA", extensions = ["MOV", "AIF"], bind = "linked-movies", sounds_movie = "LZ2.CXT" }

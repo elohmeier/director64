@@ -146,6 +146,7 @@ def source_digest(root: Path) -> str:
     return tree_digest(root, [
         "compiler/src", "compiler/Cargo.toml", "compiler/Cargo.lock", "tools/convert",
         "tools/director/dump.mjs", "tools/director/dump-format.mjs",
+        "tools/director/afterburner.mjs",
         str(WEBP / "src"), str(FREETYPE),
         "platforms/web/webp_image.c", "src/director64/convert.py",
         "src/director64/system_fonts.py", "runtime/director/director.h",
@@ -190,7 +191,9 @@ class Converter:
         result = subprocess.run([str(a) for a in args], capture_output=capture, text=True,
                                 cwd=self.root, **kwargs)
         if result.returncode:
-            detail = (result.stderr or "").strip()[-4000:] if capture else ""
+            detail = (result.stderr or "").strip() if capture else ""
+            if len(detail) > 4000:
+                detail = detail[:2000] + "\n...\n" + detail[-2000:]
             raise ValueError(f"{Path(str(args[0])).name} {args[1] if len(args) > 1 else ''} "
                              f"failed: {detail}")
         return result.stdout if capture else ""
@@ -318,6 +321,7 @@ class Converter:
             if path.endswith(".MPG"):
                 info = json.loads(self.director("mpeg-info", source_path))
                 record["duration"] = info["duration_seconds"]
+                record["width"], record["height"] = info["width"], info["height"]
                 record["video"] = f"{source[:24]}.vp8"
                 self.video_sources.append({"path": source_path, "name": record["video"],
                                            "mpeg": info})
@@ -328,6 +332,7 @@ class Converter:
                 record["duration"] = info["duration_seconds"]
                 record["audioOnly"] = video is None
                 if video:
+                    record["width"], record["height"] = video["width"], video["height"]
                     record["video"] = f"{source[:24]}.h264"
                     self.video_sources.append({"path": source_path, "name": record["video"],
                                                "width": video["width"],
@@ -335,7 +340,8 @@ class Converter:
                 if self.director("mov-audio", source_path, scratch).strip() != "no sound track":
                     wav = scratch.read_bytes()
             else:
-                self.director("aiff-wav", source_path, scratch)
+                info = json.loads(self.director("aiff-wav", source_path, scratch))
+                record["cuePoints"] = info["cuePoints"]
                 wav = scratch.read_bytes()
             if wav:
                 name = hashlib.sha256(wav).hexdigest()[:24]

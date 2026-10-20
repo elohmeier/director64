@@ -43,10 +43,22 @@ regressions; none is an original-projector comparison or Android TV result.
 | Löwenzahn Optik | `wagon-laptop-topic` | Intro, desk, laptop, first topic menu, quiz entry and sustained playback |
 | Lernerfolg Deutsch 1–2 | `full_journey` | Name/class selection, saved profile, room and exercise entry, Flash prompt layout and answer selection |
 
-Findus garden, Fritz & Fertig, and Löwenzahn 2–5 have catalogued sources but
-no executable ports. The all-game summary records these six as
-`unavailable`; it does not count them as passing journeys. Porting one
-requires adding its actual journey before changing its catalog status.
+The six additional experimental adapters also register startup journeys:
+
+| Port | Journey | Route |
+| --- | --- | --- |
+| Findus garden | `guardian-garden` | Launcher, guardian selection, save generations, garden playback |
+| Fritz & Fertig | `opening-player-screen` | Launcher, player discovery, speech and cue-driven actors |
+| Löwenzahn 2 | `intro-wagon` | Launcher and QuickTime introduction to the wagon |
+| Löwenzahn 3 | `opening-login` | Startup checks, login and QuickTime cast selection |
+| Löwenzahn 4 | `rocket-login` | Launcher and rocket/login sequence |
+| Löwenzahn 5 | `opening-login` | DirectSound checks and login introduction |
+
+Garden's route passes. The others currently expose conversion or startup
+failures documented in [additional-ports.md](additional-ports.md). Their
+later checkpoints are intended routes recovered from source, pending a
+successful run. These failures do not qualify as performance baselines.
+The suite now registers 23 default journeys across 20 games.
 
 ## Correctness and failure evidence
 

@@ -1,0 +1,26 @@
+{
+  "director_version": 600,
+  "directories": [
+    "."
+  ],
+  "director_files": 24,
+  "source_sha256": "d13f26cf91cfeb02e7ae2df796f70916986aa186ad4a724b4e19fd1cecc1a311",
+  "extended_d6": true,
+  "native_stage": false,
+  "projector": "../START32.EXE",
+  "counts": {
+    "bitmap_references": 6943,
+    "bytecode_sites": 104895,
+    "files": 24,
+    "handlers": 1181,
+    "members": 9254,
+    "movie_references": 24,
+    "resources": 21760,
+    "score_bytes": 949735,
+    "score_chunks": 72,
+    "scripts": 932,
+    "sound_references": 1348,
+    "unresolved_recovery_records": 72
+  },
+  "startup_movie": "START.DXR"
+}

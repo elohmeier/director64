@@ -122,6 +122,7 @@ fn scene_preserves_quicktime_identity_and_video_streams() {
         director64_aot::scene::Profile {
             version: 1000,
             extended: false,
+            full_engine: false,
         },
     )
     .unwrap();

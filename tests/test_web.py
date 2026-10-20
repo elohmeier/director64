@@ -22,6 +22,19 @@ def test_profile_header_carries_the_player_table():
     assert "GAME_SAVES" not in web.profile_header(GameSpec.load("loewenzahn-1"))
 
 
+def test_full_engine_keeps_source_family_and_exact_stream_directories():
+    flags = web.family_defines(GameSpec.load("loewenzahn-3"))
+    assert "-DDIRECTOR64_DIRECTOR_VERSION=6" in flags
+    assert "-DDIRECTOR64_FULL_ENGINE=1" in flags
+    assert "-DDIRECTOR64_STREAM_PATHS=1" in flags
+    assert "-DDIRECTOR64_D85=1" not in flags
+    header = web.profile_header(GameSpec.load("loewenzahn-4"))
+    path = web.c_string("C:\\DATA\\SLIDE\\BRUECK\\")
+    assert f'{{"BRUECK", {path}}}' in header
+    assert "#define GAME_STREAM_ROOT" in header
+    assert "-DDIRECTOR64_COLOR_DEPTH=8" in web.family_defines(GameSpec.load("findus-garden"))
+
+
 def test_unknown_player_keys_are_refused():
     game = GameSpec.load("findus-workshop")
     game = replace(game, data={**game.data, "player": {"save_files": []}})

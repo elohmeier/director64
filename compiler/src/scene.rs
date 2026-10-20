@@ -21,6 +21,7 @@ pub const DG_SPAN: u16 = 0x8000;
 pub struct Profile {
     pub version: u16,
     pub extended: bool,
+    pub full_engine: bool,
 }
 
 impl Profile {
@@ -32,7 +33,7 @@ impl Profile {
         self.version == 500
     }
     pub fn d10(&self) -> bool {
-        self.version >= 1000
+        self.version >= 1000 || self.full_engine
     }
 }
 
@@ -319,7 +320,7 @@ pub fn score_tempo(record: &[u8], version: u32, extended: bool) -> Result<u16, S
     }
     // Waits for sound channel 1 or 2, or for a click: the tempo channel's
     // kind carries them (Löwenzahn 6's narrated frames).
-    if version >= 7 && matches!(opcode, 248 | 254 | 255) {
+    if (version >= 7 || extended) && matches!(opcode, 248 | 254 | 255) {
         return Ok(0);
     }
     if opcode != 246 {
@@ -328,7 +329,7 @@ pub fn score_tempo(record: &[u8], version: u32, extended: bool) -> Result<u16, S
         ));
     }
     let rate = u16::from_be_bytes([record[4], record[5]]);
-    if !(1..=if version >= 7 { 999 } else { 120 }).contains(&rate) {
+    if !(1..=if version >= 7 || extended { 999 } else { 120 }).contains(&rate) {
         return Err(format!("unsupported Director {version} frame rate {rate}"));
     }
     Ok(rate)
@@ -337,7 +338,7 @@ pub fn score_tempo(record: &[u8], version: u32, extended: bool) -> Result<u16, S
 /// Director version the movie's tables are laid out for, as director.py
 /// derives it from the declared version and the score record size.
 pub(crate) fn movie_version(movie: &Value) -> u32 {
-    let score = movie.get("score").cloned().unwrap_or(Value::Null);
+    let score = &movie["score"];
     let mut declared = int(movie.get("directorVersion")).max(0) as u32;
     if movie.get("directorVersion").is_none() {
         declared = 6;
@@ -614,7 +615,7 @@ fn native_film_tracks(
     palette: &[u32],
     reference: &dyn Fn(&Value, i64, i64) -> Result<u32, String>,
 ) -> Result<Vec<FilmTrack>, String> {
-    if movie_version(movie) < 10 || member["filmScore"].is_null() {
+    if (movie_version(movie) < 10 && movie["fullEngine"] != true) || member["filmScore"].is_null() {
         return Ok(Vec::new());
     }
     let frames = member["filmScore"]["frames"]
@@ -626,6 +627,7 @@ fn native_film_tracks(
         return Err("native film frame count differs from poses or exceeds capacity".into());
     }
     let mut tracks = BTreeMap::<u16, Vec<FilmKey>>::new();
+    let wide = movie_version(movie) >= 7;
     for (frame_index, frame) in frames.iter().enumerate() {
         let mut channels = HashSet::new();
         for record in frame["channels"].as_array().into_iter().flatten() {
@@ -640,7 +642,7 @@ fn native_film_tracks(
             let bytes = record["bytes"]
                 .as_array()
                 .ok_or("native film without sprite bytes")?;
-            if bytes.len() != 48 || bytes.iter().any(|v| v.as_u64().is_none_or(|n| n > 255)) {
+            if bytes.len() != if wide { 48 } else { 24 } || bytes.iter().any(|v| v.as_u64().is_none_or(|n| n > 255)) {
                 return Err("invalid native film sprite record".into());
             }
             let b: Vec<u8> = bytes.iter().map(|v| v.as_u64().unwrap() as u8).collect();
@@ -654,7 +656,7 @@ fn native_film_tracks(
                     .map(|(_, child)| child)
                     .unwrap_or(&Value::Null);
                 let colors = |index, g, blue, flag| {
-                    if b[20] & flag != 0 {
+                    if wide && b[20] & flag != 0 {
                         (b[index] as u32) << 16 | (b[g] as u32) << 8 | b[blue] as u32
                     } else {
                         palette[b[index] as usize]
@@ -682,8 +684,8 @@ fn native_film_tracks(
                     loc_z: channel as i16,
                     fore_rgb: colors(2, 24, 26, 0x10),
                     back_rgb: colors(3, 25, 27, 0x20),
-                    rotation: i32::from_be_bytes(b[28..32].try_into().unwrap()),
-                    skew: i32::from_be_bytes(b[32..36].try_into().unwrap()),
+                    rotation: if wide { i32::from_be_bytes(b[28..32].try_into().unwrap()) } else { 0 },
+                    skew: if wide { i32::from_be_bytes(b[32..36].try_into().unwrap()) } else { 0 },
                     ..Spec::default()
                 };
             }
@@ -888,7 +890,7 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
             } else {
                 (None, None)
             };
-            let film_sounds = if (version == 5 || version >= 10) && int(m.get("filmFlags")) & 8 != 0
+            let film_sounds = if (version == 5 || profile.d10()) && int(m.get("filmFlags")) & 8 != 0
             {
                 let mut values = Vec::new();
                 for frame in m
@@ -926,7 +928,7 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 Vec::new()
             };
             let (mut flash_labels, mut flash_fields) = (Vec::new(), Vec::new());
-            if version >= 10 {
+            if profile.d10() {
                 for label in m
                     .get("flashTimeline")
                     .and_then(|t| t.get("labels"))
@@ -1016,11 +1018,12 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 Some("flash") => 1,
                 Some("vectorShape") => 2,
                 Some("TBDIRECTMEDIA") => 3,
-                Some("quickTimeMedia") => 4,
+                Some("quickTimeMedia" | "QuickTimeMedia") => 4,
                 Some("cursor") => 5,
+                Some("SWA") => 6,
                 _ => 0,
             };
-            let video = version == 5 || (version >= 10 && matches!(source_xtra, 1 | 3 | 4));
+            let video = version == 5 || (profile.d10() && (m["type"] == 10 || matches!(source_xtra, 1 | 3 | 4)));
             let flash_audio_positions = m["flashAudioPositions"]
                 .as_array()
                 .into_iter()
@@ -1039,7 +1042,7 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
             {
                 return Err(what("invalid Flash stream audio metadata"));
             }
-            let (text_runs, links) = if version >= 10 {
+            let (text_runs, links) = if profile.d10() {
                 text_runs_and_links(m, &what)?
             } else {
                 (Vec::new(), Vec::new())
@@ -1122,7 +1125,7 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                     0
                 },
                 film_sounds,
-                source_xtra: if version >= 10 { source_xtra } else { 0 },
+                source_xtra: if profile.d10() { source_xtra } else { 0 },
                 flash_labels,
                 flash_fields,
                 flash_fonts: m["flashFontUses"]
@@ -1382,11 +1385,13 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                         ..Spec::default()
                     }
                 } else {
-                    let kind = if c == 1 && version < 7 {
+                    let kind = if c == 1 && (version >= 7 || extended) && matches!(b[6], 248 | 254 | 255) {
+                        b[6]
+                    } else if c == 1 && version < 7 {
                         if version == 5 {
                             b[6]
                         } else {
-                            score_tempo(&b, version, extended)? as u8
+                            u8::try_from(score_tempo(&b, version, extended)?).unwrap_or(0)
                         }
                     } else if c == 1 && matches!(b[6], 248 | 254 | 255) {
                         b[6]

@@ -1,7 +1,7 @@
 schema_version = 1
 slug = "findus-garden"
 title = "Neues von Pettersson und Findus"
-status = "catalogued"
+status = "experimental"
 default_source = "sha256-d13f26cf91cf"
 
 [[sources]]
@@ -10,3 +10,33 @@ file = "Petterson.zip"
 sha256 = "d13f26cf91cfeb02e7ae2df796f70916986aa186ad4a724b4e19fd1cecc1a311"
 bytes = 84937326
 kind = "zip"
+
+[recovery]
+director_version = 600
+media_root = "Petterson/P2media"
+
+[port]
+extended_d6 = true
+director_version = 600
+media_root = "Petterson/P2media"
+entry_movie = "START"
+launcher_movie = "START.DXR"
+
+[player]
+color_depth = 8
+data_folder = "Petterson/P2DATA"
+saves = ["vakt#.pev", "vextfil.pet", "trainfil.pet"]
+folders = [["*", "Vakt0.pev", "Vakt1.pev", "Vakt2.pev", "Vakt3.pev", "Vakt4.pev", "Vakt5.pev", "Vakt6.pev"]]
+
+[convert]
+data = ["Petterson/P2DATA"]
+
+# The disc check compares the display helper result with this exact serial.
+[[convert.patch]]
+id = "optgraph-serial"
+movie = "START.DXR"
+cast = "Interne"
+member = 36
+handler = "getreturnval"
+source_sha256 = "1763699937d5413b93efa63caa1d39d1039bbcb61dbd1958aa48575683b0d0e3"
+body = 'return "19837459"'

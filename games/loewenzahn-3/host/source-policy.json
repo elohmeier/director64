@@ -1,0 +1,27 @@
+{
+  "director_version": 600,
+  "directories": [
+    "."
+  ],
+  "director_files": 59,
+  "source_sha256": "6ba4732f45f503b561f68bc681d4c76610a599b497bf367a98ebee0aff83350e",
+  "extended_d6": true,
+  "native_stage": true,
+  "projector": "../SETUP/WIN95/LOEWE95.EXE",
+  "counts": {
+    "bitmap_references": 2726,
+    "bytecode_sites": 38876,
+    "files": 59,
+    "handlers": 1853,
+    "members": 6077,
+    "movie_references": 91,
+    "resources": 13165,
+    "score_bytes": 764104,
+    "score_chunks": 105,
+    "scripts": 968,
+    "sound_references": 1205,
+    "unresolved_recovery_records": 4072
+  },
+  "invalid_palette_fallback": "systemMac",
+  "full_engine": true
+}

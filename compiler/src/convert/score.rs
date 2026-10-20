@@ -157,15 +157,16 @@ fn describe(c: &mut Channel, version: u32) {
 }
 
 fn score(r: &mut Recovery, version: u32) -> Result<(), String> {
-    let size = r.raw.len() as u32;
+    let physical_size = r.raw.len() as u32;
     let declared = r.u32(0)?;
     require(
-        if version == 500 { declared >= 20 && declared <= size } else { declared == size },
+        if version <= 600 { declared >= 20 && declared <= physical_size } else { declared == physical_size },
         "VWSC declared chunk length mismatch",
     )?;
+    let size = declared;
     if version == 500 {
         r.records.push(Range { offset: 0, length: declared });
-        r.fields = BTreeMap::from([("unindexed_tail_offset", declared), ("unindexed_tail_length", size - declared)]);
+        r.fields = BTreeMap::from([("unindexed_tail_offset", declared), ("unindexed_tail_length", physical_size - declared)]);
     } else {
         require(r.u32(4)? == 0xfffffffd, "unsupported VWSC envelope version")?;
         let list = r.u32(8)?;
@@ -210,6 +211,9 @@ fn score(r: &mut Recovery, version: u32) -> Result<(), String> {
         ]);
         if repaired > 0 {
             r.fields.insert("repaired_index_entries", repaired);
+        }
+        if physical_size > declared {
+            r.fields.insert("container_tail_length", physical_size - declared);
         }
     }
     let header = r.records[0];

@@ -888,7 +888,8 @@ bool dg_package_load(dg_package_t *p, const uint8_t *data, size_t length,
   if (format != DG_PACKAGE_FORMAT)
     return fail(&header, "package format %u; this runtime reads %u", format,
                 DG_PACKAGE_FORMAT);
-  if (version != DIRECTOR64_DIRECTOR_VERSION * 100 || flags != DIRECTOR64_EXTENDED_D6)
+  if (version != DIRECTOR64_DIRECTOR_VERSION * 100 ||
+      flags != (DIRECTOR64_EXTENDED_D6 | (DIRECTOR64_FULL_ENGINE << 1)))
     return fail(&header, "package profile D%u%s does not match this runtime",
                 version / 100, flags ? " extended" : "");
   if (memcmp(data + 12, abi, DG_PACKAGE_ABI_BYTES))

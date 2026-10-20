@@ -22,6 +22,7 @@ fn palette_commands_preserve_builtins_custom_cast_identity_and_rgb() {
         let p = Profile {
             version: if version == 850 { 1000 } else { version },
             extended: true,
+            full_engine: false,
         };
         for id in [-1, -3, -102] {
             let model = model(version, if id == -1 { 0 } else { -1 }, id);
@@ -46,6 +47,7 @@ fn unsupported_palette_interpolation_and_missing_colors_fail_before_build() {
     let p = Profile {
         version: 1000,
         extended: true,
+            full_engine: false,
     };
     for (offset, value) in [
         (5, 0x80),

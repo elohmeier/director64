@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "journeys": [
+    {
+      "name": "guardian-garden",
+      "description": "Pass the launcher, select the first guardian, load the garden and keep its actors and audio running.",
+      "stage": [
+        640,
+        480
+      ],
+      "covers": [
+        "startup",
+        "profile-selection",
+        "save",
+        "navigation",
+        "sustained-playback"
+      ],
+      "steps": [
+        {
+          "idle": 3600,
+          "expect": {
+            "movie": "WALK.DXR",
+            "frame": 351
+          },
+          "label": "guardian-selection"
+        },
+        {
+          "click": [
+            585,
+            422
+          ],
+          "settle": 600,
+          "expect": {
+            "movie": "WALK.DXR",
+            "globals.g_vaktvald": "1",
+            "save_generation": {
+              "gte": 2
+            }
+          },
+          "label": "guardian-selected"
+        },
+        {
+          "idle": 3600,
+          "expect": {
+            "movie": "WALK.DXR",
+            "frame": 10
+          },
+          "label": "garden-playback"
+        }
+      ]
+    }
+  ]
+}

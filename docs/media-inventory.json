@@ -77,12 +77,13 @@
       },
       "path": "media/findus-garden/sha256-d13f26cf91cf/Petterson.zip",
       "game_slug": "findus-garden",
-      "port_status": "catalogued",
+      "port_status": "experimental",
       "refactor_verification": {
         "sha256": "passed before relocation",
         "inventory": "passed with new importer",
         "zip_crc": "all entries passed"
-      }
+      },
+      "port_validation": "See docs/additional-ports.md; conversion and journey failures remain enforced."
     },
     {
       "display_title": "Pettersson und Findus: Christmas calendar",
@@ -220,11 +221,12 @@
       },
       "path": "media/fritz-fertig-1/sha256-d3a2ac348afa/FritzFertig.01.iso",
       "game_slug": "fritz-fertig-1",
-      "port_status": "catalogued",
+      "port_status": "experimental",
       "refactor_verification": {
         "sha256": "passed before relocation",
         "inventory": "passed with new importer"
-      }
+      },
+      "port_validation": "See docs/additional-ports.md; conversion and journey failures remain enforced."
     },
     {
       "display_title": "Löwenzahn 1",
@@ -460,7 +462,8 @@
       },
       "path": "media/loewenzahn-2/sha256-a90d31062bfb/Loewenzahn_2_1998-07-18.iso",
       "game_slug": "loewenzahn-2",
-      "port_status": "catalogued"
+      "port_status": "experimental",
+      "port_validation": "See docs/additional-ports.md; conversion and journey failures remain enforced."
     },
     {
       "display_title": "Löwenzahn 3",
@@ -506,7 +509,8 @@
       },
       "path": "media/loewenzahn-3/sha256-6ba4732f45f5/Loewenzahn_3.iso",
       "game_slug": "loewenzahn-3",
-      "port_status": "catalogued"
+      "port_status": "experimental",
+      "port_validation": "See docs/additional-ports.md; conversion and journey failures remain enforced."
     },
     {
       "display_title": "Löwenzahn 4",
@@ -548,7 +552,8 @@
       },
       "path": "media/loewenzahn-4/sha256-c8da522492d9/Loewenzahn_4.iso",
       "game_slug": "loewenzahn-4",
-      "port_status": "catalogued"
+      "port_status": "experimental",
+      "port_validation": "See docs/additional-ports.md; conversion and journey failures remain enforced."
     },
     {
       "display_title": "Löwenzahn 5",
@@ -586,7 +591,8 @@
       },
       "path": "media/loewenzahn-5/sha256-47cce9143e6f/Loewe5.iso",
       "game_slug": "loewenzahn-5",
-      "port_status": "catalogued"
+      "port_status": "experimental",
+      "port_validation": "See docs/additional-ports.md; conversion and journey failures remain enforced."
     },
     {
       "display_title": "Löwenzahn 6",

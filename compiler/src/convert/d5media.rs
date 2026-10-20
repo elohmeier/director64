@@ -156,7 +156,7 @@ pub fn styled_text(b: &[u8]) -> Result<Map<String, Value>, String> {
         return Err("truncated STXT text".into());
     }
     let count = be16(b, end)?;
-    if count == 0 || count > 256 || data_length != count * 20 + 2 || end + data_length != b.len() {
+    if count == 0 || data_length != count * 20 + 2 || end + data_length != b.len() {
         return Err("invalid STXT style extent".into());
     }
     let mut styles: Vec<Value> = Vec::new();

@@ -36,6 +36,7 @@ pub mod richtext;
 pub mod score;
 pub mod source;
 pub mod stream;
+pub mod swa;
 pub mod swf;
 pub mod system_font;
 pub mod text;

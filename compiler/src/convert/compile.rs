@@ -213,8 +213,12 @@ pub fn compile_merge(
         limits.extend(result.limits);
         font_records.extend(result.font_records);
     }
+    if truthy(&policy["full_engine"]) {
+        for movie in &mut movies { movie["fullEngine"] = json!(true); }
+    }
     super::cursor::bind(fs, output, &mut movies)?;
-    super::patterns::bind(fs, options.media, output, policy, &mut movies)?;
+    super::patterns::bind(fs, options.media, output, policy, &mut movies)
+        .map_err(|error| format!("{error}; member conversion failures: {}", json!(problems)))?;
     // Embedded fonts recover once per source hash, numbered in first-occurrence order.
     let mut fonts: Vec<Value> = Vec::new();
     let mut font_index: HashMap<String, usize> = HashMap::new();
@@ -511,7 +515,7 @@ pub fn compile_finish(fs: &mut dyn Files, options: &Options, pending: Pending) -
     prune_images(fs, output, &movies)?;
     let count = movies.len();
     let model = json!({
-        "version": 1, "extendedD6": truthy(&policy["extended_d6"]), "movies": movies, "fonts": fonts,
+        "version": 1, "extendedD6": truthy(&policy["extended_d6"]), "fullEngine":truthy(&policy["full_engine"]), "movies": movies, "fonts": fonts,
         "problems": problems, "approximations": limits,
     });
     fs.write(
@@ -773,6 +777,7 @@ fn flatten_film_into(
     let sounds = film_sounds.unwrap_or_default();
     if int(&loop_member["filmScore"]["version"]) != 7
         && int(&movie["directorVersion"]) < 850
+        && movie["fullEngine"] != true
         && sounds
             .iter()
             .any(|f| f.as_array().is_some_and(|pair| pair.iter().any(truthy)))

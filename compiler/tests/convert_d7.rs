@@ -48,6 +48,41 @@ fn repeated_external_cast_ids_restore_only_identical_local_scripts() {
 }
 
 #[test]
+fn shared_ids_preserve_independent_internal_casts() {
+    let parsed = vec![json!({"fourCC": "MCsL", "data": {"entries": [
+        {"id": 1024, "name": "Internal", "filePath": ""},
+        {"id": 66560, "name": "Controls", "filePath": ""},
+        {"id": 1024, "name": "Shared", "filePath": "SHARED.CXT"}
+    ]}})];
+    let primary = json!({"name": "Shared", "scripts": [{"lingo": "on primary\nend"}]});
+    let controls = json!({"name": "Controls", "scripts": [{"lingo": "on controls\nend"}]});
+    let scripts = json!({"version": 700, "casts": [primary, controls, primary]});
+    assert_eq!(normalized_scripts(&parsed, &scripts).unwrap()["casts"], json!([
+        {"name": "Internal", "scripts": primary["scripts"]}, controls
+    ]));
+    let mut changed = scripts;
+    changed["casts"][2]["scripts"] = json!([]);
+    assert!(normalized_scripts(&parsed, &changed).unwrap_err().contains("disagree"));
+}
+
+#[test]
+fn exact_projector_mirrors_share_the_owning_archive() {
+    let mut input = vec![0u8; 512];
+    put(&mut input, 64, b"XFIR");
+    le32(&mut input, 68, 184);
+    put(&mut input, 72, b"39VMpami");
+    le32(&mut input, 80, 24);
+    le32(&mut input, 88, 128);
+    put(&mut input, 128, b"pamm");
+    input.copy_within(64..256, 288);
+    let view = projector_view(&input, None).unwrap();
+    assert_eq!(view.offset, 64);
+    assert_eq!(view.archives.as_array().unwrap().len(), 1);
+    input[400] ^= 1;
+    assert!(projector_view(&input, None).err().unwrap().contains("mirror"));
+}
+
+#[test]
 fn multi_archive_projectors_require_the_complete_pinned_inventory_and_selected_offset() {
     let mut input = vec![0u8; 512];
     for offset in [64usize, 288] {

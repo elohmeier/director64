@@ -1,7 +1,7 @@
 schema_version = 1
 slug = "loewenzahn-4"
 title = "Löwenzahn 4"
-status = "catalogued"
+status = "experimental"
 default_source = "sha256-c8da522492d9"
 
 [[sources]]
@@ -10,3 +10,23 @@ file = "Loewenzahn_4.iso"
 sha256 = "c8da522492d96fdd51320bcca95158164f24d7ade277c438a319d11b9b2da47d"
 bytes = 694740992
 kind = "iso9660"
+
+[recovery]
+director_version = 700
+media_root = "DATA"
+
+[port]
+extended_d6 = true
+full_engine = true
+director_version = 700
+media_root = "DATA"
+entry_movie = "START"
+launcher_movie = "START.DXR"
+
+[player]
+stream_paths = true
+saves = ["*.usr", "*.lied"]
+
+[convert]
+streams = ["FREIZEIT=DATA/FREIZEIT", "GALERIE=DATA/GALERIE", "MPEG=DATA/MPEG", "SOUNDS=DATA/SOUNDS", "BASTEL/SOUNDS=DATA/BASTEL/SOUNDS", "BK/SOUNDS=DATA/BK/SOUNDS", "BS/DANDELS=DATA/BS/DANDELS", "BS/SOUNDS=DATA/BS/SOUNDS", "EVO/SOUNDS=DATA/EVO/SOUNDS", "KLAPP/SOUNDS=DATA/KLAPP/SOUNDS", "LABYRINT/SOUNDS=DATA/LABYRINT/SOUNDS", "LEX/S_TEXTE=DATA/LEX/S_TEXTE", "SKELETT/SOUNDS=DATA/SKELETT/SOUNDS", "SLIDE/KANAL=DATA/SLIDE/KANAL", "SPUR/SOUNDS=DATA/SPUR/SOUNDS", "STERNE/SOUND=DATA/STERNE/SOUND", "WELTALL/SOUNDS=DATA/WELTALL/SOUNDS", "STERNE/SOUND/FEEDBS=DATA/STERNE/SOUND/FEEDBS", "SLIDE/BRUECK/SOUND=DATA/SLIDE/BRUECK/SOUND", "SKELETT/SOUNDS/1=DATA/SKELETT/SOUNDS/1", "SKELETT/SOUNDS/2=DATA/SKELETT/SOUNDS/2", "SKELETT/SOUNDS/3=DATA/SKELETT/SOUNDS/3", "SKELETT/SOUNDS/4=DATA/SKELETT/SOUNDS/4", "LABYRINT/SOUNDS/SOMMER=DATA/LABYRINT/SOUNDS/SOMMER"]
+external_media = { root = "DATA", extensions = ["MPG"], bind = "directmedia" }

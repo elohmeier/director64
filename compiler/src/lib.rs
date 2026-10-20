@@ -17,6 +17,30 @@ pub mod ports;
 pub mod scene;
 pub mod zip;
 
+/// Recovered control-flow trees can exceed serde_json's default depth 128.
+/// Bound nesting before deserialization, including malformed input, so the
+/// relaxed parser never accepts an unbounded recursive allocation.
+pub fn parse_json(source: &str) -> Result<serde_json::Value, String> {
+    let (mut depth, mut quoted, mut escaped) = (0usize, false, false);
+    for byte in source.bytes() {
+        if escaped { escaped = false; continue }
+        if quoted {
+            if byte == b'\\' { escaped = true }
+            else if byte == b'"' { quoted = false }
+        } else if byte == b'"' { quoted = true }
+        else if byte == b'[' || byte == b'{' {
+            depth += 1;
+            if depth > 1024 { return Err("JSON nesting exceeds 1024".into()) }
+        } else if byte == b']' || byte == b'}' { depth = depth.saturating_sub(1) }
+    }
+    let mut parser = serde_json::Deserializer::from_str(source);
+    parser.disable_recursion_limit();
+    let mut values = parser.into_iter::<serde_json::Value>();
+    let value = values.next().ok_or("empty JSON")?.map_err(|e| e.to_string())?;
+    if values.next().is_some() { return Err("trailing JSON value".into()) }
+    Ok(value)
+}
+
 /// Compiles a parsed program and its scene model into a package.
 pub fn build_package(
     program_json: &str,
@@ -26,7 +50,7 @@ pub fn build_package(
     meta: &str,
 ) -> Result<Vec<u8>, String> {
     let program_value: serde_json::Value =
-        serde_json::from_str(program_json).map_err(|e| format!("program: {e}"))?;
+        parse_json(program_json).map_err(|e| format!("program: {e}"))?;
     let model: serde_json::Value =
         serde_json::from_str(model_json).map_err(|e| format!("model: {e}"))?;
     scene::validate_script_casts(&model, &program_value)?;
@@ -88,7 +112,9 @@ pub fn package_profile(model: &serde_json::Value, meta: &str) -> Result<scene::P
         .get("extendedD6")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    Ok(scene::Profile { version, extended })
+    let full_engine = model["fullEngine"].as_bool().unwrap_or(false);
+    if full_engine && !extended { return Err("full engine requires extended tables".into()) }
+    Ok(scene::Profile { version, extended, full_engine })
 }
 
 #[cfg(test)]
@@ -186,6 +212,7 @@ mod tests {
             scene::Profile {
                 version: 600,
                 extended: false,
+                full_engine: false,
             },
         )
         .unwrap();

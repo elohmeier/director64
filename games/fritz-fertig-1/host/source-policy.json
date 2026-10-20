@@ -1,0 +1,36 @@
+{
+  "director_version": 850,
+  "directories": [
+    "."
+  ],
+  "director_files": 75,
+  "source_sha256": "d3a2ac348afa513e224001190b94220dfb54d3a0d32f27c81f9787bbd245e7c0",
+  "extended_d6": true,
+  "native_stage": true,
+  "projector": "../SETUP/WINROOT/TERZIO/FRITZ_UN/FRITZ_UN/FRITZ_UN.EXE",
+  "external_cast_aliases": {
+    "A_FIGUREN.CXT": "A_FIGURE.CXT",
+    "B_FIGUREN.CXT": "B_FIGURE.CXT",
+    "C_FIGUREN.CXT": "C_FIGURE.CXT",
+    "SETSCHWARZ.CXT": "SETSCHWA.CXT",
+    "SETFRITZTRAINING.CXT": "SETFRIT2.CXT",
+    "D_FIGUREN.CXT": "D_FIGURE.CXT",
+    "SETFREDTRAINING.CXT": "SETFREDT.CXT",
+    "SETCHESS2.CXT": "SETCHES2.CXT",
+    "SETTRAINING2.CXT": "SETTRAI2.CXT"
+  },
+  "counts": {
+    "bitmap_references": 3234,
+    "bytecode_sites": 90605,
+    "files": 75,
+    "handlers": 1563,
+    "members": 5862,
+    "movie_references": 165,
+    "resources": 12362,
+    "score_bytes": 2345497,
+    "score_chunks": 172,
+    "scripts": 358,
+    "sound_references": 1822,
+    "unresolved_recovery_records": 280
+  }
+}

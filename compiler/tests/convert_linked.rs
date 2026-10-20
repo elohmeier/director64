@@ -147,6 +147,7 @@ fn scene_member_resolves_linked_registry_identity_without_losing_origin() {
         director64_aot::scene::Profile {
             version: 1000,
             extended: false,
+            full_engine: false,
         },
     )
     .unwrap();

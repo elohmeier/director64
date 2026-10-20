@@ -1,7 +1,7 @@
 schema_version = 1
 slug = "loewenzahn-3"
 title = "Löwenzahn 3"
-status = "catalogued"
+status = "experimental"
 default_source = "sha256-6ba4732f45f5"
 
 [[sources]]
@@ -10,3 +10,38 @@ file = "Loewenzahn_3.iso"
 sha256 = "6ba4732f45f503b561f68bc681d4c76610a599b497bf367a98ebee0aff83350e"
 bytes = 702892032
 kind = "iso9660"
+
+[recovery]
+director_version = 600
+media_root = "DATA"
+
+[port]
+extended_d6 = true
+full_engine = true
+director_version = 600
+media_root = "DATA"
+defer_video = true
+entry_movie = "START"
+
+[player]
+stream_paths = true
+saves = ["*.usr", "*.lied"]
+
+[convert]
+streams = ["SOUNDS=DATA/SOUNDS", "SOUNDS/BA_SOUND=DATA/SOUNDS/BA_SOUND", "SOUNDS/COLL_SND=DATA/SOUNDS/COLL_SND", "SOUNDS/INTROS=DATA/SOUNDS/INTROS", "SOUNDS/ISMAG=DATA/SOUNDS/ISMAG", "SOUNDS/WALD=DATA/SOUNDS/WALD", "SOUNDS/LEX/AMEIS_2=DATA/SOUNDS/LEX/AMEIS_2", "SOUNDS/LEX/KANIN_5=DATA/SOUNDS/LEX/KANIN_5", "SOUNDS/LEX/MAGN_1=DATA/SOUNDS/LEX/MAGN_1", "SOUNDS/LEX/PILZE_3=DATA/SOUNDS/LEX/PILZE_3", "SOUNDS/LEX/PUPPEN_3=DATA/SOUNDS/LEX/PUPPEN_3", "SOUNDS/LEX/RITTER_4=DATA/SOUNDS/LEX/RITTER_4", "SOUNDS/LEX/UHREN_6=DATA/SOUNDS/LEX/UHREN_6", "SOUNDS/LEX/WALD_2=DATA/SOUNDS/LEX/WALD_2"]
+external_media = { root = "DATA", extensions = ["MOV"], bind = "linked-movies", sounds_movie = "LZ3.CXT" }
+
+# The installer's drive scan is replaced by the packaged virtual disc.
+# Keep the original startup handler after setting its two launcher globals.
+[[convert.patch]]
+id = "virtual-disc-paths"
+movie = "START.DXR"
+cast = "Internal"
+member = 7
+handler = "startmovie"
+source_sha256 = "2f294b4a33784045679c486a4d7bd81f7eec24441cdb637f6abe3b0f37286702"
+prepend = '''
+global gPathToCD, gPathToExe
+set gPathToCD to "D:\"
+set gPathToExe to "C:\"
+'''

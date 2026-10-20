@@ -9,7 +9,7 @@
 
 // Runtime services for generated native state machines. No source/bytecode
 // evaluator.
-#define LV_GLOBALS 1024
+#define LV_GLOBALS 2048
 #define LV_LOCALS 96
 // Call depth, and the slots every frame's locals and expression temps share.
 // A frame takes only what its handler declares plus the temps it reaches, so

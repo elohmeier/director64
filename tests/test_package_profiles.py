@@ -12,18 +12,19 @@ from director64.web import validate_package
 
 
 @pytest.mark.parametrize(
-    ("version", "extended"),
-    [(500, False), (600, False), (600, True), (700, True),
-     (800, False), (850, True), (1000, True)],
-    ids=["d5", "d6", "d6-extended", "d7", "d8", "d85", "d10"],
+    ("version", "extended", "full"),
+    [(500, False, False), (600, False, False), (600, True, False),
+     (700, True, False), (800, False, False), (850, True, False), (1000, True, False),
+     (600, True, True), (700, True, True), (800, True, True)],
+    ids=["d5", "d6", "d6-extended", "d7", "d8", "d85", "d10", "d6-full", "d7-full", "d8-full"],
 )
-def test_rust_package_member_layout_loads_in_matching_c_profile(tmp_path, version, extended):
+def test_rust_package_member_layout_loads_in_matching_c_profile(tmp_path, version, extended, full):
     root = repository()
     style = {"fontName": "Fixture", "fontId": 3, "size": 13, "color": 0x123456,
              "ascent": 10, "descent": 3, "leading": 2, "lineHeight": 15, "align": 1}
     film = {"cast": 1, "number": 1, "type": 2, "name": "Film", "width": 17, "height": 19,
             "filmAssets": ["first.fdi", "second.fdi"], "filmLoop": 1, "lineDirection": 6}
-    if version == 500 or version >= 850:
+    if version == 500 or version >= 850 or full:
         film.update(filmFlags=8, filmSounds=[
             [{"cast": 1, "member": 4}, None], [None, {"cast": 1, "member": 4}],
         ])
@@ -32,7 +33,7 @@ def test_rust_package_member_layout_loads_in_matching_c_profile(tmp_path, versio
             "editable": True, "sourceBytes": 3079, "textStyle": style,
             "textInsertStyle": dict(style, size=14),
             "cuePoints": [{"milliseconds": 1234, "name": "Tail cue"}]}
-    model = {"problems": [], "extendedD6": extended, "movies": [{
+    model = {"problems": [], "extendedD6": extended, "fullEngine": full, "movies": [{
         "id": 1, "name": "PROFILE.DXR", "directorVersion": version, "tempo": 27,
         "stageColor": 0x345678, "palette": [i * 0x010101 for i in range(256)],
         "casts": [{"number": 1, "name": "Internal", "file": "PROFILE.DXR"}],
@@ -61,7 +62,8 @@ def test_rust_package_member_layout_loads_in_matching_c_profile(tmp_path, versio
     ], check=True, capture_output=True, text=True)
     runtime_version = 10 if version == 850 else version // 100
     flags = [f"-DDIRECTOR64_DIRECTOR_VERSION={runtime_version}",
-             f"-DDIRECTOR64_EXTENDED_D6={int(extended)}"]
+             f"-DDIRECTOR64_EXTENDED_D6={int(extended)}",
+             f"-DDIRECTOR64_FULL_ENGINE={int(full)}"]
     if version == 850:
         flags.append("-DDIRECTOR64_D85=1")
     executable = tmp_path / "load"
@@ -74,7 +76,8 @@ def test_rust_package_member_layout_loads_in_matching_c_profile(tmp_path, versio
     # The production APK gate must exercise that same complete loader, not
     # just accept a valid format/profile header around broken member records.
     game = SimpleNamespace(root=root, directory=tmp_path,
-                           data={"port": {"director_version": version, "extended_d6": extended}})
+                           data={"port": {"director_version": version,
+                                          "extended_d6": extended, "full_engine": full}})
     (tmp_path / "host").mkdir()
     (tmp_path / "host/source-policy.json").write_text("{}")
     data = package.read_bytes()

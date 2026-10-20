@@ -227,8 +227,7 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             .ok_or_else(|| "missing argument".to_string())
     };
     let json_file = |i: usize| -> Result<serde_json::Value, String> {
-        serde_json::from_str(&read(&args.get(i).cloned().ok_or("missing argument")?)?)
-            .map_err(|e| e.to_string())
+        director64_aot::parse_json(&read(&args.get(i).cloned().ok_or("missing argument")?)?)
     };
     let mut fs = Disk {
         root: std::env::current_dir().map_err(|e| e.to_string())?,
@@ -341,12 +340,12 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                     .map_err(|e| format!("{dir}: {e}"))?
                     .filter_map(|e| e.ok())
                     .filter(|e| e.path().is_file())
-                    // Sound Forge's peak files ship beside some sounds.
+                    // Scene folders can contain movies and Sound Forge peak
+                    // caches beside their audio. Only sound files enter the
+                    // stream namespace; the decoder still validates by magic.
                     .filter(|e| {
-                        !e.file_name()
-                            .to_string_lossy()
-                            .to_lowercase()
-                            .ends_with(".sfk")
+                        e.path().extension().and_then(|s| s.to_str())
+                            .is_some_and(|s| ["aif", "aiff", "wav", "mp3", "swa"].contains(&s.to_ascii_lowercase().as_str()))
                     })
                     .collect();
                 names.sort_by_key(|e| e.file_name());
@@ -356,7 +355,7 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                         .rsplit_once('.')
                         .map_or(name.as_str(), |(s, _)| s)
                         .to_lowercase();
-                    files.push((format!("{folder}/{stem}"), entry.path()));
+                    files.push((format!("{folder}/{stem}").to_lowercase(), entry.path()));
                 }
             }
             files.sort_by(|a, b| a.0.cmp(&b.0));
@@ -417,9 +416,11 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
         },
         // director aiff-wav FILE OUT.wav: an external AIFF as s16le WAV.
         "aiff-wav" => {
-            let wav = director64_aot::convert::quicktime::aiff_wav(&read_bytes(&args[1])?)?;
+            let bytes = read_bytes(&args[1])?;
+            let wav = director64_aot::convert::quicktime::aiff_wav(&bytes)?;
             std::fs::write(text(2)?, &wav).map_err(|e| e.to_string())?;
-            Ok(format!("{}", wav.len()))
+            let cues = director64_aot::convert::quicktime::aiff_cues(&bytes)?;
+            Ok(serde_json::json!({"bytes":wav.len(), "cuePoints":cues}).to_string())
         }
         // director cinepak-frames FILE OUT: the video track's frames in
         // presentation order as RGBX into OUT, for the video encoder; prints

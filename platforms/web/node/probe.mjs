@@ -46,6 +46,9 @@ function pack(kind) {
 const images = pack("images");
 const audio = pack("audio"), checkedSounds = new Set();
 const data = pack("data");
+const streamIndexPath = join(site,"assets","streams.json");
+const streams = new Map(existsSync(streamIndexPath)
+  ? Object.entries(JSON.parse(readFileSync(streamIndexPath,"utf8"))).map(([name,entry]) => [name.toLowerCase(),entry]) : []);
 const videos = videoProbe(pack("video"));
 const layout = (text, width, height, style) => {
   const advance = style ? Math.max(1, Math.round(style.size * 0.55)) : 7;
@@ -96,8 +99,13 @@ const module = await createDirector64({
     video: (...args) => { if (render) videos.update(...args); },
     videoFrame: (slot) => videos.frame(slot),
     videoRevision: () => videos.revision(),
-    // A playFile stream holds its channel for a nominal second here.
-    stream: (channel, name) => (name ? 1000 : 0),
+    // Use the converted source duration so waits and cues follow real audio.
+    stream: (channel, name) => {
+      if (!name) return 0;
+      const entry = streams.get(name.toLowerCase());
+      if (!entry) throw new Error(`missing streamed sound ${name}`);
+      return entry[2];
+    },
     // No fonts here: text lays out on a nominal fixed advance, wrapped as the
     // page wraps it, so text hit tests (pointToWord, hyperlinks) can be driven.
     layout,

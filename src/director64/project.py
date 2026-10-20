@@ -161,6 +161,10 @@ class GameSpec:
             raise ValueError(
                 f"{self.slug} is {self.data['status']}; no executable port adapter exists yet"
             )
+        sources = self.data["port"].get("sources")
+        if sources is not None and self.source["id"] not in sources:
+            raise ValueError(f"{self.slug}: source {self.source['id']} has no audited port; "
+                             f"ported sources: {', '.join(sources)}")
 
 
 def selected_game() -> GameSpec:

@@ -92,7 +92,28 @@ static bool flash_write(void *ctx, size_t offset, const void *data,
 static bool read_file(void *ctx, const char *name, char *out, unsigned cap,
                       unsigned *length) {
   (void)ctx;
-  return game_read_file(name, out, cap, length);
+  if (game_read_file(name, out, cap, length)) return true;
+#ifdef GAME_DATA_FOLDER
+  // Installed defaults remain read-only; the save adapter takes precedence
+  // after a profile has been edited. Resolve a basename in the declared
+  // virtual data folder, without opening arbitrary host paths.
+  const char *base = name;
+  for (const char *p = name; *p; p++)
+    if (*p == '/' || *p == '\\' || *p == ':') base = p + 1;
+  char path[256];
+  int n = snprintf(path, sizeof(path), "%s/%s", GAME_DATA_FOLDER, base);
+  if (!*base || n < 0 || n >= (int)sizeof(path)) return false;
+  for (int i = (int)strlen(GAME_DATA_FOLDER) + 1; i < n; i++)
+    path[i] = (char)toupper((unsigned char)path[i]);
+  int32_t size = host.data ? host.data(host.ctx, path, NULL, 0) : -1;
+  if (size < 0 || (uint32_t)size >= cap) return false;
+  int32_t read = host.data(host.ctx, path, (uint8_t *)out, cap);
+  if (read != size) return false;
+  out[size] = 0; *length = (unsigned)size;
+  return true;
+#else
+  return false;
+#endif
 }
 static bool write_file(void *ctx, const char *name, const char *data,
                        unsigned length) {
@@ -243,6 +264,14 @@ static const char *game_movie_path(void *ctx) {
   (void)ctx;
 #ifdef GAME_MOVIE_PATH
   return GAME_MOVIE_PATH;
+#elif defined(GAME_STREAM_ROOT)
+  static const char *const folders[][2] = {GAME_MOVIE_FOLDERS};
+  const char *name=director.movie ? director.movie->code->name : "";
+  const char *split=strstr(name,"__");
+  for (unsigned i=0;split && folders[i][0];i++)
+    if ((size_t)(split-name)==strlen(folders[i][0]) && !strncmp(name,folders[i][0],(size_t)(split-name)))
+      return folders[i][1];
+  return GAME_STREAM_ROOT;
 #else
   return NULL;
 #endif

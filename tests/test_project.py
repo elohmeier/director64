@@ -14,8 +14,13 @@ def test_games_and_source_workspaces_are_disjoint():
     assert workshop.dist != garden.dist
     edition = replace(workshop, source={**workshop.source, "id": "sha256-0123456789ab"})
     assert edition.work != workshop.work
-    with pytest.raises(ValueError, match="catalogued"):
-        garden.require_port()
+    garden.require_port()
+
+
+def test_new_ports_reject_an_unaudited_pressing():
+    GameSpec.load("loewenzahn-2").require_port()
+    with pytest.raises(ValueError, match="has no audited port"):
+        GameSpec.load("loewenzahn-2", "sha256-79ad17950520").require_port()
 
 
 @pytest.mark.parametrize("slug", ["../findus-workshop", "Findus", "a/b", "--bad"])

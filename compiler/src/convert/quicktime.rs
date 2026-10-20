@@ -64,6 +64,8 @@ pub struct Track {
     /// (media time plus the segment's duration); None without an edit list.
     /// ffmpeg drops every packet that starts at or after it.
     pub edit_end: Option<u64>,
+    /// Multiple audio edits, as (source sample frame, output sample frames).
+    pub audio_edits: Vec<(u64, u64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +129,14 @@ pub fn parse(b: &[u8]) -> R<Movie> {
     let mut tracks = Vec::new();
     for &(kind, s, e) in &moov {
         if &kind == b"trak" {
+            // Disabled tracks can contain chapter text and arbitrary edit
+            // lists. They are not part of the movie's playback presentation.
+            let children = atoms(b, s, e)?;
+            if let Some((hs, _)) = child(&children, b"tkhd")
+                && be32(b, hs)? & 1 == 0
+            {
+                continue;
+            }
             tracks.push(track(b, s, e, timescale)?);
         }
     }
@@ -167,22 +177,33 @@ fn track(b: &[u8], s: usize, e: usize, movie_timescale: u32) -> R<Track> {
         samples: Vec::new(),
         chunks: Vec::new(),
         edit_end: None,
+        audio_edits: Vec::new(),
     };
     // The disc's edit lists are one segment from media time 0; a list with
     // more segments or an empty edit is refused rather than misread.
-    if let Some((es, ee)) = child(&trak, b"edts")
+    if kind != TrackKind::Other
+        && let Some((es, ee)) = child(&trak, b"edts")
         && let Some((ls, _)) = child(&atoms(b, es, ee)?, b"elst")
     {
         let count = be32(b, ls + 4)?;
-        if count != 1 || b[ls] != 0 {
+        if count == 0 || count > 4096 || b[ls] != 0 || (count != 1 && kind != TrackKind::Audio) {
             return Err(format!("unsupported QuickTime edit list ({count} segments)"));
         }
-        let duration = be32(b, ls + 8)? as u64;
-        let media = be32(b, ls + 12)? as i32;
-        if media < 0 {
-            return Err("unsupported empty QuickTime edit".into());
+        for i in 0..count as usize {
+            let at = ls + 8 + i * 12;
+            let duration = be32(b, at)? as u64;
+            let media = be32(b, at + 4)? as i32;
+            if media < 0 || be32(b, at + 8)? != 65536 {
+                return Err("unsupported empty/rate-adjusted QuickTime edit".into());
+            }
+            let frames = rescale(duration, timescale as u64, movie_timescale as u64);
+            if count == 1 {
+                if media != 0 { return Err("unsupported nonzero single QuickTime edit".into()) }
+                t.edit_end = Some(frames);
+            } else {
+                t.audio_edits.push((media as u64, frames));
+            }
         }
-        t.edit_end = Some(media as u64 + rescale(duration, timescale as u64, movie_timescale as u64));
     }
     // The first sample description; every disc movie has exactly one.
     let (ss, _) = table(b"stsd")?;
@@ -297,6 +318,7 @@ const IMA_STEP: [i32; 89] = [
 /// nibbles, low nibble first. A header close to the running state keeps it.
 fn ima4(data: &[u8], channels: usize) -> R<Vec<i16>> {
     let packet = 34 * channels;
+    if data.len() % packet != 0 { return Err("truncated ima4 packet".into()) }
     let mut state = vec![(0i32, 0i32); channels];
     let mut out = Vec::with_capacity(data.len() / packet * 64 * channels);
     for block in data.chunks_exact(packet) {
@@ -392,6 +414,14 @@ pub fn audio_wav(bytes: &[u8]) -> R<Option<Vec<u8>>> {
         ("ima4", _) => ima4(&raw, channels)?,
         (other, bits) => return Err(format!("unsupported QuickTime sound {other:?} at {bits} bits")),
     };
+    let mut edited = Vec::new();
+    for &(start, length) in &t.audio_edits {
+        let start = rescale(start, t.rate as u64, t.timescale as u64) as usize * channels;
+        let length = rescale(length, t.rate as u64, t.timescale as u64) as usize * channels;
+        let end = start.checked_add(length).ok_or("QuickTime audio edit overflow")?.min(samples.len());
+        edited.extend_from_slice(samples.get(start..end).ok_or("QuickTime audio edit outside samples")?);
+    }
+    let samples = if t.audio_edits.is_empty() { &samples } else { &edited };
     let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
     Ok(Some(wav(t.rate, channels as u16, &data)))
 }
@@ -409,27 +439,64 @@ fn extended(b: &[u8]) -> R<u32> {
 /// An external AIFF (not AIFC) as 16-bit PCM WAV at its own rate and
 /// channel count: every sample frame the SSND chunk holds.
 pub fn aiff_wav(bytes: &[u8]) -> R<Vec<u8>> {
-    if bytes.get(..4) != Some(b"FORM") || bytes.get(8..12) != Some(b"AIFF") {
-        return Err("not an uncompressed AIFF".into());
+    let compressed = bytes.get(8..12) == Some(b"AIFC");
+    if bytes.get(..4) != Some(b"FORM") || !(compressed || bytes.get(8..12) == Some(b"AIFF")) {
+        return Err("not an AIFF or AIFC".into());
     }
     let (mut format, mut samples) = (None, None);
+    let mut codec = "NONE".to_string();
     for (kind, s, e) in atoms_le(bytes)? {
         match &kind {
-            b"COMM" if e - s >= 18 => format = Some((be16(bytes, s)?, be16(bytes, s + 6)?, extended(&bytes[s + 8..s + 18])?)),
+            b"COMM" if e - s >= 18 => {
+                format = Some((be16(bytes, s)?, be16(bytes, s + 6)?, extended(&bytes[s + 8..s + 18])?));
+                if compressed {
+                    codec = std::str::from_utf8(bytes.get(s + 18..s + 22).filter(|_| e - s >= 22)
+                        .ok_or("truncated AIFC codec")?).map_err(|_| "non-ASCII AIFC codec")?.to_string();
+                }
+            },
             b"SSND" if e - s >= 8 => samples = Some(&bytes[s + 8 + be32(bytes, s)? as usize..e]),
             _ => {}
         }
     }
     let (channels, bits, rate) = format.ok_or("AIFF without COMM")?;
     let samples = samples.ok_or("AIFF without SSND")?;
-    let pcm: Vec<i16> = match bits {
-        8 => samples.iter().map(|&v| (v as i8 as i16) << 8).collect(),
-        16 => samples.chunks_exact(2).map(|p| i16::from_be_bytes([p[0], p[1]])).collect(),
-        _ => return Err(format!("unsupported AIFF sample size {bits}")),
+    let pcm: Vec<i16> = match (codec.as_str(), bits) {
+        ("NONE" | "twos", 8) => samples.iter().map(|&v| (v as i8 as i16) << 8).collect(),
+        ("NONE" | "twos", 16) => samples.chunks_exact(2).map(|p| i16::from_be_bytes([p[0], p[1]])).collect(),
+        ("sowt", 16) => samples.chunks_exact(2).map(|p| i16::from_le_bytes([p[0], p[1]])).collect(),
+        ("ima4", 16) if channels == 1 || channels == 2 => ima4(samples, channels as usize)?,
+        _ => return Err(format!("unsupported AIFF sound {codec:?} at {bits} bits")),
     };
     let width = channels.max(1) as usize;
     let data: Vec<u8> = pcm[..pcm.len() / width * width].iter().flat_map(|s| s.to_le_bytes()).collect();
     Ok(wav(rate, channels, &data))
+}
+
+/// AIFF MARK records are the original sound member's named cue points.
+pub fn aiff_cues(bytes: &[u8]) -> R<Vec<serde_json::Value>> {
+    let chunks = atoms_le(bytes)?;
+    let (_, s, e) = chunks.iter().find(|(tag, _, _)| tag == b"COMM")
+        .ok_or("AIFF without COMM")?;
+    if e - s < 18 { return Err("truncated AIFF COMM".into()) }
+    let rate = extended(&bytes[s + 8..s + 18])?;
+    if rate == 0 { return Err("AIFF sample rate 0".into()) }
+    let mut cues = Vec::new();
+    for (_, s, e) in chunks.iter().filter(|(tag, _, _)| tag == b"MARK") {
+        let b = &bytes[*s..*e];
+        let count = be16(b, 0)? as usize;
+        let mut at = 2;
+        for _ in 0..count {
+            let frame = be32(b, at + 2)?;
+            let n = *b.get(at + 6).ok_or("truncated AIFF marker")? as usize;
+            let name = b.get(at + 7..at + 7 + n).ok_or("truncated AIFF marker name")?;
+            cues.push(serde_json::json!({"milliseconds":frame as u64 * 1000 / rate as u64,
+                "name":super::js::mac_roman(name)}));
+            at += 6 + ((n + 2) & !1);
+        }
+        if at != b.len() { return Err("invalid AIFF marker extent".into()) }
+    }
+    cues.sort_by_key(|c| c["milliseconds"].as_u64().unwrap());
+    Ok(cues)
 }
 
 /// IFF chunks of an AIFF form: (kind, body start, body end), padded to even.
@@ -439,7 +506,8 @@ fn atoms_le(b: &[u8]) -> R<Vec<([u8; 4], usize, usize)>> {
     while at + 8 <= b.len() {
         let kind: [u8; 4] = b[at..at + 4].try_into().unwrap();
         let size = be32(b, at + 4)? as usize;
-        let end = (at + 8 + size).min(b.len());
+        let end = (at + 8).checked_add(size).filter(|e| *e <= b.len())
+            .ok_or("truncated AIFF chunk")?;
         out.push((kind, at + 8, end));
         at = at + 8 + size + (size & 1);
     }

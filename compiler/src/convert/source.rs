@@ -251,19 +251,33 @@ pub fn normalized_scripts(parsed: &[Value], scripts: &Value) -> Result<Value, St
     if !local_duplicate {
         return Ok(scripts.clone());
     }
-    let local: Vec<&Value> = entries.iter().filter(|e| e["filePath"].as_str().is_none_or(str::is_empty)).collect();
-    require(
-        local.len() == 1 && entries.iter().all(|e| e["id"] == local[0]["id"]),
-        "unsupported D7 shared cast resource IDs",
-    )?;
     let casts = scripts["casts"].as_array().ok_or("scripts without casts")?;
-    require(
-        casts.len() == entries.len()
-            && casts.iter().all(|c| js::stringify(&c["scripts"]) == js::stringify(&casts[0]["scripts"])),
-        "D7 duplicated script namespaces disagree",
-    )?;
+    let mut local = HashMap::new();
+    for entry in entries.iter().filter(|e| e["filePath"].as_str().is_none_or(str::is_empty)) {
+        require(local.insert(entry["id"].to_string(), entry).is_none(),
+                "D7 internal casts share an ambiguous resource ID")?;
+    }
+    let mut cursor = 0;
+    let mut seen: HashMap<String, Value> = HashMap::new();
+    let mut restored = Vec::new();
+    for entry in entries {
+        let id = entry["id"].to_string();
+        let Some(owner) = local.get(&id) else { continue };
+        let cast = casts.get(cursor).ok_or("missing D7 script namespace")?;
+        cursor += 1;
+        if let Some(previous) = seen.get(&id) {
+            require(js::stringify(previous) == js::stringify(&cast["scripts"]),
+                    "D7 duplicated script namespaces disagree")?;
+        } else {
+            seen.insert(id.clone(), cast["scripts"].clone());
+        }
+        if entry["filePath"].as_str().is_none_or(str::is_empty) {
+            restored.push(json!({"name": owner["name"], "scripts": cast["scripts"]}));
+        }
+    }
+    require(cursor == casts.len(), "unmatched D7 script namespaces")?;
     let mut out = scripts.as_object().cloned().unwrap_or_default();
-    out.insert("casts".into(), json!([{"name": local[0]["name"], "scripts": casts[0]["scripts"]}]));
+    out.insert("casts".into(), json!(restored));
     Ok(Value::Object(out))
 }
 

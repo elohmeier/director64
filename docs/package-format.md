@@ -19,7 +19,7 @@ is a serialized C structure or pointer.
 | 0 | 4 | Magic `D64P` |
 | 4 | 2 | Format version, 9 |
 | 6 | 2 | Director version the tables are laid out for: the port's (500, 600, 700, 800, 1000; a Director 8.5 port is laid out as 1000) |
-| 8 | 2 | Profile flags; bit 0 is extended D6 |
+| 8 | 2 | Profile flags; bit 0 is extended D6; bit 1 selects the full engine member layout |
 | 10 | 2 | Section count |
 | 12 | 16 | ABI digest: the first 16 bytes of SHA-256 over `runtime/lingo/names.txt` followed by `runtime/lingo/lingo_bytecode.h` |
 | 28 | 4 | Reserved, zero |
@@ -28,6 +28,10 @@ is a serialized C structure or pointer.
 A runtime is built for one family (`runtime/lingo/family.h`) and refuses a
 package laid out for another or with a different ABI digest: name ids and
 opcodes are positions in those two files.
+
+The full engine flag requires the extended flag. It enables rich member tails
+(video, live film channels and Flash tables) on Director 6–8 without changing
+the source score decoder or language family. All other flag bits are rejected.
 
 Sections may appear in any order. Each tag appears exactly once, and
 sections neither overlap the header nor extend past the file.

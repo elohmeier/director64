@@ -9,15 +9,17 @@ import path from "node:path";
 import {createHash} from "node:crypto";
 import {isMain} from "./cli.mjs";
 import {dumpDirector, PARSER_WASM_SHA256} from "./dump-format.mjs";
+import {afterburnerChunks} from "./afterburner.mjs";
 
 export {dumpDirector, PARSER_WASM_SHA256};
 
 // Parses every entry of a plan; `read`/`write` give the embedder's file access.
 export async function dumpPlan(plan, DirectorFile, read, write) {
   for (const entry of plan.dumps) {
-    const file = await DirectorFile.read(await read(entry.input));
+    const bytes = await read(entry.input);
+    const file = await DirectorFile.read(bytes);
     try {
-      await write(entry.output, dumpDirector(file));
+      await write(entry.output, dumpDirector(file, afterburnerChunks(bytes, file)));
     } finally {
       file.destroy();
     }

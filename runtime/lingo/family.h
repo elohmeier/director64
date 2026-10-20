@@ -20,6 +20,9 @@
 #ifndef DIRECTOR64_EXTENDED_D6
 #define DIRECTOR64_EXTENDED_D6 0
 #endif
+#ifndef DIRECTOR64_FULL_ENGINE
+#define DIRECTOR64_FULL_ENGINE 0
+#endif
 #define DG_FAMILY_D5 (DIRECTOR64_DIRECTOR_VERSION == 5)
 #define DG_FAMILY_D6 (DIRECTOR64_DIRECTOR_VERSION == 6 && !DIRECTOR64_EXTENDED_D6)
 #define DG_FAMILY_D6X (DIRECTOR64_DIRECTOR_VERSION == 6 && DIRECTOR64_EXTENDED_D6)
@@ -30,7 +33,10 @@
 // ---- Families as guards ----
 #define DG_D5 DG_FAMILY_D5
 #define DG_D8 DG_FAMILY_D8
-#define DG_D10 DG_FAMILY_D10
+// The shared rich-media engine also runs older titles that need live film
+// children and native video. Their source family/version remains unchanged;
+// the package's explicit full-engine flag selects the larger table layout.
+#define DG_D10 (DG_FAMILY_D10 || DIRECTOR64_FULL_ENGINE)
 // Willy's D6 runs behaviours, film loops, styled text and the D7 event
 // model; its source-policy declares it extended.
 #define DG_EXTENDED DIRECTOR64_EXTENDED_D6
@@ -48,12 +54,12 @@
 // D6 answers its keyboard through its own input driver (willy_input.c) and
 // the controller keyboard; plain D6 and D5 scripts declare no key handler
 // (counted 2026-09-27: Workshop 0, Löwenzahn 1 unused).
-#define DG_CAP_KEYBOARD DG_D7_UP
+#define DG_CAP_KEYBOARD (DG_D7_UP || DIRECTOR64_FULL_ENGINE)
 // `the constraint of sprite`: no D5 or D6 port's scripts use it.
 #define DG_CAP_CONSTRAINTS DG_D7_UP
 // The wide tables: 801 sprite channels, 8192 objects, 512 event-miss
 // records, the memo spread over the larger id space.
-#define DG_CAP_WIDE DG_D7_UP
+#define DG_CAP_WIDE (DG_D7_UP || DIRECTOR64_FULL_ENGINE)
 // Objects kept in an allocation chain so a freed hole can be reused and
 // compaction stays linear; extended D6's car screens needed it for their
 // collector pauses (2026-09-16). D5 and plain D6 collect nothing in their

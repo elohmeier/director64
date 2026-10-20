@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "journeys": [
+    {
+      "name": "rocket-login",
+      "description": "Play the rocket introduction into its login section, then keep the animated selection screen running.",
+      "covers": [
+        "startup",
+        "navigation",
+        "film-loops",
+        "profile-selection",
+        "sustained-playback"
+      ],
+      "steps": [
+        {
+          "expect": {
+            "movie": "START.DXR"
+          },
+          "label": "launcher"
+        },
+        {
+          "wait": {
+            "movie": "RAKETEN.DXR"
+          },
+          "ticks": 6000,
+          "label": "rocket-intro"
+        },
+        {
+          "idle": 3600,
+          "expect": {
+            "movie": "RAKETEN.DXR"
+          },
+          "label": "login-playback"
+        }
+      ]
+    }
+  ]
+}
