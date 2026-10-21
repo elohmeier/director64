@@ -125,8 +125,34 @@ below 95% of 60 Hz service.
 | `src/director64/android.py` | Conversion, make file per ABI, packaging and signing |
 
 `mise run test-android-host` checks the keyboard mapping and JNI
-signatures on the host. Without a TV, the image's `emulator` target runs an
-Android 14 emulator (`docker build --target emulator -t
-director64-android-emulator:local docker/android`, run with
-`--device /dev/kvm`); TV system images refuse adb's key, so it uses Google
-APIs.
+signatures on the host. For development without a TV, build the emulator image
+and start the isolated Android 14 instance (Linux with `/dev/kvm` access):
+
+```sh
+docker build --target emulator -t director64-android-emulator:local docker/android
+mise run android-emulator start
+mise run android-emulator adb devices
+mise run android-emulator adb shell getprop sys.boot_completed
+mise run android-emulator logs --tail 30
+mise run android-emulator stop
+```
+
+The task uses the Google APIs x86_64 image with a TV display profile; retail TV
+system images refuse the development ADB key. Build with `--abi x86_64` for this
+emulator. The repository is mounted as `/workdir`, so the task's `adb install`
+accepts repository-relative APK paths. ADB stays inside the offline container;
+it does not change the host ADB server or connect to real devices. Each start
+after a stop creates fresh state under ignored `build/android/emulator.*`, so
+crash leftovers and stale AVD locks do not prevent the next boot. Starting an
+already running instance waits for its boot instead of creating another one.
+`DOCKER` selects the container engine; `DIRECTOR64_EMULATOR_IMAGE` and
+`DIRECTOR64_EMULATOR_CONTAINER` override the image and container names.
+
+The launcher selects `-gpu swangle`: ANGLE over Vulkan SwiftShader. Emulator
+37.2.12's legacy GLES SwiftShader puts generated shader code on the heap and
+continues after `mprotect(PROT_EXEC)` fails on hosts that reject executable heap
+pages, causing a startup SIGSEGV. A core dump and a heap-versus-mapped-page
+execution probe reproduced this failure; the ANGLE backend boots with the same
+host policy. Keep Vulkan enabled to retain that backend. The virtual modem is
+disabled because its `::1` connection fails in an offline container. Emulator
+checks are distinct from validation on the Android TV.

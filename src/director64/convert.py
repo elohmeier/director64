@@ -741,7 +741,7 @@ def prepared_policy(game: GameSpec, work: Path, extracted: Path) -> Path:
     if policy.get("system_font_resources"):
         from .system_fonts import prepare
 
-        prepare(game.root, extracted / root, policy)
+        prepare(game.root, extracted / root, policy, disc=extracted)
     output = work / "source-policy.json"
     output.write_text(json.dumps(policy, indent=2) + "\n")
     return output

@@ -56,6 +56,31 @@ def test_corrupt_download_and_cache_fail_before_conversion(tmp_path, monkeypatch
         system_fonts.installer(tmp_path, digest)
 
 
+def test_disc_font_outside_game_folder_preserves_original_bytes(tmp_path, monkeypatch):
+    raw = b"synthetic original font from the disc's installer folder"
+    digest = hashlib.sha256(raw).hexdigest()
+    disc = tmp_path / "extracted"
+    original = disc / "FONTS/ORIGINAL.TTF"
+    original.parent.mkdir(parents=True)
+    original.write_bytes(raw)
+    policy = {"system_font_resources": [{
+        "path": "director64-system-fonts/original.ttf",
+        "disc_path": "FONTS/ORIGINAL.TTF", "sha256": digest,
+    }]}
+    monkeypatch.setattr(system_fonts, "installer", lambda *a: pytest.fail("disc font downloaded"))
+    media = disc / "GAME"
+    system_fonts.prepare(tmp_path, media, policy, disc=disc)
+    target = media / policy["system_font_resources"][0]["path"]
+    assert target.read_bytes() == original.read_bytes() == raw
+    target.unlink()
+    original.write_bytes(b"corrupt")
+    with pytest.raises(ValueError, match="disc resource hash mismatch"):
+        system_fonts.prepare(tmp_path, media, policy, disc=disc)
+    assert not target.exists()
+    with pytest.raises(ValueError, match="disc extraction is missing"):
+        system_fonts.prepare(tmp_path, media, policy)
+
+
 @pytest.mark.parametrize(
     "path", ["../font.exe", "/font.exe", "a/../../font.exe", "C:/font.exe", "a\\font.exe", ""]
 )
@@ -68,3 +93,11 @@ def test_native_resources_cannot_escape_media(tmp_path, path):
                 "system_font_resources": [{"path": path, "sha256": "unused"}],
             },
         )
+
+
+@pytest.mark.parametrize("path", ["../font.ttf", "/font.ttf", "C:/font.ttf", "a\\font.ttf", ""])
+def test_disc_font_source_cannot_escape_extraction(tmp_path, path):
+    with pytest.raises(ValueError, match="media-relative"):
+        system_fonts.prepare(tmp_path, tmp_path / "media", {"system_font_resources": [{
+            "path": "fonts/original.ttf", "disc_path": path, "sha256": "unused",
+        }]}, disc=tmp_path / "extracted")

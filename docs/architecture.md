@@ -145,6 +145,11 @@ pinned to the reviewed source and fails on anything else):
 `games/<slug>/host/source-policy.json` holds the audited source decisions:
 which Director files belong to the game, aliases, palettes, system-font
 resources, `native_stage` (800×600) and pinned `deferred_conversions`.
+Each `system_font_resources` entry pins a media-relative `path`, `sha256` and
+exact font `aliases`. An optional `disc_path` copies an original font from
+elsewhere in the extracted disc into that media namespace before conversion;
+both paths reject traversal. Without it, missing resources use the pinned
+original installers in `src/director64/system_fonts.py`.
 
 ## Adding a port
 

@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#MISE description="Start, stop or use the isolated Android 14 development emulator"
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+engine=${DOCKER:-docker}
+name=${DIRECTOR64_EMULATOR_CONTAINER:-director64-emulator}
+image=${DIRECTOR64_EMULATOR_IMAGE:-director64-android-emulator:local}
+action=${1:-start}
+if [ "$#" -gt 0 ]; then shift; fi
+
+exists() { "$engine" container inspect "$name" >/dev/null 2>&1; }
+owned() {
+  [ "$("$engine" inspect --format '{{index .Config.Labels "org.director64.emulator"}}' "$name")" = true ]
+}
+if exists && ! owned; then
+  echo "$name is not a Director64 emulator container; choose DIRECTOR64_EMULATOR_CONTAINER" >&2
+  exit 1
+fi
+
+case "$action" in
+  start)
+    if ! exists || [ "$("$engine" inspect --format '{{.State.Running}}' "$name")" != true ]; then
+      if exists; then "$engine" rm "$name" >/dev/null; fi
+      if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+        echo "Android emulation requires read/write access to /dev/kvm" >&2
+        exit 1
+      fi
+      mkdir -p build/android
+      state=$(mktemp -d "$repo_root/build/android/emulator.XXXXXX")
+      container_state="/workdir/${state#"$repo_root/"}"
+      "$engine" run -d --name "$name" --label org.director64.emulator=true \
+        --network=none --device /dev/kvm --user "$(id -u):$(id -g)" \
+        --group-add "$(stat -c %g /dev/kvm)" \
+        --env "ANDROID_USER_HOME=$container_state/user" \
+        --env "ANDROID_EMULATOR_HOME=$container_state/user" \
+        --env "ANDROID_AVD_HOME=$container_state/avd" \
+        --volume "$repo_root:/workdir" --workdir /workdir \
+        "$image" sh tools/android/emulator.sh >/dev/null
+      echo "Emulator state: $state"
+    fi
+    for ((attempt=0; attempt<120; attempt++)); do
+      if [ "$("$engine" inspect --format '{{.State.Running}}' "$name")" != true ]; then
+        code=$("$engine" inspect --format '{{.State.ExitCode}}' "$name")
+        echo "Emulator exited before Android booted (exit $code)" >&2
+        "$engine" logs --tail 30 "$name" >&2
+        exit 1
+      fi
+      boot=$("$engine" exec "$name" /opt/android-sdk/platform-tools/adb \
+        -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || true)
+      if [ "${boot//$'\r'/}" = 1 ]; then
+        echo "Android 14 ready in $name (ADB stays inside the container)"
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "Android did not finish booting within 120 seconds" >&2
+    "$engine" logs --tail 30 "$name" >&2
+    exit 1
+    ;;
+  stop)
+    if exists; then "$engine" rm -f "$name"; fi
+    ;;
+  status)
+    "$engine" inspect --format '{{.State.Status}} (exit {{.State.ExitCode}})' "$name"
+    ;;
+  logs)
+    "$engine" logs "$@" "$name"
+    ;;
+  adb)
+    exec "$engine" exec "$name" /opt/android-sdk/platform-tools/adb -s emulator-5554 "$@"
+    ;;
+  *)
+    echo "Usage: mise run android-emulator [start|stop|status|logs|adb ARGS...]" >&2
+    exit 2
+    ;;
+esac

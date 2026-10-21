@@ -1,5 +1,13 @@
 {
   "director_version": 850,
+  "system_font_resources": [
+    {
+      "path": "director64-system-fonts/PETTSON.TTF",
+      "disc_path": "FONTS/PETTSON.TTF",
+      "sha256": "3e18352d1f81aa93c7b7c5002650777e77c900b5f98c1d35ed6174f239e4e459",
+      "aliases": ["Pettson"]
+    }
+  ],
   "external_cast_aliases": {
     "INTERFACE.CXT": "INTERFAC.CXT",
     "R0011_ANIMATION.CXT": "R0011ANI.CXT",

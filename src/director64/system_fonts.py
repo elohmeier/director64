@@ -47,25 +47,39 @@ def installer(root: Path, digest: str) -> Path:
     return target
 
 
-def prepare(root: Path, media: Path, policy: dict) -> None:
+def relative_resource(path: str) -> PurePosixPath:
+    relative = PurePosixPath(path)
+    if (
+        not path
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or "\\" in path
+        or ":" in path
+    ):
+        raise ValueError(f"system-font resource must be media-relative: {path}")
+    return relative
+
+
+def prepare(root: Path, media: Path, policy: dict, *, disc: Path | None = None) -> None:
     """Place the policy's exact resources in its native media namespace."""
     for resource in policy.get("system_font_resources", []):
         path = resource["path"]
-        relative = PurePosixPath(path)
-        if (
-            not path
-            or relative.is_absolute()
-            or ".." in relative.parts
-            or "\\" in path
-            or ":" in path
-        ):
-            raise ValueError(f"system-font resource must be media-relative: {path}")
+        relative = relative_resource(path)
+        disc_path = resource.get("disc_path")
+        source = relative_resource(disc_path) if disc_path is not None else None
         target = media / relative
         digest = resource["sha256"]
         if target.exists():
             if hashlib.sha256(target.read_bytes()).hexdigest() != digest:
                 raise ValueError(f"system-font resource hash mismatch: {path}")
             continue
-        original = installer(root, digest)
+        if source is not None:
+            if disc is None:
+                raise ValueError(f"system-font disc extraction is missing: {disc_path}")
+            original = disc / source
+            if hashlib.sha256(original.read_bytes()).hexdigest() != digest:
+                raise ValueError(f"system-font disc resource hash mismatch: {disc_path}")
+        else:
+            original = installer(root, digest)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(original, target)

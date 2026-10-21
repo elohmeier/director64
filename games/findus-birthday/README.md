@@ -15,5 +15,15 @@ uv run --locked director64 web --game findus-birthday --serve
 (string tables, rooms, game logic) as the read-only data folder, which
 `[convert] data` ships.
 
-Known gap: text formatting set on run-time text members (font, colour) is
-not applied.
+The disc installs `FONTS/PETTSON.TTF` from outside the `SPIEL` directory.
+`host/source-policy.json` pins its original bytes and the exact `Pettson`
+family, so authored labels and the name popup's runtime font request use it.
+Omitting this resource left the font pack empty and stopped Android text
+rendering when a player name was entered. The popup requests Pettson at
+24 points (`ENGINE.CXT`, member 281, `getPopUpData`). ScummVM's text member
+font-name lookup is a behavioral reference at commit
+`41ac2b31847622d0662d22c03fe6979e3b43cfbc`
+(`engines/director/castmember/text.cpp`); no code is copied.
+
+Known gaps: full activity coverage and original-projector/Android TV
+comparison of runtime text formatting remain unverified.
