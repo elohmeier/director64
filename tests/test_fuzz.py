@@ -59,7 +59,7 @@ def state(error=""):
                 "script_errors": soft_errors,
                 "last_script_error": last_soft,
                 "sprites": [sprite],
-                "pointer": {"player": 1, "x": 320, "y": 240},
+                "pointer": {"x": 320, "y": 240},
             }
         ),
         flush=True,
@@ -361,7 +361,8 @@ def test_guided_corpus_retains_reachable_prefixes_and_resumes_them(fake_probe, t
 
 def test_journey_replays_supply_input_preludes_without_state_injection(tmp_path):
     path = tmp_path / "replay.json"
-    commands = ["step 30 700 500 0", "key 36 13 1", "key 36 13 0", "text 7 Anna", "reboot"]
+    commands = ["step 30 700 500 0", "key 36 13 1", "key 36 13 0", "text 7 Anna",
+                "document cancel", "reboot"]
     path.write_text(json.dumps({"commands": commands, "error": None,
                                 "states": [], "checkpoints": []}))
     assert read_prelude(tmp_path) == commands
@@ -590,3 +591,10 @@ for line in sys.stdin: print(json.dumps({{"movie":"PF3", "frame":1}}), flush=Tru
     commands.write_text("step 1 10 10 0\n")
     assert main(GameSpec.load("findus-birthday"), ["--replay", str(commands),
                 "--probe", str(executable), "--output", str(tmp_path / "out")]) == 0
+
+
+def test_controller_prefixes_keep_single_player_shape():
+    assert player_commands(["pad 60 80 0 1"]) == ["pad 60 80 0 1"]
+    for player in range(4):
+        with pytest.raises(ValueError, match="player indices are unsupported"):
+            player_commands([f"pad {player} 60 80 0 1"])

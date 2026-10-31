@@ -1,0 +1,9 @@
+LIBRARY kernel32.dll
+EXPORTS
+LoadLibraryExA@12
+GetLastError@0
+FreeLibrary@4
+CreateFileA@28
+WriteFile@20
+CloseHandle@4
+ExitProcess@4

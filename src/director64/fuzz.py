@@ -30,7 +30,7 @@ STDERR_TAIL = 200_000
 PRELUDE_COMMANDS = 4096
 PRELUDE_TICKS = 1_000_000
 
-# What the web probe (platforms/web/node/probe.mjs) answers: the pads drive
+# What the web probe (platforms/web/node/probe.mjs) answers: one controller drives
 # the pointer through the shared controller, and keyboards enter text into
 # editable fields. "keys" can restrict a movie to particular (Macintosh
 # virtual key code, character) pairs; keyboard-capable runtimes otherwise use
@@ -462,6 +462,13 @@ def player_commands(commands: list[str], *, max_commands: int = PRELUDE_COMMANDS
         parts = command.split()
         if parts == ["reboot"]:
             pass
+        elif parts == ["document", "cancel"]:
+            # Dismissing a currently open host file/print dialog is player
+            # input. The host rejects it when no operation is pending.
+            pass
+        elif parts[0] == "pad" and len(parts) != 5:
+            raise ValueError("single-player controller command is pad ticks x y buttons; "
+                             f"player indices are unsupported: {command}")
         elif parts[0] in {"step", "pad"} and len(parts) == 5:
             try:
                 ticks, x, y, buttons = map(int, parts[1:])

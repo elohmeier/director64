@@ -325,6 +325,7 @@ lv_t lv_bytes(lv_runtime_t *r, const void *data, unsigned size) {
   if (!r->failed) {
     char *p = (char *)r->heap + r->objects[lv_id(value)].offset;
     memcpy(p, data, size); p[size] = 0;
+    r->objects[lv_id(value)].geometry = 1;
   }
   return value;
 }
@@ -346,6 +347,7 @@ const char *lv_cstr(lv_runtime_t *r, lv_t value) {
   lv_object_t *obj = object(r, value);
   return obj ? (const char *)r->heap + obj->offset : "";
 }
+#include "string_encoding.inc"
 static bool parse_number(const char *s, double *out) {
   char *end;
   errno = 0;
@@ -449,7 +451,8 @@ unsigned lv_count(lv_runtime_t *r, lv_t value) {
 #if DG_D10
   if (lv_type(value) == LV_GLOBALS_VIEW) return r->global_count;
 #endif
-  if (lv_type(value) == LV_SYMBOL) return string_length(r, value);
+  if (lv_type(value) == LV_SYMBOL || lv_type(value) == LV_STRING)
+    return text_char_count(r, value);
   lv_object_t *obj = object(r, value);
   if (!obj)
     return 0;
@@ -785,7 +788,7 @@ static bool same_depth(lv_runtime_t *r, lv_t a, lv_t b, unsigned depth) {
   if (lv_type(a) != lv_type(b))
     return false;
   if (lv_type(a) == LV_STRING || lv_type(a) == LV_SYMBOL)
-    return equal_text(lv_cstr(r, a), lv_cstr(r, b));
+    return text_compare(r, a, b) == 0;
   if (lv_type(a) >= LV_LIST && lv_type(a) <= LV_PROPLIST && lv_id(a) != lv_id(b)) {
     if (depth >= 64) {
       lv_fail(r, "cyclic/deep list comparison");
@@ -903,6 +906,7 @@ bool lv_format(lv_runtime_t *r, lv_t value, char *out, size_t capacity) {
   return format_value(r, value, out, capacity, 0);
 }
 static lv_t string_value(lv_runtime_t *r, lv_t value) {
+  if (lv_type(value) == LV_STRING) return value;
   if (!lv_format(r, value, r->text_scratch, sizeof(r->text_scratch))) {
     lv_fail(r, "serialized value exceeds budget");
     return (lv_t){0};
@@ -992,6 +996,8 @@ static lv_t binary_op(lv_runtime_t *r, unsigned op, lv_t a, lv_t b) {
   if (op == LB_BIN_CONCAT || op == LB_BIN_CONCAT_SPACE) {
     if ((lv_type(a) == LV_STRING || lv_type(a) == LV_SYMBOL) &&
         (lv_type(b) == LV_STRING || lv_type(b) == LV_SYMBOL)) {
+      bool raw = text_is_raw(r,a) || text_is_raw(r,b);
+      if(raw) { a=text_legacy_bytes(r,a); b=text_legacy_bytes(r,b); }
       unsigned left = string_length(r, a), right = string_length(r, b), space = op == LB_BIN_CONCAT_SPACE;
       lv_t value = allocate(r, LV_STRING, left + right + space + 1);
       if (!r->failed) {
@@ -1000,6 +1006,7 @@ static lv_t binary_op(lv_runtime_t *r, unsigned op, lv_t a, lv_t b) {
         if (space) p[left] = ' ';
         memcpy(p + left + space, lv_cstr(r, b), right);
         p[left + right + space] = 0;
+        r->objects[lv_id(value)].geometry = raw;
       }
       return value;
     }
@@ -1034,19 +1041,9 @@ static lv_t binary_op(lv_runtime_t *r, unsigned op, lv_t a, lv_t b) {
                                 format_value(r, b, right_text, sizeof(right_text), 0)
                             ? right_text
                             : lv_cstr(r, b);
-    size_t length = strlen(right);
-    do {
-      size_t i = 0;
-      while (i < length && left[i] &&
-             tolower((unsigned char)left[i]) ==
-                 tolower((unsigned char)right[i]))
-        i++;
-      if (i == length)
-        return lv_num(1);
-      if (op == LB_BIN_STARTS)
-        break;
-    } while (*left++);
-    return lv_num(0);
+    lv_t left_value = lv_type(a) == LV_NUMBER ? lv_text(r,left,false) : a;
+    lv_t right_value = lv_type(b) == LV_NUMBER ? lv_text(r,right,false) : b;
+    return lv_num(!string_length(r,right_value) || text_find(r,left_value,right_value,op==LB_BIN_STARTS));
   }
   bool text_order = (lv_type(a) == LV_STRING || lv_type(a) == LV_SYMBOL) &&
                     (lv_type(b) == LV_STRING || lv_type(b) == LV_SYMBOL);
@@ -1064,13 +1061,9 @@ static lv_t binary_op(lv_runtime_t *r, unsigned op, lv_t a, lv_t b) {
 #endif
     number_text[0] = 0;
   if (text_order) {
-    const unsigned char *left = (const unsigned char *)(lv_type(a) == LV_NUMBER ? number_text : lv_cstr(r, a)),
-                        *right = (const unsigned char *)(lv_type(b) == LV_NUMBER ? number_text : lv_cstr(r, b));
-    while (*left && *right && tolower(*left) == tolower(*right)) {
-      left++;
-      right++;
-    }
-    int order = tolower(*left) - tolower(*right);
+    lv_t left_value=lv_type(a)==LV_NUMBER?lv_text(r,number_text,false):a;
+    lv_t right_value=lv_type(b)==LV_NUMBER?lv_text(r,number_text,false):b;
+    int order=text_compare(r,left_value,right_value);
     if (op == LB_BIN_LT)
       return lv_num(order < 0);
     if (op == LB_BIN_GT)
@@ -1176,6 +1169,13 @@ lv_t lv_binary(lv_runtime_t *r, const char *op, lv_t a, lv_t b) {
 static lv_t unary_op(lv_runtime_t *r, unsigned op, lv_t value) {
   if (op == LB_UN_NOT)
     return lv_num(!lv_truth(r, value));
+  // Geometric negation returns an independent point/rect with negated
+  // coordinates; use the existing geometry-preserving arithmetic path.
+  if (op == LB_UN_NEG && lv_type(value) == LV_LIST) {
+    lv_object_t *shape = object(r, value);
+    if (shape && (shape->geometry == 2 || shape->geometry == 4))
+      return binary_guarded(r, LB_BIN_SUB, lv_num(0), value);
+  }
   return lv_num(op == LB_UN_NEG ? -lv_number(r, value) : lv_number(r, value));
 }
 lv_t lv_unary(lv_runtime_t *r, const char *op, lv_t value) {
@@ -1214,7 +1214,7 @@ static bool property_key(lv_runtime_t *r, lv_t a, lv_t b) {
       (lv_type(b) == LV_STRING || lv_type(b) == LV_SYMBOL)) {
     if (lv_type(a) == lv_type(b) && lv_id(a) == lv_id(b))
       return true;
-    return equal_text(lv_cstr(r, a), lv_cstr(r, b));
+    return text_compare(r, a, b) == 0;
   }
   if ((lv_type(a) == LV_SYMBOL && lv_type(b) == LV_NUMBER) ||
       (lv_type(a) == LV_NUMBER && lv_type(b) == LV_SYMBOL)) {
@@ -1318,6 +1318,8 @@ lv_t lv_index_get(lv_runtime_t *r, lv_t owner, lv_t key) {
     int id = lv_global_id(r, lv_cstr(r, key));
     return id >= 0 ? r->globals[id] : (lv_t){0};
   }
+  if(lv_type(owner)==LV_SPRITE && (lv_type(key)==LV_STRING || lv_type(key)==LV_SYMBOL))
+    return lv_get(r,NULL,lv_cstr(r,key),owner);
 #endif
   if (lv_type(owner) == LV_PROPLIST && lv_type(key) == LV_NUMBER) {
     unsigned index = (unsigned)lv_integer(r, key);
@@ -1348,6 +1350,9 @@ void lv_index_set(lv_runtime_t *r, lv_t owner, lv_t key, lv_t value) {
     // A name without a compiled global slot has no reader; the write drops.
     if (id >= 0 && (unsigned)id < r->global_count) r->globals[id] = value;
     return;
+  }
+  if(lv_type(owner)==LV_SPRITE && (lv_type(key)==LV_STRING || lv_type(key)==LV_SYMBOL)) {
+    lv_set(r,NULL,lv_cstr(r,key),owner,value);return;
   }
 #endif
   if (lv_type(owner) == LV_PROPLIST && lv_type(key) == LV_NUMBER) {
@@ -1589,7 +1594,7 @@ lv_t lv_reference(lv_runtime_t *r, const char *kind, lv_t number,
   lv_fail(r, "missing cast/member resolver");
   return (lv_t){0};
 }
-// Director chunks are byte strings in the recovered Western game media. The
+// Character chunks decode UTF-8 package text and preserve raw byte strings. The
 // delimiter and -30000 last-chunk sentinel follow Director's native chunk refs.
 static bool chunk_unit(lv_runtime_t *r, const char *kind) {
   if (!strcmp(kind, "char") || !strcmp(kind, "word") ||
@@ -1602,7 +1607,7 @@ unsigned lv_chunk_count(lv_runtime_t *r, const char *kind, lv_t source) {
     source = lv_get(r, NULL, "text", source);
   if (!chunk_unit(r, kind)) return 0;
   const unsigned char *s = (const unsigned char *)lv_cstr(r, source);
-  if (!strcmp(kind, "char")) return string_length(r, source);
+  if (!strcmp(kind, "char")) return text_char_count(r, source);
   unsigned count = 0;
   if (!strcmp(kind, "word")) {
     bool word = false;
@@ -1629,9 +1634,9 @@ static bool chunk_bounds(lv_runtime_t *r, const char *kind, lv_t source,
   if (b < 1) b = a;
   *start = *end = len;
   if (!strcmp(kind, "char")) {
-    if ((size_t)a > len) return false;
-    *start = (size_t)a - 1;
-    *end = (size_t)b < len ? (size_t)b : len;
+    if ((unsigned)a > text_char_count(r,source)) return false;
+    *start = text_char_byte(r,source,(unsigned)a-1);
+    *end = text_char_byte(r,source,(unsigned)b);
     if (*end < *start) *end = *start;
     return true;
   }
@@ -1664,22 +1669,33 @@ lv_t lv_chunk(lv_runtime_t *r, const char *kind, lv_t source, lv_t first,
     char *p = (char *)r->heap + r->objects[lv_id(result)].offset;
     memcpy(p, lv_cstr(r, source) + start, count);
     p[count] = 0;
+    r->objects[lv_id(result)].geometry=text_is_raw(r,source);
   }
   return result;
 }
 static lv_t replace_chunk(lv_runtime_t *r, lv_t source, size_t start,
-                            size_t end, lv_t value) {
+                            size_t end, lv_t value, unsigned padding,unsigned delimiter) {
+  bool raw=text_is_raw(r,source);
+  value=raw?text_legacy_bytes(r,value):lv_text_utf8(r,value);
   const char *s = lv_cstr(r, source), *v = lv_cstr(r, value);
-  size_t len = strlen(s), n = strlen(v);
-  if (start > end || end > len || len - (end - start) + n >= LV_TEXT_BYTES) {
+  size_t len = string_length(r,source), n = string_length(r,value);
+  unsigned char pad_bytes[4];unsigned pad_size=1;
+  if(raw)pad_bytes[0]=(unsigned char)delimiter;
+  else pad_size=text_encode(text_byte_scalar(delimiter),pad_bytes);
+  uint64_t extra=(uint64_t)padding*pad_size;
+  if (start > end || end > len || extra>=LV_TEXT_BYTES ||
+      len - (end - start) + n + extra >= LV_TEXT_BYTES) {
     lv_fail(r, "invalid chunk assignment range");
     return (lv_t){0};
   }
   char *buffer = r->text_scratch;
   memcpy(buffer, s, start);
-  memcpy(buffer + start, v, n);
-  memcpy(buffer + start + n, s + end, len - end + 1);
-  return lv_text(r, buffer, false);
+  for(unsigned i=0;i<padding;i++)memcpy(buffer+start+(size_t)i*pad_size,pad_bytes,pad_size);
+  memcpy(buffer + start + (size_t)extra, v, n);
+  memcpy(buffer + start + (size_t)extra + n, s + end, len - end + 1);
+  lv_t result=lv_bytes(r,buffer,(unsigned)(len-(end-start)+n+extra));
+  if(!r->failed)r->objects[lv_id(result)].geometry=raw;
+  return result;
 }
 bool lv_chunk_range(lv_runtime_t *r, const char *kind, lv_t source, lv_t first, lv_t last,
                     size_t *start, size_t *end) {
@@ -1694,7 +1710,18 @@ lv_t lv_chunk_set(lv_runtime_t *r, const char *kind, lv_t source, lv_t first,
   if (r->failed) return (lv_t){0};
   if (lv_type(value) != LV_STRING && lv_type(value) != LV_SYMBOL)
     value = string_value(r, value);
-  return replace_chunk(r, source, start, end, value);
+  unsigned padding=0,delimiter=' ';int at=lv_integer(r,first);
+  if(at>0) {
+    unsigned count=lv_chunk_count(r,kind,source);
+    if(!strcmp(kind,"line") || !strcmp(kind,"item")) {
+      if(!count)count=1;
+      if((unsigned)at>count)padding=(unsigned)at-count;
+      delimiter=!strcmp(kind,"line")?'\r':r->item_delimiter;
+    } else if(!strcmp(kind,"char") && (unsigned)at>count+1)
+      padding=(unsigned)at-count-1;
+    // Original8.5 appends word3 of "one" directly: "oneX".
+  }
+  return replace_chunk(r, source, start, end, value,padding,delimiter);
 }
 lv_t lv_chunk_delete(lv_runtime_t *r, const char *kind, lv_t source,
                       lv_t first, lv_t last) {
@@ -1703,7 +1730,7 @@ lv_t lv_chunk_delete(lv_runtime_t *r, const char *kind, lv_t source,
   size_t start = 0, end = 0;
   if (!chunk_bounds(r, kind, source, first, last, &start, &end)) return source;
   const char *s = lv_cstr(r, source);
-  size_t len = strlen(s);
+  size_t len = string_length(r,source);
   if (!strcmp(kind, "word"))
     while (end < len && isspace((unsigned char)s[end])) end++;
   else if (!strcmp(kind, "item") || !strcmp(kind, "line")) {
@@ -1711,7 +1738,7 @@ lv_t lv_chunk_delete(lv_runtime_t *r, const char *kind, lv_t source,
     if (start && s[start - 1] == delimiter) start--;
     else if (end < len && s[end] == delimiter) end++;
   }
-  return replace_chunk(r, source, start, end, (lv_t){0});
+  return replace_chunk(r, source, start, end, (lv_t){0},0,0);
 }
 uint32_t lv_text_hash(const char *name) {
   uint32_t digest = 2166136261u;
@@ -2112,6 +2139,19 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
     *result = lv_float(3.141592653589793);
     return true;
   }
+  if (ln == LN_TEXT_RANGE) {
+    ARITY(4);
+    bool nested=false;
+    if(lv_type(args[3])==LV_PROPLIST)
+      for(unsigned i=1;i<=lv_count(r,args[3]);i++)
+        if(equal_text(lv_cstr(r,lv_at(r,args[3],2*i-1)),"_textRange"))nested=true;
+    if(lv_type(args[3])==LV_MEMBER||lv_type(args[3])==LV_FIELD||nested) {
+      lv_t pairs[]={lv_symbol(r,"_textRange"),args[3],lv_symbol(r,"kind"),args[0],
+                    lv_symbol(r,"first"),args[1],lv_symbol(r,"last"),args[2]};
+      *result=lv_list(r,8,pairs,true);
+    } else *result=lv_chunk(r,lv_cstr(r,args[0]),args[3],args[1],args[2]);
+    return true;
+  }
   if (ln == LN_GETAT) {
     ARITY(2);
     unsigned index = (unsigned)lv_integer(r, args[1]);
@@ -2128,6 +2168,7 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
     return true;
   }
   if ((ln == LN_ADD) || (ln == LN_APPEND)) {
+    if (argc && lv_type(args[0]) == LV_XTRA) goto service;
     ARITY(2);
     lv_object_t *o = object(r, args[0]);
     if (o && o->type == LV_LIST && o->sorted && (ln == LN_ADD)) {
@@ -2528,7 +2569,9 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
   }
   if (ln == LN_CHARTONUM) {
     ARITY(1);
-    *result = lv_num((unsigned char)*lv_cstr(r, args[0]));
+    size_t step;unsigned c=string_length(r,args[0])?text_next(r,args[0],0,&step):0;
+    unsigned char byte;
+    *result=lv_num(text_scalar_byte(c,&byte)?byte:c);
     return true;
   }
   if (ln == LN_OBJECTP) {
@@ -2630,16 +2673,7 @@ static bool builtin(lv_runtime_t *r, const char *name, unsigned argc,
       return true;
     }
     ARITY(2);
-    const char *needle = lv_cstr(r, args[0]), *haystack = lv_cstr(r, args[1]);
-    size_t length = strlen(needle);
-    *result = lv_num(0);
-    if (!length) return true;
-    for (size_t start = 0; haystack[start]; start++) {
-      size_t i = 0;
-      while (i < length && haystack[start + i] &&
-          tolower((unsigned char)haystack[start + i]) == tolower((unsigned char)needle[i])) i++;
-      if (i == length) { *result = lv_num((double)start + 1); break; }
-    }
+    *result=lv_num(text_find(r,args[1],args[0],false));
     return true;
   }
   if (ln == LN_VALUE) {
@@ -2924,6 +2958,15 @@ static lv_flow_t invoke(lv_runtime_t *r, lv_frame_t *f, const char *name,
       lv_fail(r, "missing Xtra constructor service");
     r->result = result;
     return yield ? LV_YIELD : LV_CONTINUE;
+  }
+  // Xtra receivers select their native methods before an enclosing script's
+  // same-named handler (for example PrintBH.print calling print(doc)).
+  if (argc && lv_type(args[0]) == LV_XTRA) {
+    lv_t result = {0}; bool yield = false;
+    if (builtin(r, name, argc, args, &result, &yield)) {
+      r->result = result;
+      return yield ? LV_YIELD : LV_CONTINUE;
+    }
   }
   // Unqualified calls to another handler in the same script retain its `me`
   // context but keep the supplied argument list (LC::call).
@@ -3546,24 +3589,31 @@ LX_INLINE void op_chunk_count(lv_runtime_t *r, lv_frame_t *f, unsigned index) {
   lv_t owner = op_pop(r, f);
   op_push(r, f, lv_num(lv_chunk_count(r, op_name(f, index), owner)));
 }
-LX_INLINE void op_chunk_set(lv_runtime_t *r, lv_frame_t *f, unsigned index) {
-  lv_t last = op_pop(r, f), first = op_pop(r, f), original = op_pop(r, f),
-       value = op_pop(r, f);
-  lv_t replaced = lv_chunk_set(r, op_name(f, index), original, first, last, value);
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-  // A chunk of a member put through a variable that holds the member (a
-  // text's ref, Optik's quote fix-up) rewrites the member's text; the
-  // variable keeps the member.
-  if ((lv_type(original) == LV_MEMBER || lv_type(original) == LV_FIELD) && !r->failed) {
-    lv_set(r, NULL, "text", original, replaced);
-    replaced = original;
+static lv_t store_chunk(lv_runtime_t *r, lv_t owner, const char *kind,
+                       lv_t first, lv_t last, lv_t value, lv_t replaced) {
+#if DG_MODERN
+  if ((lv_type(owner)==LV_MEMBER || lv_type(owner)==LV_FIELD) && !r->failed) {
+    replaced=lv_text_utf8(r,replaced);
+    if(!r->services.text_splice || !r->services.text_splice(r,owner,kind,first,last,value,replaced))
+      lv_set(r,NULL,"text",owner,replaced);
+    return owner;
   }
+#else
+  (void)r;(void)owner;(void)kind;(void)first;(void)last;(void)value;
 #endif
-  op_push(r, f, replaced);
+  return replaced;
+}
+LX_INLINE void op_chunk_set(lv_runtime_t *r, lv_frame_t *f, unsigned index) {
+  lv_t last=op_pop(r,f),first=op_pop(r,f),original=op_pop(r,f),value=op_pop(r,f);
+  const char *kind=op_name(f,index);
+  lv_t replaced=lv_chunk_set(r,kind,original,first,last,value);
+  op_push(r,f,store_chunk(r,original,kind,first,last,value,replaced));
 }
 LX_INLINE void op_chunk_delete(lv_runtime_t *r, lv_frame_t *f, unsigned index) {
-  lv_t last = op_pop(r, f), first = op_pop(r, f), original = op_pop(r, f);
-  op_push(r, f, lv_chunk_delete(r, op_name(f, index), original, first, last));
+  lv_t last=op_pop(r,f),first=op_pop(r,f),original=op_pop(r,f);
+  const char *kind=op_name(f,index);
+  lv_t replaced=lv_chunk_delete(r,kind,original,first,last);
+  op_push(r,f,store_chunk(r,original,kind,first,last,0,replaced));
 }
 LX_INLINE void op_last_chunk(lv_runtime_t *r, lv_frame_t *f, unsigned index) {
   lv_t owner = op_pop(r, f);
@@ -3666,7 +3716,8 @@ LX_INLINE lv_flow_t op_invoke_local(lv_runtime_t *r, lv_frame_t *f, unsigned ent
   lv_t *args = op_args(r, f, argc);
   if (r->aborted) return LV_CONTINUE;
   const lv_handler_t *handler = &f->movie->handlers[entry];
-  if (argc && (lv_type(args[0]) == LV_INSTANCE || lv_type(args[0]) == LV_SCRIPT))
+  if (argc && (lv_type(args[0]) == LV_INSTANCE || lv_type(args[0]) == LV_SCRIPT ||
+               lv_type(args[0]) == LV_XTRA))
     return invoke(r, f, handler->name, argc, args, expression, false);
   if (push(r, f->movie, handler, argc, args)) {
     lv_frame_t *child = &r->frames[r->depth - 1];

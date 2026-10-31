@@ -1,11 +1,6 @@
-/* D10 movie-in-a-window services. The corpus authors exactly one controller
- * window ("control"): the launcher loads it invisibly, navigates it between
- * controller movies, and stage code calls the window movie's interface
- * handlers whose instances live in shared globals. Keeping the window
- * movie's code resident as a shared movie reproduces that handler
- * resolution; the window's own score does not tick yet and its visible
- * statistics panel does not render yet — both remain explicit feature work,
- * traced when the game requests them. */
+/* The selected D10 game authors one independent controller window. Its
+ * score/context lives in window.inc; its code and globals remain accessible
+ * from the stage as required by the recovered controller interfaces. */
 #ifdef DIRECTOR64_STREAM_PATHS
 #include "stream_path.h"
 #endif
@@ -200,6 +195,9 @@ static void d10_cast_store_bind(dg_runtime_t *d, const dg_cast_t *lib,
     for (unsigned i = 0; i < d->dynamic_count; i++) {
       dg_member_t *m = &d->dynamic_members[i].member;
       if (m->type && DG_ID_FILE(m->id) == lib->file) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+        cast_images_erase(d,m->id);
+#endif
         d6_erase_field(d, m->id);
         *m = (dg_member_t){0};
         d->dynamic_members[i].name[0] = 0;
@@ -231,6 +229,7 @@ static void d10_window_share(dg_runtime_t *d) {
     d10_window_share_one(d, d->cast_swaps[i].target);
 }
 static bool d10_stage_uses(const dg_runtime_t *d, const dg_movie_t *m) {
+  if (!m) return false;
   if (d->movie == m) return true;
   for (unsigned i = 0; i < d->movie->cast_count; i++)
     if (d->movie->casts[i].file == m->id) return true;
@@ -253,6 +252,14 @@ static bool d10_window_only(const dg_runtime_t *d, const dg_movie_t *m) {
   return false;
 }
 static void d10_window_request(dg_runtime_t *d, const char *path) {
+  while (d->window_parent) d = d->window_parent;
+  if(d->window_forget && d->window_runtime) {
+    dg_runtime_t *active=d->values->context;
+    if(active==d->window_runtime || (active && active->window_native)) {
+      error(d,"window reload","active forget must finish first");return;
+    }
+    window_dispose(d);
+  }
   char stem[40];
   const char *base = path;
   for (const char *p = path; *p; p++)
@@ -262,35 +269,16 @@ static void d10_window_request(dg_runtime_t *d, const char *path) {
   if (dot) *dot = 0;
   if (d->window_movie && d10_stem_matches(stem, d->window_movie->code->name))
     return;
-  if (d->window_movie_name[0] && !d->window_movie) {
-    // A load is already pending; the original loaded synchronously, so the
-    // follow-up navigation queues behind it in authored order.
-    snprintf(d->window_movie_queue, sizeof(d->window_movie_queue), "%s", stem);
-    return;
-  }
-  // The platform resolves the overlay and completes dg_window_attach; until
-  // then the window has a name but no resident code or ticking score.
   snprintf(d->window_movie_name, sizeof(d->window_movie_name), "%s", stem);
-  d->window_movie = NULL;
-  if (d->platform.trace) d->platform.trace(d->context, "WINDOW_MOVIE_LOAD_PENDING");
+  const dg_movie_t *movie = d->platform.find_movie ? d->platform.find_movie(d->context, stem, 0) : NULL;
+  if (!movie) { error(d, "window movie unavailable", path); return; }
+  window_load(d, movie);
 }
 void dg_window_attach(dg_runtime_t *d, const dg_movie_t *movie) {
-  d->window_movie = movie;
-  if (!d->window_home) d->window_home = movie;
-  if (d->platform.trace) d->platform.trace(d->context, "WINDOW_MOVIE_SCORE_PENDING");
-  d10_window_share(d);
+  window_load(d, movie);
 }
 void dg_window_loaded(dg_runtime_t *d) {
-  if (!d->movie) return;
-  if (d->window_movie_name[0] && !d->window_movie &&
-      d10_stem_matches(d->window_movie_name, d->movie->code->name))
-    dg_window_attach(d, d->movie);
-  if (d->window_movie && d->window_movie_queue[0]) {
-    snprintf(d->window_movie_name, sizeof(d->window_movie_name), "%s", d->window_movie_queue);
-    d->window_movie_queue[0] = 0;
-    d->window_movie = NULL;
-    if (d->platform.trace) d->platform.trace(d->context, "WINDOW_MOVIE_LOAD_PENDING");
-  }
+  (void)d; // Kept for callers built against the earlier attachment API.
 }
 // Resolve a member or script name inside the controller window's castlist
 // (with any active swap applied). cast_name narrows to one named library;
@@ -991,10 +979,8 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
       return true;
     }
   }
-  // Transition members play as cuts (puppetTransition), so they take no time.
   if (lv_type(owner) == LV_MEMBER && (ln == LN_DURATION)) {
     const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
-    if (m && m->type == 14) { *out = lv_num(0); return true; }
     // A sound's length in milliseconds (Circus scales its lip-sync lists).
     if (m && m->type == 6) {
       *out = lv_num(m->rate ? (int32_t)((uint64_t)m->samples * 1000u / m->rate) : 0);
@@ -1041,7 +1027,13 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
     if (ln == LN_SYSTEMDATE) { *out = d85_system_date(r); return true; }
 #endif
-    if ((ln == LN_WINDOWLIST) || (ln == LN_SCORESELECTION)) { *out = lv_list(r, 0, NULL, false); return true; }
+    if (ln == LN_WINDOWLIST) {
+      dg_runtime_t *root=d;
+      while(root->window_parent)root=root->window_parent;
+      lv_t window=lv_make(LV_WINDOW,1);
+      *out=lv_list(r,root->window_runtime?1:0,&window,false);return true;
+    }
+    if (ln == LN_SCORESELECTION) { *out=lv_list(r,0,NULL,false);return true; }
     if ((ln == LN_FRAMESOUND1) || (ln == LN_FRAMESOUND2)) {
       uint32_t id = d->score[ln == LN_FRAMESOUND1 ? 4 : 3].member;
       unsigned cast = id ? member_cast(d, id) : 0;
@@ -1138,23 +1130,6 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
       return true;
     }
     return false;
-  }
-  if (lv_type(owner) == LV_MEMBER && (ln == LN_VERTEXLIST)) {
-    // Converted vector shapes ship as rasterized artwork, so their outline
-    // is fixed. The list answers the member's own rectangle, which is what
-    // the exercises measure before writing a resized one back.
-    const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
-    if (!m)
-      return false;
-    double w = m->width / 2.0, h = m->height / 2.0;
-    const double xs[4] = {-w, w, w, -w}, ys[4] = {-h, -h, h, h};
-    lv_t corners[4];
-    for (unsigned i = 0; i < 4; i++) {
-      lv_t pair[] = {lv_text(r, "vertex", true), lv_point(r, xs[i], ys[i])};
-      corners[i] = lv_list(r, 2, pair, true);
-    }
-    *out = lv_list(r, 4, corners, false);
-    return true;
   }
   if (lv_type(owner) == LV_SPRITE &&
       ((ln == LN__ROOT) || (ln == LN__LEVEL0))) {
@@ -1280,8 +1255,16 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
       return true;
     }
   }
+  if(lv_type(owner)==LV_MEMBER && eq(name,"loaded")) {
+    const dg_member_t *m=dg_member(d,(uint32_t)lv_id(owner));
+    bool loaded=m && m->type && (m->type==2 || m->type==3 || m->type==4 || m->type==7 ||
+        m->type==8 || m->type==11 || dg_member_image(d,m->id) ||
+        (d->platform.member_resident && d->platform.member_resident(d->context,m->id,false)));
+    *out=lv_num(loaded);return true;
+  }
   if (imaging_get(d, name, owner, out)) return true;
   if (lv_type(owner) != LV_WINDOW) return false;
+  while (d->window_parent) d = d->window_parent;
   if (ln == LN_VISIBLE) { *out = lv_num(d->window_visible); return true; }
   if ((ln == LN_FILENAME) || (ln == LN_NAME)) {
     *out = lv_text(r, d->window_movie_name, false);
@@ -1292,11 +1275,18 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
     return true;
   }
   // Property-form window actions: window("control").forget and .open.
-  if (ln == LN_FORGET) { d->window_open = d->window_visible = false; *out = (lv_t){0}; return true; }
+  if (ln == LN_FORGET) {
+    d->window_open=d->window_visible=false;d->window_forget=true;
+    d->window_movie_name[0]=0;d->visual_revision++;
+    dg_runtime_t *active=d->values->context;
+    if(active!=d->window_runtime && active && !active->window_native)window_dispose(d);
+    *out=(lv_t){0};return true;
+  }
   if ((ln == LN_OPEN) || (ln == LN_MOVETOFRONT)) {
     d->window_open = true;
-    if (d->platform.trace && d->window_visible)
-      d->platform.trace(d->context, "WINDOW_PANEL_PENDING_RENDER");
+    if(ln==LN_OPEN)d->window_visible=true;
+    d->window_focus = true;
+    d->visual_revision++;
     *out = (lv_t){0};
     return true;
   }
@@ -1400,30 +1390,10 @@ static bool d10_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
   if (lv_type(owner) == LV_VOID && ln == LN_ALERTHOOK &&
       lv_type(value) == LV_NUMBER && lv_numeric(value) == 0) return true;
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-  // Dynamic text members own their box dimensions. Font and foreground
-  // changes continue through the shared field state setters below.
-  if (lv_type(owner) == LV_MEMBER && (ln == LN_WIDTH || ln == LN_HEIGHT)) {
-    for (unsigned i = 0; i < d->dynamic_count; i++) {
-      dg_member_t *m = &d->dynamic_members[i].member;
-      if (m->type && m->id == (uint32_t)lv_id(owner)) {
-        long size = lv_integer(r, value);
-        if (size < 0 || size > 65535) {
-          error(d, "invalid text dimensions", name);
-          return true;
-        }
-        if (ln == LN_WIDTH) {
-          m->width = (uint16_t)size;
-          if (!m->height) m->height = 28;
-        } else m->height = (uint16_t)size;
-        d->visual_revision++;
-        return true;
-      }
-    }
-  }
   // the alertHook names a script that would answer alerts; the port's
   // alerts are traced, never shown.
   if (lv_type(owner) == LV_VOID && (ln == LN_ALERTHOOK)) return true;
-  // A button's highlight is the platform's own pointer feedback.
+  // Native button state is handled by set_value before this legacy fallback.
   if (lv_type(owner) == LV_MEMBER && (ln == LN_HILITE)) return true;
   // A text member's insertion point: entry runs through the platform's
   // own text box, so the selection is accepted as it stands.
@@ -1482,16 +1452,17 @@ static bool d10_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
     }
   }
   if (lv_type(owner) != LV_WINDOW) return false;
+  while (d->window_parent) d = d->window_parent;
   if (ln == LN_FILENAME) { d10_window_request(d, lv_cstr(r, value)); return true; }
   if (ln == LN_VISIBLE) {
     d->window_visible = lv_integer(r, value) != 0;
-    if (d->window_visible && d->platform.trace)
-      d->platform.trace(d->context, "WINDOW_PANEL_PENDING_RENDER");
+    d->visual_revision++;
     return true;
   }
   if ((ln == LN_RECT) || (ln == LN_DRAWRECT)) {
     for (unsigned i = 0; i < 4; i++)
       d->window_rect[i] = (int)lv_integer(r, lv_at(r, value, i + 1));
+    d->visual_revision++;
     return true;
   }
   if ((ln == LN_TITLE) || (ln == LN_TITLEVISIBLE) || (ln == LN_WINDOWTYPE))
@@ -1583,7 +1554,6 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     *out = lv_make(LV_WINDOW, 1);
     return true;
   }
-  if ((ln == LN_TELL_WINDOW) && argc == 1) { d->tell_window = true; return true; }
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
   // vList: its registration is a licence key; a file object's write() keeps
   // a value as its Lingo literal and read() answers it, VOID when absent.
@@ -1732,8 +1702,12 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     }
     char stem[24];
     snprintf(stem, sizeof(stem), "%s", d10_path_base(lv_cstr(r, a[1])));
+#if !(defined(DIRECTOR64_D85) && DIRECTOR64_D85)
+    // Keep existing MX profile namespaces readable. The D85 image archives
+    // retain their authored extension for FileXtra rename/compact operations.
     char *dot = strrchr(stem, '.');
     if (dot) *dot = 0;
+#endif
     d10_cast_store_bind(d, lib, stem, false);
     bool ok = d6_save_cast(d, lib);
     *out = lv_num(ok);
@@ -1752,7 +1726,17 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     *out = lv_num(frame_number);
     return true;
   }
-  // Memory preloading is a no-op: package assets stream on demand.
+  // A native film's score, text, palette and bytecode are already retained
+  // by package loading. Bitmap preloads use the same bounded decoded cache
+  // as ordinary draws; residency queries never cause a decode themselves.
+  if((ln==LN_PRELOAD || ln==LN_PRELOADMEMBER) && argc==1 && lv_type(a[0])==LV_MEMBER) {
+    const dg_member_t *m=dg_member(d,(uint32_t)lv_id(a[0]));
+    bool resident=m && m->type && (m->type==2 || m->type==3 || m->type==4 || m->type==7 ||
+        m->type==8 || m->type==11 || dg_member_image(d,m->id) ||
+        (d->platform.member_resident && d->platform.member_resident(d->context,m->id,true)));
+    *out=lv_num(resident?m->number:0);r->the_result=*out;return true;
+  }
+  // Frame/range/network preload hints retain their existing separate path.
   if ((ln == LN_PRELOAD) || (ln == LN_PRELOADMEMBER) ||
       (ln == LN_PRELOADCAST) || (ln == LN_PRELOADNETTHING)) {
     *out = lv_num(1);
@@ -1765,11 +1749,8 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     return true;
   }
   if ((ln == LN_WINDOWPRESENT) && argc == 1) {
+    while (d->window_parent) d = d->window_parent;
     *out = lv_num(d->window_movie_name[0] && d10_stem_matches("CONTROL", lv_cstr(r, a[0])));
-    return true;
-  }
-  if ((ln == LN_TELL_END) || (ln == LN_TELL_STAGE)) {
-    d->tell_window = false;
     return true;
   }
   // Film channels have the profile's complete channel range. Nested film
@@ -2454,6 +2435,7 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     }
     unsigned length = 0;
     // An archive slot never written answers empty: no such file yet.
+    if(d->platform.file_exists){*out=lv_num(d->platform.file_exists(d->context,d10_path_base(path)));return true;}
     *out = lv_num(d->platform.read_file &&
                   d->platform.read_file(d->context, d10_path_base(path),
                                         d10_ini_data, sizeof(d10_ini_data),
@@ -2523,6 +2505,22 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
       return true;
     }
     if (ln == LN_FX_VOLUMEGETFREEBYTES) { *out = lv_num(4 * 1024 * 1024); return true; }
+    if(ln==LN_FX_FILEEXISTS&&argc>=2) {
+      const char *path=lv_cstr(r,a[1]),*base=d10_path_base(path),*dot=strrchr(base,'.');
+      // Movies/casts are descriptors in the game package, rather than files
+      // in the data/save packs. Probe only actual registered Director names.
+      if(dot && (eq(dot,".dir") || eq(dot,".dxr") || eq(dot,".dcr") ||
+          eq(dot,".cst") || eq(dot,".cxt")) && d->platform.find_movie) {
+        char stem[64];size_t length=(size_t)(dot-base);
+        if(length && length<sizeof(stem)) {
+          memcpy(stem,base,length);stem[length]=0;
+          if(d->platform.find_movie(d->context,stem,0)) {*out=lv_num(1);return true;}
+        }
+      }
+      if(d->platform.file_exists) {
+        *out=lv_num(d->platform.file_exists(d->context,path));return true;
+      }
+    }
     if ((ln == LN_FX_FILEEXISTS) || (ln == LN_FX_FOLDEREXISTS) ||
         (ln == LN_FX_FOLDERCREATE) || (ln == LN_FX_FILESETWRITESTATE) ||
         (ln == LN_FX_FILEGETWRITESTATE)) {

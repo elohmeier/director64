@@ -8,13 +8,17 @@ typedef struct dg_image_entry {
   struct dg_image_entry *next;
   dg_pixel_image_t image;
   uint8_t *matte;
+  double *vertices;
+  unsigned vertex_count;
+  uint32_t vector_stroke,vector_fill;
   uint32_t id, member, step, revision;
   dg_runtime_t *owner;
-  bool changed, stage;
+  bool changed, stage,vector_colored;
 } dg_image_entry_t;
 struct dg_imaging { dg_image_entry_t *head; uint32_t serial; };
 static dg_runtime_t *imaging_host(const dg_runtime_t *d) {
-  while (d->linked_parent) d = d->linked_parent;
+  while (d->linked_parent || d->window_parent)
+    d = d->linked_parent ? d->linked_parent : d->window_parent;
   return (dg_runtime_t *)d;
 }
 static dg_imaging_t *imaging_store(const dg_runtime_t *d) { return imaging_host(d)->imaging; }
@@ -22,14 +26,15 @@ static size_t imaging_bytes(const dg_runtime_t *d) {
   size_t used = 0;
   dg_imaging_t *store = imaging_store(d);
   for (const dg_image_entry_t *p = store ? store->head : NULL; p; p = p->next)
-    used += (size_t)p->image.width * p->image.height * (sizeof(uint32_t) + (p->matte ? 1 : 0));
+    used += (size_t)p->image.width * p->image.height * (sizeof(uint32_t) + (p->matte ? 1 : 0)) +
+            (size_t)p->vertex_count * 2 * sizeof(double);
   return used;
 }
 
 void dg_images_dispose(dg_runtime_t *d) {
   dg_imaging_t *store = imaging_store(d);
   if (!store) return;
-  if (d->linked_parent) {
+  if (d->linked_parent || d->window_parent) {
     // A shared global may retain an image after its creating child is removed.
     // Detach stage/member bindings; ordinary handle collection owns its pixels.
     for (dg_image_entry_t *p = store->head; p; p = p->next)
@@ -37,7 +42,7 @@ void dg_images_dispose(dg_runtime_t *d) {
     return;
   }
   dg_image_entry_t *p = store->head;
-  while (p) { dg_image_entry_t *next = p->next; free(p->image.pixels); free(p->matte); free(p); p = next; }
+  while (p) { dg_image_entry_t *next = p->next; free(p->image.pixels); free(p->matte); free(p->vertices); free(p); p = next; }
   free(d->imaging);
   d->imaging = NULL;
 }
@@ -103,7 +108,7 @@ static void imaging_collect(dg_runtime_t *d) {
         p->step != d->values->steps &&
         !lv_has_reference(d->values, LV_IMAGE, (int32_t)p->id)) {
       *link = p->next;
-      free(p->image.pixels); free(p->matte); free(p);
+      free(p->image.pixels); free(p->matte); free(p->vertices); free(p);
     } else link = &p->next;
   }
 }
@@ -269,8 +274,12 @@ static void imaging_put(dg_image_entry_t *p, int x, int y, uint32_t pixel) {
   if (x >= 0 && y >= 0 && (unsigned)x < p->image.width && (unsigned)y < p->image.height)
     p->image.pixels[(size_t)y * p->image.width + (unsigned)x] = imaging_quantize(&p->image, pixel);
 }
+#include "vector.inc"
 static bool imaging_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
   unsigned ln = lv_name_id(d->values, name);
+  if(lv_type(owner)==LV_MEMBER&&imaging_vector_color_get(d,(uint32_t)lv_id(owner),ln,out))return true;
+  if (lv_type(owner) == LV_MEMBER && ln == LN_VERTEXLIST)
+    return imaging_vector_get(d, (uint32_t)lv_id(owner), out);
   if (lv_type(owner) == LV_MEMBER && (ln == LN_IMAGE || ln == LN_PICTURE)) {
     *out = imaging_value(imaging_read(d, (uint32_t)lv_id(owner))); return true;
   }
@@ -294,6 +303,9 @@ static bool imaging_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out
 }
 static bool imaging_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
   unsigned ln = lv_name_id(d->values, name);
+  if(lv_type(owner)==LV_MEMBER&&imaging_vector_color_set(d,(uint32_t)lv_id(owner),ln,value))return true;
+  if (ln == LN_VERTEXLIST && lv_type(owner) == LV_MEMBER)
+    return imaging_vector_set(d, (uint32_t)lv_id(owner), value);
   if (ln == LN_REGPOINT && lv_type(owner) == LV_MEMBER) {
     dg_image_entry_t *p = imaging_read(d, (uint32_t)lv_id(owner));
     if (p && lv_type(value) == LV_LIST && lv_count(d->values, value) == 2) {

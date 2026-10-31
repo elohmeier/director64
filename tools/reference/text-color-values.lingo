@@ -1,0 +1,20 @@
+-- Synthetic getter types and mutable range colors in original Director8.5.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\text-color-values.txt")
+out.openFile("C:\text-color-values.txt",2)
+w=window("director64-probe")
+w.fileName=the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+tell w
+ t=new(#text)
+ t.font="Arial"
+ t.fontSize=12
+ t.text="AB CD"
+ t.color=rgb(17,34,51)
+ out.writeString(string([#member,ilk(t.color),t.color,ilk(t.foreColor),t.foreColor]) & RETURN)
+ out.writeString(string([#chunk,ilk(t.char[2].color),t.char[2].color,ilk(t.char[2].foreColor),t.char[2].foreColor]) & RETURN)
+ t.char[2].foreColor=255
+ out.writeString(string([#modified,t.char[2].color,t.char[2].foreColor,t.char[1].foreColor]) & RETURN)
+end tell
+out.closeFile()

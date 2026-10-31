@@ -108,8 +108,9 @@ static void linked_unroot(lv_runtime_t *r, lv_root_span_t *span) {
   if (*p) *p = span->next;
 }
 void dg_linked_dispose(dg_runtime_t *d) {
+  window_dispose(d);
   dg_flash_dispose(d);
-  if (d->linked_parent) dg_stop_sounds(d);
+  if (d->linked_parent || d->window_parent) dg_stop_sounds(d);
   while (d->linked_children) {
     dg_linked_child_t *c = d->linked_children;
     d->linked_children = c->next;

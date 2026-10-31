@@ -1,6 +1,8 @@
 #include "palette.h"
 #include <time.h>
 #include "director.h"
+#include "buttons.h"
+#include "user_files.h"
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
@@ -13,8 +15,15 @@
 
 static void apply(dg_sprite_t *, const dg_spec_t *, unsigned);
 static const char *basename_(const char *);
+static lv_t reference(lv_runtime_t *, const char *, lv_t, lv_t);
 #if DG_D10
 static const dg_movie_t *d10_cast_target(dg_runtime_t *, const char *);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+static unsigned cast_images_count(dg_runtime_t *,const dg_cast_t *);
+static bool cast_images_write(dg_runtime_t *,const dg_cast_t *,uint8_t *,unsigned,unsigned *);
+static bool cast_images_restore(dg_runtime_t *,const dg_cast_t *,const uint8_t *,unsigned,unsigned,unsigned,bool);
+static void cast_images_erase(dg_runtime_t *,uint32_t);
+#endif
 static int d10_window_member(dg_runtime_t *, const char *, lv_t, uint32_t *);
 static const char *d10_cast_store(dg_runtime_t *, uint32_t);
 static const dg_cast_t *d10_castlib(dg_runtime_t *, int32_t);
@@ -26,6 +35,16 @@ static bool linked_key(dg_runtime_t *, unsigned, unsigned, bool);
 static const dg_movie_t *linked_loaded(const dg_runtime_t *, unsigned, const lv_movie_t *);
 static bool linked_get(dg_runtime_t *, const char *, lv_t, lv_t *);
 static bool linked_call(dg_runtime_t *, const char *, unsigned, const lv_t *, lv_t *);
+static bool window_load(dg_runtime_t *, const dg_movie_t *);
+static bool window_update(dg_runtime_t *, unsigned);
+static void window_dispose(dg_runtime_t *);
+static bool window_key(dg_runtime_t *, unsigned, unsigned, bool);
+static void window_pointer(dg_runtime_t *, int *, int *, bool *);
+static dg_runtime_t *window_target(dg_runtime_t *);
+static bool window_tell(dg_runtime_t *, unsigned, unsigned, const lv_t *);
+static dg_runtime_t *window_access_target(dg_runtime_t *, lv_t);
+static dg_runtime_t *window_native_begin(dg_runtime_t *, lv_t);
+static void window_native_end(dg_runtime_t *, dg_runtime_t *);
 static bool film_picture_changed(dg_runtime_t *, const dg_sprite_t *);
 static void film_picture_committed(dg_runtime_t *, const dg_sprite_t *);
 
@@ -34,6 +53,25 @@ _Static_assert(DG_FIELD_COLOR_ROOT + DG_FIELDS <= LV_ROOTS,
                "field text and style must fit in the GC roots");
 
 #if DG_MODERN
+static unsigned native_xtra_count(void) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  return 6;
+#elif DG_D10
+  return 3;
+#else
+  return 2;
+#endif
+}
+static unsigned native_xtra_index(unsigned number) {
+#if DG_D10 && !(defined(DIRECTOR64_D85) && DIRECTOR64_D85)
+  if (number == 3) return 6;
+#endif
+  return number <= native_xtra_count() ? number : 0;
+}
+static const char *native_xtra_name(unsigned id) {
+  static const char *const names[]={"", "FileIO", "Glu32", "XMLParser", "vList", "Amplitude", "PrintOMatic"};
+  return id < sizeof(names)/sizeof(*names) ? names[id] : "";
+}
 static void cancel_fade(dg_runtime_t *d, unsigned channel) {
   if (d->fade_duration[channel] && d->fade_restore[channel])
     d->channel_volume[channel] = d->fade_volume[channel];
@@ -273,7 +311,8 @@ void dg_key(dg_runtime_t *d, unsigned code, unsigned character, bool down) {
   if (held == down) return;
   bool routed = false;
 #if DG_D10
-  routed = linked_key(d, code, character, down);
+  routed = window_key(d, code, character, down);
+  if (!routed) routed = linked_key(d, code, character, down);
   if(!routed)dg_flash_key(d,code,down?character:d->key_chars[code],down);
 #endif
   if (!routed) {
@@ -304,7 +343,12 @@ const dg_movie_t *dg_loaded(dg_runtime_t *d, unsigned file) {
       return d->loaded[i];
 #if DG_D10
   const dg_runtime_t *host = d;
-  while (host->linked_parent) host = host->linked_parent;
+  while (host->linked_parent || host->window_parent)
+    host = host->linked_parent ? host->linked_parent : host->window_parent;
+  if (host->window_runtime) {
+    const dg_movie_t *found = linked_loaded(host->window_runtime, file, NULL);
+    if (found) return found;
+  }
   return linked_loaded(host, file, NULL);
 #else
   return NULL;
@@ -346,7 +390,8 @@ static bool member_looping(dg_runtime_t *d, const dg_member_t *m) {
 #endif
 #if DG_D10
 static dg_runtime_t *sound_host(dg_runtime_t *d) {
-  while (d->linked_parent) d = d->linked_parent;
+  while (d->linked_parent || d->window_parent)
+    d = d->linked_parent ? d->linked_parent : d->window_parent;
   return d;
 }
 #endif
@@ -461,6 +506,8 @@ const char *dg_shape_texture(const dg_runtime_t *d, const dg_member_t *m, unsign
 #endif
   return pattern==m->pattern ? m->asset : NULL;
 }
+#include "transitions.inc"
+
 static bool palette_command(dg_runtime_t *d, uint32_t id, bool score_command) {
   if(!id)return true;
   int number=(int16_t)(id&65535u);
@@ -549,8 +596,10 @@ static lv_t script_identity(lv_runtime_t *r, const lv_movie_t *code,
 #if DG_D10
   if (!movie) {
     const dg_runtime_t *host = d;
-    while (host->linked_parent) host = host->linked_parent;
+    while (host->linked_parent || host->window_parent)
+      host = host->linked_parent ? host->linked_parent : host->window_parent;
     movie = linked_loaded(host, 0, code);
+    if (!movie && host->window_runtime) movie = linked_loaded(host->window_runtime, 0, code);
   }
 #endif
   if (movie)
@@ -590,7 +639,7 @@ static unsigned indexed_member(const dg_movie_t *file, unsigned cast,
   }
   return 0;
 }
-static lv_t reference(lv_runtime_t *r, const char *kind, lv_t value,
+static lv_t reference_value(lv_runtime_t *r, const char *kind, lv_t value,
                       lv_t library) {
   unsigned ln = lv_name_id(r, kind);
   dg_runtime_t *d = r->context;
@@ -791,6 +840,13 @@ static void sprite_rect(dg_runtime_t *d, const dg_sprite_t *s, int *left,
     m = &resized;
   }
 #endif
+#if DG_CAP_TEXT_BOX
+  dg_member_t text_box;
+  unsigned text_width,text_height;
+  if (m && dg_text_dimensions(d,m->id,false,&text_width,&text_height)) {
+    text_box=*m;text_box.width=(uint16_t)text_width;text_box.height=(uint16_t)text_height;m=&text_box;
+  }
+#endif
   int width = s->value.width, height = s->value.height, rx = width / 2,
       ry = height / 2;
   if (m) {
@@ -800,7 +856,11 @@ static void sprite_rect(dg_runtime_t *d, const dg_sprite_t *s, int *left,
 #if DG_EXTENDED
                         || m->type == 1
 #endif
-    )) {
+    )
+#if DG_MODERN
+        && !dg_button_kind(m)
+#endif
+    ) {
       width = m->width;
       height = m->height;
     } else {
@@ -1204,6 +1264,9 @@ static unsigned hit_sprite(dg_runtime_t *d, int x, int y, bool active,
       continue;
 #if !DG_EXTENDED
     if (active && !s->value.script && !s->moveable &&
+#if DG_MODERN
+        !dg_button_kind(dg_member(d,s->value.member)) &&
+#endif
         !cast_mouse(d, s->value.member))
       continue;
 #endif
@@ -1214,7 +1277,8 @@ static unsigned hit_sprite(dg_runtime_t *d, int x, int y, bool active,
       // A behavior that only animates a sprite is not a mouse receiver.
       // In particular, the source's moving cursor must not steal the button's
       // mouseLeave/mouseUp as its image changes in response to mouseEnter.
-      if (active && !s->moveable && !dg_text_editable(d, i) && !mouse_behavior(d, i) &&
+      if (active && !s->moveable && !dg_button_kind(dg_member(d,s->value.member)) &&
+          !dg_text_editable(d, i) && !mouse_behavior(d, i) &&
           !cast_mouse(d, s->value.member)) continue;
 #endif
       const dg_member_t *m = dg_member(d, s->value.member);
@@ -1418,15 +1482,36 @@ static int field(dg_runtime_t *d, uint32_t member) {
            m && m->text_style && m->text_style->font_name
                ? m->text_style->font_name : "");
   d->field_text_changed[i] = false;
-  d->field_font_changed[i] = false;
+  d->field_font_changed[i] = d->field_face_changed[i] = d->field_size_changed[i] = false;
   d->field_scroll[i] = 0;
-  d->field_sizes[i] = d->field_align[i] = 0;
+  d->field_sizes[i] = d->field_align[i] = d->field_faces[i] = 0;
+  d->field_line_space[i]=d->field_char_spacing[i]=0;d->field_spacing_changed[i]=false;
+#if DG_CAP_TEXT_BOX
+  d->field_box_live[i]=m&&m->text_box_present;d->field_box_types[i]=m&&m->text_box_present?m->text_box_type:1;
+  d->field_margins[i]=m&&m->text_box_present?m->text_margin:0;
+  d->field_borders[i]=m&&m->text_box_present?m->text_border:0;
+  d->field_box_shadows[i]=m&&m->text_box_present?m->text_box_shadow:0;
+  d->field_box_bg[i]=m&&m->text_box_present?m->text_box_bg:0xffffff;
+  d->field_box_paint[i]=m&&m->text_box_present;
+  d->field_word_wrap[i]=!m||!m->text_box_present||m->text_word_wrap;
+  d->field_widths[i]=m?m->width:0;d->field_heights[i]=m?m->height:0;
+  d->field_content_heights[i]=0;d->field_measure_revision[i]=0;
+#endif
 #if DG_EXTENDED
   d->field_editable[i] = m && m->editable;
 #endif
 #endif
   return (int)i;
 }
+#if DG_CAP_TEXT_BOX
+#include "text_box.inc"
+#endif
+#if DG_MODERN
+#include "buttons.inc"
+#endif
+#if DG_MODERN
+static void format_clear(dg_runtime_t *,uint32_t);
+#endif
 #if DG_EXTENDED
 #include "d6.inc"
 #endif
@@ -1442,6 +1527,13 @@ static unsigned frame_number(dg_runtime_t *d, lv_t value);
 #include "flash_runtime.inc"
 #include "d10.inc"
 #include "swa.inc"
+#endif
+#if DG_MODERN
+#include "text_format.inc"
+#endif
+#include "user_files.inc"
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#include "cast_images.inc"
 #endif
 #if DG_EXTENDED
 static lv_t behavior_property(dg_runtime_t *d, unsigned channel, const char *name) {
@@ -1498,12 +1590,23 @@ static __attribute__((noinline)) lv_t marker_list(lv_runtime_t *r, dg_runtime_t 
 #if DG_D10
 #include "film_children.inc"
 #endif
-static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
+static lv_t get(lv_runtime_t *, const char *, lv_t);
+static void set(lv_runtime_t *, const char *, lv_t, lv_t);
+static bool call(lv_runtime_t *, const char *, unsigned, const lv_t *, lv_t *, bool *);
+static lv_t get_value(lv_runtime_t *r, const char *name, lv_t owner) {
 #if DG_D10
   { lv_t value = {0}; if (swa_get((dg_runtime_t *)r->context, name, owner, &value)) return value; }
 #endif
   unsigned ln = lv_name_id(r, name);
+#if DG_MODERN
+  if(lv_type(owner)==LV_MEMBER||lv_type(owner)==LV_FIELD)ln=format_name_id(r,name);
+#endif
   dg_runtime_t *d = r->context;
+#if DG_MODERN
+  if(lv_type(owner)==LV_MEMBER||lv_type(owner)==LV_FIELD) {
+    lv_t formatted={0};if(format_member_get(d,(uint32_t)lv_id(owner),ln,&formatted))return formatted;
+  }
+#endif
 #if DG_D10
   if (lv_type(owner) == LV_SPRITE && lv_id(owner) >= 0 && ((uint32_t)lv_id(owner) & DG_CHILD_SPRITE))
     return film_child_get(d, ln, owner);
@@ -1515,10 +1618,21 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
 #if DG_D5
   lv_t result={0};if(d5_get(d,name,owner,&result))return result;
 #endif
+  if (ln == LN_DURATION && lv_type(owner) == LV_MEMBER) {
+    const dg_member_t *transition = dg_member(d, (uint32_t)lv_id(owner));
+    if (transition && transition->type == 14) {
+      if (!transition->transition_present)
+        error(d, "missing converted transition cast metadata", "duration");
+      return lv_num(transition->transition_ms);
+    }
+  }
 #if DG_D10
   {lv_t d10_result={0};if(d10_get(d,name,owner,&d10_result))return d10_result;}
 #endif
   if (lv_type(owner) == LV_VOID) {
+#if DG_CAP_TEXT_BOX
+    if(ln==LN_MOUSELINE)return lv_num(text_mouse_line(d));
+#endif
     if ((ln == LN_LONGDATE) && d->platform.long_date)
       return lv_text(r, d->platform.long_date(d->context), false);
 #if DG_MODERN
@@ -1560,7 +1674,7 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
 #endif
     }
     if (ln == LN_NUMBEROFXTRAS)
-      return lv_num(2);
+      return lv_num(native_xtra_count());
     if (ln == LN_MILLISECONDS)
       return lv_num(d->clock / 60000);
     if (ln == LN_MOUSELOC)
@@ -1861,25 +1975,68 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
     }
   } else if (lv_type(owner) == LV_XTRA) {
     if (ln == LN_NAME)
-      return lv_text(r, lv_id(owner) == 1 ? "FileIO" : "Glu32", false);
+      return lv_text(r, native_xtra_name((unsigned)lv_id(owner)), false);
 #endif
   } else if (lv_type(owner) == LV_MEMBER || lv_type(owner) == LV_FIELD) {
     const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
+#if DG_MODERN
+    if(ln==LN_HILITE && m && m->type==7)return lv_num(dg_button_hilite(d,m->id));
+#endif
     if (ln == LN_PATTERN) return lv_num(dg_member_pattern(d,m));
+#if DG_CAP_TEXT_BOX
+    lv_t box_value;if(text_box_property(d,ln,(uint32_t)lv_id(owner),&box_value))return box_value;
+#endif
+#if DG_CAP_TEXT_BOX
+    if (m && (m->type==3 || m->type==7) && !dg_button_kind(m) &&
+        (ln==LN_RECT || ln==LN_WIDTH || ln==LN_HEIGHT || ln==LN_BOXTYPE || eq(name,"pageheight"))) {
+      if(ln==LN_BOXTYPE) {
+        unsigned kind=m->text_box_present?m->text_box_type:1;
+        for(unsigned i=0;i<d->field_count;i++)if(d->field_members[i]==m->id)kind=d->field_box_types[i];
+        return lv_symbol(r,kind==2?"fixed":kind==3?"scroll":kind==4?"limit":"adjust");
+      }
+      unsigned width,height;dg_text_dimensions(d,m->id,!eq(name,"pageheight"),&width,&height);
+      if(ln==LN_RECT)return lv_rect(r,0,0,(int)width,(int)height);
+      if(ln==LN_WIDTH)return lv_num((int)width);
+      if(ln==LN_HEIGHT || eq(name,"pageheight"))return lv_num((int)height);
+      return (lv_t){0};
+    }
+#endif
 #if DG_MODERN
     if (ln == LN_FONT) {
       int i = field(d, (uint32_t)lv_id(owner));
       return i >= 0 ? lv_text(r, d->field_fonts[i], false) : (lv_t){0};
     }
+    if (ln == LN_FONTSTYLE) {
+      int i=field(d,(uint32_t)lv_id(owner));
+      unsigned face=m && m->text_format_count?m->text_formats[0].face:0;
+      if(i>=0 && d->field_face_changed[i])face=d->field_faces[i];
+      else if(i>=0 && d->field_text_changed[i] && m && m->text_format_count)face=m->text_formats[m->text_format_count-1].face;
+      lv_t styles[4];unsigned count=0;
+      static const char *const names[]={"bold","italic","underline","strikeout"};
+      for(unsigned bit=0;bit<4;bit++)if(face&(1u<<bit))styles[count++]=lv_symbol(r,names[bit]);
+      if(!count)styles[count++]=lv_symbol(r,"plain");
+      return lv_list(r,count,styles,false);
+    }
     if (ln == LN_FONTSIZE || ln == LN_ALIGNMENT) {
       int i = field(d, (uint32_t)lv_id(owner));
-      unsigned size = i >= 0 && d->field_sizes[i] ? d->field_sizes[i] : m && m->text_style ? m->text_style->size : 12;
+      unsigned size = i >= 0 && d->field_size_changed[i] ? d->field_sizes[i] : m && m->text_style ? m->text_style->size : 12;
       unsigned align = i >= 0 && d->field_align[i] ? d->field_align[i] - 1 : m && m->text_style ? m->text_style->align : 0;
-      return ln == LN_FONTSIZE ? lv_num(size) : lv_text(r, align == 1 ? "center" : align == 2 ? "right" : "left", true);
+      return ln == LN_FONTSIZE ? lv_num(size) : lv_text(r, align == 1 ? "center" : align == 2 ? "right" : align == 3 ? "full" : "left", true);
     }
     if (ln == LN_SCROLLTOP) {
       int i = field(d, (uint32_t)lv_id(owner));
       return lv_num(i >= 0 ? d->field_scroll[i] : 0);
+    }
+    if (ln == LN_LINEHEIGHT) {
+      unsigned count=0;const dg_text_format_t *formats=dg_text_formats(d,(uint32_t)lv_id(owner),&count);
+      int i=field(d,(uint32_t)lv_id(owner));
+      int height=i>=0&&d->field_line_space[i]>0?d->field_line_space[i]:
+          count&&formats[0].line_height>0?formats[0].line_height:m&&m->text_style?m->text_style->line_height:12;
+#if DG_CAP_TEXT_BOX
+      if(height<=0&&d->platform.text_height)height=d->platform.text_height(d->context,(uint32_t)lv_id(owner),0);
+#endif
+      if(height<=0){error(d,"text line measurement unavailable",m?m->name:NULL);height=0;}
+      return lv_num(height);
     }
     if (ln == LN_TEXTHEIGHT)
       return lv_num(m && m->text_style ? m->text_style->line_height : 12);
@@ -1933,6 +2090,10 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
       return lv_num(member_cast(d, (uint32_t)lv_id(owner)));
     }
     if (ln == LN_TYPE) {
+#if DG_MODERN
+      if(dg_button_kind(m))return lv_text(r,"button",true);
+      if(m->type==3 && m->text_box_present)return lv_text(r,"field",true);
+#endif
       static const char *const types[] = {
           "empty", "bitmap", "filmloop",   "text",  "palette", "picture",
           "sound", "field",  "shape",      "movie", "video",   "script",
@@ -1951,12 +2112,16 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
                      true);
     }
     if (ln == LN_RECT)
-      return lv_rect(r, 0, 0, m->width, m->height);
+      return lv_rect(r, 0, 0, dg_button_kind(m)?(int16_t)m->width:m->width, m->height);
     if (ln == LN_LOOP)
       return lv_num(member_looping(d, m));
 #endif
     if (ln == LN_WIDTH)
-      return lv_num(m->width);
+      return lv_num(
+#if DG_MODERN
+          dg_button_kind(m)?(int16_t)m->width:
+#endif
+          m->width);
     if (ln == LN_HEIGHT)
       return lv_num(m->height);
     if (ln == LN_REGPOINT)
@@ -1991,9 +2156,20 @@ static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
 #endif
   return (lv_t){0};
 }
-static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
+static void set_value(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
   unsigned ln = lv_name_id(r, name);
+#if DG_MODERN
+  if(lv_type(owner)==LV_MEMBER||lv_type(owner)==LV_FIELD)ln=format_name_id(r,name);
+  if((lv_type(owner)==LV_MEMBER||lv_type(owner)==LV_FIELD)&&ln==LN_LINEHEIGHT)ln=LN_FIXEDLINESPACE;
+#endif
   dg_runtime_t *d = r->context;
+#if DG_MODERN
+  if((lv_type(owner)==LV_MEMBER||lv_type(owner)==LV_FIELD) && ln==LN_HILITE) {
+    const dg_member_t *m=dg_member(d,(uint32_t)lv_id(owner));
+    if(m && m->type==7){dg_button_set_hilite(d,m->id,lv_truth(r,value));return;}
+  }
+  if((lv_type(owner)==LV_MEMBER||lv_type(owner)==LV_FIELD)&&format_member_set(d,(uint32_t)lv_id(owner),ln,value))return;
+#endif
   if (lv_type(owner) == LV_MEMBER || lv_type(owner) == LV_FIELD) {
     const dg_member_t *m = dg_member(d, (uint32_t)lv_id(owner));
     if (m && m->type == 12 &&
@@ -2004,7 +2180,7 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
       return;
     }
   }
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#if DG_MODERN
   // A chunk put already rewrote the member's text and hands the member back
   // (op_chunk_set); storing it into its own text changes nothing.
   if ((ln == LN_TEXT) && (lv_type(owner) == LV_MEMBER || lv_type(owner) == LV_FIELD) &&
@@ -2151,7 +2327,11 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
 #if DG_EXTENDED
       if (m && m->type == 1 && (!m->width || !m->height)) s->value.type = 0;
 #endif
-      if (m && !s->stretch && m->width) {
+      if (m && !s->stretch && m->width
+#if DG_MODERN
+          && !dg_button_kind(m)
+#endif
+      ) {
         s->value.width = m->width;
         s->value.height = m->height;
       }
@@ -2380,6 +2560,9 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
   } else if (lv_type(owner) == LV_MEMBER || lv_type(owner) == LV_FIELD) {
     // Text/font/color mutations do not change the sprite record itself.
     d->visual_revision++;
+#if DG_CAP_TEXT_BOX
+    if(text_box_set(d,ln,(uint32_t)lv_id(owner),value))return;
+#endif
     if (ln == LN_PATTERN) {
       const dg_member_t *m=dg_member(d,(uint32_t)lv_id(owner));
       int pattern=lv_integer(r,value);
@@ -2414,14 +2597,25 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
       if (ln == LN_FONTSIZE) {
         int size = lv_integer(r, value);
         if (size < 1 || size > 255) { error(d, "font size range", name); return; }
-        d->field_sizes[i] = (uint8_t)size;
+        d->field_sizes[i] = (uint8_t)size;d->field_size_changed[i]=true;
       } else if (ln == LN_ALIGNMENT) {
         const char *align = lv_cstr(r, value);
-        d->field_align[i] = eq(align, "center") ? 2 : eq(align, "right") ? 3 : 1;
+        d->field_align[i] = eq(align, "center") ? 2 : eq(align, "right") ? 3 : eq(align, "full") ? 4 : 1;
+      } else if (ln == LN_FONTSTYLE) {
+        if(lv_type(value)!=LV_LIST) {error(d,"fontStyle requires a style list",name);return;}
+        unsigned face=0;
+        for(unsigned n=1;n<=lv_count(r,value);n++) {
+          const char *style=lv_cstr(r,lv_at(r,value,n));
+          if(eq(style,"plain"))continue;
+          if(eq(style,"bold"))face|=1;
+          else if(eq(style,"italic"))face|=2;
+          else if(eq(style,"underline"))face|=4;
+          else if(eq(style,"strikeout"))face|=8;
+          else {error(d,"unsupported text fontStyle",style);return;}
+        }
+        d->field_faces[i]=(uint8_t)face;d->field_face_changed[i]=true;
       } else if (d->platform.trace) {
-        // Embedded fonts retain their converted face; fixed/adjust text
-        // boxes share the bounded native layout. Keep the approximation visible.
-        d->platform.trace(d->context, ln == LN_FONTSTYLE ? "TEXT_FACE_RETAINED" : "TEXT_BOX_NATIVE_LAYOUT");
+        d->platform.trace(d->context,"TEXT_BOX_NATIVE_LAYOUT");
       }
       return;
     }
@@ -2465,9 +2659,8 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
         (ln == LN_ANTIALIAS) || (ln == LN_ANTIALIASTHRESHOLD) || (ln == LN_MARGIN) ||
         (ln == LN_BOXDROPSHADOW) || (ln == LN_DROPSHADOW) || (ln == LN_BOTTOMSPACING))
       return;
-    // A converted vector shape ships as rasterized artwork; its outline
-    // cannot be rewritten at runtime, so a resized vertex list is dropped.
-    if ((ln == LN_VERTEXLIST) || (ln == LN_CLOSED) || (ln == LN_CURVATURE) ||
+    // Vector vertexList edits are handled by the owned imaging surface.
+    if ((ln == LN_CLOSED) || (ln == LN_CURVATURE) ||
         (ln == LN_FLASHRECT) || (ln == LN_ORIGINPOINT))
       return;
 #endif
@@ -2491,6 +2684,19 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
     }
     if (ln == LN_TEXT) {
       int i = field(d, (uint32_t)lv_id(owner));
+#if DG_MODERN
+      // Whole-text replacement retains the first character's tracking,
+      // including source-only RSPC runs and live range edits (original 8.5).
+      lv_t tracking;
+      if(i>=0 && format_member_get(d,(uint32_t)lv_id(owner),LN_CHARSPACING,&tracking)) {
+        int spacing=lv_integer(r,tracking);
+        if(spacing || d->field_spacing_changed[i]) {
+          d->field_char_spacing[i]=(int16_t)spacing;
+          d->field_spacing_changed[i]=true;
+        }
+      }
+      format_clear(d,(uint32_t)lv_id(owner));
+#endif
       if (i >= 0) {
         // TextCastMember::setField converts with Datum::asString. FILMSPIEL
         // assigns its numeric speed directly; the renderer needs stored text.
@@ -2503,18 +2709,23 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
           }
           value = lv_text(r, r->text_scratch, false);
         }
+        value=lv_text_utf8(r,value);
         r->roots[DG_FIELD_TEXT_ROOT + i] = value;
 #if DG_MODERN
         d->field_text_changed[i] = true;
+        if(d->field_spacing_changed[i]||d->field_line_space[i]>0) {
+          const dg_member_t *m=dg_member(d,(uint32_t)lv_id(owner));
+          const char *text=lv_cstr(r,value);
+          if(m)(void)format_apply(d,m,0,format_units(text,strlen(text)),LN_CHARSPACING,lv_num(d->field_char_spacing[i]));
+        }
 #endif
       }
       return;
     }
   }
 #if DG_D10
-  // Styling a chunk of a text member: a chunk expression evaluates to the
-  // text itself, and the native renderer draws a member in one style, so
-  // per-character colour and spacing have nowhere to land.
+  // Formatting member chunks uses private range references. Plain strings
+  // have no retained member style.
   if ((lv_type(owner) == LV_STRING || lv_type(owner) == LV_SYMBOL) &&
       ((ln == LN_COLOR) || (ln == LN_FORECOLOR) || (ln == LN_CHARSPACING) || (ln == LN_FONT) ||
        (ln == LN_FONTSIZE) || (ln == LN_FONTSTYLE) || (ln == LN_BGCOLOR)))
@@ -2614,6 +2825,7 @@ static bool file_call(dg_runtime_t *d, const char *name, unsigned argc,
     return true;
   }
   if (argc == 1 && eq(name, "fileexists")) {
+    if(d->platform.file_exists){*out=lv_num(d->platform.file_exists(d->context,lv_cstr(r,a[0]))?0:-1);return true;}
     unsigned length = 0;
     char data[32768];
     *out = lv_num(d->platform.read_file && d->platform.read_file(
@@ -2684,7 +2896,7 @@ static bool file_call(dg_runtime_t *d, const char *name, unsigned argc,
     unsigned end = f->position;
     char saved = f->data[end];
     f->data[end] = 0;
-    *out = lv_text(r, f->data + start, false);
+    *out = lv_bytes(r, f->data + start, end - start);
     f->data[end] = saved;
     if (f->position < f->length && f->data[f->position] == '\r')
       f->position++;
@@ -2694,7 +2906,7 @@ static bool file_call(dg_runtime_t *d, const char *name, unsigned argc,
   }
   if (eq(method, "mwritestring") && argc == 3 && f->write) {
     const char *text = lv_cstr(r, a[2]);
-    size_t n = strlen(text);
+    size_t n = lv_byte_count(r, a[2]);
     if (n >= sizeof(f->data) - f->position) {
       error(d, "save file capacity", "exceeded");
       return true;
@@ -2820,7 +3032,7 @@ static bool d8_file_call(dg_runtime_t *d, const char *name, unsigned argc,
     *out = lv_num(f->status);
     return true;
   }
-  if (METHOD("readfile") || METHOD("readline") || METHOD("readword")) {
+  if (METHOD("readfile") || METHOD("readline") || METHOD("readword") || METHOD("readchar")) {
     if (!f->opened) {
       *out = lv_text(r, "", false);
       return true;
@@ -2828,6 +3040,7 @@ static bool d8_file_call(dg_runtime_t *d, const char *name, unsigned argc,
     unsigned begin = f->position;
     while (f->position < f->length) {
       char ch = f->data[f->position];
+      if (METHOD("readchar")) { f->position++; break; }
       if (!METHOD("readfile") &&
           (ch == '\r' || ch == '\n' || (METHOD("readword") && ch == ' ')))
         break;
@@ -2836,11 +3049,11 @@ static bool d8_file_call(dg_runtime_t *d, const char *name, unsigned argc,
     unsigned end = f->position;
     char saved = f->data[end];
     f->data[end] = 0;
-    *out = lv_text(r, f->data + begin, false);
+    *out = lv_bytes(r, f->data + begin, end - begin);
     f->data[end] = saved;
-    if (f->position < f->length && f->data[f->position] == '\r')
+    if (!METHOD("readchar") && f->position < f->length && f->data[f->position] == '\r')
       f->position++;
-    if (f->position < f->length &&
+    if (!METHOD("readchar") && f->position < f->length &&
         (f->data[f->position] == '\n' ||
          (METHOD("readword") && f->data[f->position] == ' ')))
       f->position++;
@@ -2852,7 +3065,7 @@ static bool d8_file_call(dg_runtime_t *d, const char *name, unsigned argc,
       return true;
     }
     const char *text = lv_cstr(r, a[1]);
-    size_t length = strlen(text);
+    size_t length = lv_byte_count(r, a[1]);
     if (length >= sizeof(f->data) - f->position) {
       error(d, "save file capacity", "exceeded");
       return true;
@@ -2927,10 +3140,24 @@ static const lv_handler_t send_sprite_handler = {
 };
 static const lv_movie_t send_sprite_movie = {"<sendSprite>", 1, &send_sprite_handler,NULL, NULL, NULL, NULL, 0};
 #endif
-static bool call(lv_runtime_t *r, const char *name, unsigned argc,
+static bool call_value(lv_runtime_t *r, const char *name, unsigned argc,
                  const lv_t *a, lv_t *out, bool *yield) {
   unsigned ln = lv_name_id(r, name);
   dg_runtime_t *d = r->context;
+#if DG_D10
+  if (window_tell(d, ln, argc, a)) return true;
+  d = window_access_target(d, argc ? a[0] : (lv_t){0});
+  if(d->window_parent && (ln==LN_SOUND_PLAYFILE || ln==LN_SOUNDBUSY ||
+      ln==LN_PUPPETSOUND || ln==LN_SOUND_STOP || ln==LN_SOUND_FADEIN || ln==LN_SOUND_FADEOUT))
+    d=sound_host(d);
+#endif
+#if DG_MODERN
+  if(ln==LN_HILITE_CHUNK||ln==LN_HILITE) {
+    if(argc!=1){error(d,"hilite argument count","expected one member or text range");return true;}
+    return format_hilite(d,a[0]);
+  }
+#endif
+  if (user_files_call(d, name, argc, a, out, yield)) return true;
 #if DG_D10
   // Window services take precedence over the D6 file-chooser guard.
   if(swa_call(d,name,argc,a,out) || d10_call(d,name,argc,a,out))return true;
@@ -3173,7 +3400,7 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
   if (ln == LN_XTRA) {
     ARITY(1);
     const char *xtra = lv_type(a[0]) == LV_NUMBER ? "" : lv_cstr(r, a[0]);
-    int id = lv_type(a[0]) == LV_NUMBER ? lv_integer(r, a[0])
+    int id = lv_type(a[0]) == LV_NUMBER ? (int)native_xtra_index((unsigned)lv_integer(r, a[0]))
              : eq(xtra, "fileio")   ? 1
              : eq(xtra, "glu32")    ? 2
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
@@ -3182,8 +3409,8 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
              : eq(xtra, "amplitude") ? 5
 #endif
                                     : 0;
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-    if (id < 1 || id > 5)
+#if DG_D10
+    if (id < 1 || id > 6)
 #else
     if (id < 1 || id > 2)
 #endif
@@ -3335,6 +3562,7 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     dg_films_present(d, true);
 #endif
     dg_update_stage(d);
+    if (begin_transition(d)) *yield = true;
     return true;
   }
   if (ln == LN_DELAY) {
@@ -3389,10 +3617,6 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
 #endif
 #if DG_D10
   if ((ln == LN_GOTOMOVIE) && argc == 1) {
-    if (d->tell_window) {
-      d10_window_request(d, lv_cstr(r, a[0]));
-      return true;
-    }
     snprintf(d->next_movie, sizeof(d->next_movie), "%s", basename_(lv_cstr(r, a[0])));
     snprintf(d->next_movie_path, sizeof(d->next_movie_path), "%s", lv_cstr(r, a[0]));
     char *dot = strrchr(d->next_movie, '.');
@@ -3651,7 +3875,7 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     return true;
   }
   if (ln == LN_PUPPETPALETTE) {
-    ARITY(1);
+    if(argc<1 || argc>3){error(d,"puppetPalette arguments","expected palette[,speed[,frames]]");return true;}
     if(lv_type(a[0])==LV_NUMBER && lv_integer(r,a[0])==0) {
       d->palette_puppet=false;
       (void)palette_command(d,d->score[5].member,true);
@@ -3670,42 +3894,9 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
     if(id && palette_command(d,id,false))d->palette_puppet=true;
     return true;
   }
-  if (ln == LN_PUPPETTRANSITION) {
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-    // puppetTransition(type [, time, chunk size, area]).
-    if (argc < 1 || argc > 4) {
-      error(d, "argument count", name);
-      return true;
-    }
-#else
-    ARITY(1);
-#endif
-#if DG_D10
-    // A transition cast member (Director 8.5 scene changes): its effect is
-    // not converted, so the frame changes as a cut.
-    if (lv_type(a[0]) == LV_MEMBER) {
-      if (d->platform.trace) d->platform.trace(d->context, "TRANSITION_MEMBER_CUT");
-      return true;
-    }
-#endif
-    int type = N(0);
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-    // Transitions the compositor does not draw change the frame as a cut.
-    if (type != 23 && type != 9 && type != 10) {
-      if (d->platform.trace) d->platform.trace(d->context, "TRANSITION_TYPE_CUT");
-      return true;
-    }
-#endif
-    if (type != 23 && !(DIRECTOR64_EXTENDED_D6 && (type == 9 || type == 10))) {
-      error(d, "unsupported transition", name);
-      return true;
-    }
-    d->transition_type = (unsigned)type;
-    d->transition_serial++;
-    d->transition_duration = 15;
-    d->transition_chunk = 1;
-    return true;
-  }
+  if (ln == LN_PUPPETTRANSITION)
+    return puppet_transition(d, argc, a);
+
 #if DG_D10
   // An unrecognized method on a sprite dispatches to its behaviors — the
   // dot form of sendSprite, which authored show/hide toolkits use.
@@ -3721,12 +3912,89 @@ static bool call(lv_runtime_t *r, const char *name, unsigned argc,
 #undef N
 #undef ARITY
 }
+static lv_t reference(lv_runtime_t *r, const char *kind, lv_t value, lv_t library) {
+#if DG_D10
+  dg_runtime_t *base = r->context, *target = window_native_begin(base, (lv_t){0});
+  r->context=window_target(base);
+#endif
+  lv_t result = reference_value(r, kind, value, library);
+#if DG_D10
+  r->context=base;window_native_end(base, target);
+#endif
+  return result;
+}
+static lv_t get(lv_runtime_t *r, const char *name, lv_t owner) {
+#if DG_D10
+  dg_runtime_t *base = r->context, *target = window_native_begin(base, owner);
+  r->context=window_access_target(base,owner);
+#endif
+  lv_t result = get_value(r, name, owner);
+#if DG_D10
+  r->context=base;window_native_end(base, target);
+#endif
+  return result;
+}
+static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
+#if DG_D10
+  dg_runtime_t *base = r->context, *target = window_native_begin(base, owner);
+  r->context=window_access_target(base,owner);
+#endif
+  set_value(r, name, owner, value);
+#if DG_D10
+  r->context=base;window_native_end(base, target);
+#endif
+}
+static bool call(lv_runtime_t *r, const char *name, unsigned argc,
+                 const lv_t *a, lv_t *out, bool *yield) {
+#if DG_D10
+  dg_runtime_t *base = r->context, *target = window_native_begin(base, argc ? a[0] : (lv_t){0});
+#endif
+  bool result = call_value(r, name, argc, a, out, yield);
+#if DG_D10
+  window_native_end(base, target);
+#endif
+  return result;
+}
 static void trace(lv_runtime_t *r, lv_t value) {
   dg_runtime_t *d = r->context;
   char text[512];
   if (d->platform.trace && lv_format(r, value, text, sizeof(text)))
     d->platform.trace(d->context, text);
 }
+#if DG_MODERN && !DG_D5
+static bool native_text_splice(lv_runtime_t *r,lv_t owner,const char *kind,
+                               lv_t first,lv_t last,lv_t value,lv_t text) {
+#if DG_D10
+  dg_runtime_t *base=r->context,*target=window_native_begin(base,owner);
+  r->context=window_access_target(base,owner);
+#endif
+  bool result=dg_text_format_splice(r->context,(uint32_t)lv_id(owner),kind,first,last,value,text);
+#if DG_D10
+  r->context=base;window_native_end(base,target);
+#endif
+  return result;
+}
+static bool native_property_get(lv_runtime_t *r,lv_t owner,const char *name,lv_t *out) {
+#if DG_D10
+  dg_runtime_t *base=r->context,*target=window_native_begin(base,owner);
+  r->context=window_access_target(base,owner);
+  bool result=dg_text_format_property_get(r,owner,name,out) || d10_flash_property_get(r,owner,name,out);
+  r->context=base;window_native_end(base,target);return result;
+#else
+  return dg_text_format_property_get(r,owner,name,out);
+#endif
+}
+static bool native_property_set(lv_runtime_t *r,lv_t owner,const char *name,lv_t value) {
+#if DG_D10
+  dg_runtime_t *base=r->context,*target=window_native_begin(base,owner);
+  r->context=window_access_target(base,owner);
+  bool result=dg_text_format_property_set(r,owner,name,value) || d10_avm_property_set(r,owner,name,value);
+  r->context=base;window_native_end(base,target);return result;
+#else
+  return dg_text_format_property_set(r,owner,name,value);
+#endif
+}
+#endif
 void dg_init(dg_runtime_t *d, lv_runtime_t *r, dg_platform_t platform,
              void *context, const char *const *names, unsigned count,
              uint32_t seed) {
@@ -3755,9 +4023,12 @@ void dg_init(dg_runtime_t *d, lv_runtime_t *r, dg_platform_t platform,
               .reference = reference,
               .call = call,
               .trace = trace,
+#if DG_MODERN && !DG_D5
+              .property_get = native_property_get,
+              .property_set = native_property_set,
+              .text_splice = native_text_splice,
+#endif
 #if DG_D10
-              .property_get = d10_flash_property_get,
-              .property_set = d10_avm_property_set,
               .property_changed = d10_flash_property_changed,
 #endif
 #if DG_MODERN
@@ -3979,14 +4250,26 @@ static bool seek_now(dg_runtime_t *d, unsigned frame) {
       if (d->linked_parent && ch < 6 && ch != 3 && ch != 4) continue;
 #endif
       d->score[ch] = delta->value;
+      if (ch == 2 && f == frame && delta->value.member && !d->transition_pending) {
+        const dg_member_t *transition = dg_member(d, delta->value.member);
+        if (!transition || transition->type != 14 || !transition->transition_present) {
+          error(d, "missing converted score transition", d->movie->code->name);
+          return false;
+        }
+        if (!queue_transition(d, transition->transition_type, transition->transition_ms,
+                              transition->transition_chunk, transition->transition_area))
+          return false;
+      }
       if(ch==5 && !d->palette_puppet && !palette_command(d,delta->value.member,true))return false;
       if (ch == 5 && !d->palette_puppet && delta->value.member && delta->value.ink) {
-        d->palette_fade_serial++;
-        d->palette_fade_start = d->ticks;
-        d->palette_fade_kind = delta->value.ink;
-        unsigned speed = delta->value.blend ? delta->value.blend : 1;
-        d->palette_fade_half = (uint8_t)(60 / (speed > 30 ? 30 : speed));
-        if (d->platform.trace) d->platform.trace(d->context, "PALETTE_FADE_TRUECOLOR_SUBSTITUTE");
+        // Palette animation belongs to an indexed display. A full-screen
+        // white/black overlay on a high-color stage invents an effect absent
+        // from Director's high-color playback (Using Lingo4, p132).
+        if (d->color_depth <= 8) {
+          error(d,"indexed palette interpolation is unavailable",d->movie->code->name);
+          return false;
+        }
+        if(d->platform.trace)d->platform.trace(d->context,"PALETTE_TRANSITION_HIGH_COLOR_SKIP");
       }
 #if DG_MODERN
       unsigned command_tempo = delta->value.tempo;
@@ -4491,6 +4774,10 @@ bool dg_event(dg_runtime_t *d, const char *event, unsigned member) {
 // ordering. Hover runs with the current button state before mouseUp activation.
 static bool d6_input(dg_runtime_t *d) {
 #if DG_D10
+  if(d->input_stage==19) {
+    d->input_stage=20;
+    if(d->key_dispatch_down && *d->key_down_script && dg_event(d,d->key_down_script,0))return true;
+  }
   // Preserve the keyboard hierarchy across yielding handlers, just as for
   // text input. Linked movies can receive keys in editable sprite scripts
   // even though their frame and movie scripts are disabled.
@@ -4542,6 +4829,7 @@ static bool d6_input(dg_runtime_t *d) {
     if (d->text_key != 8 && length < 20) {
       text[length++] = (char)d->text_key;
       text[length] = 0;
+      if(!text_box_accepts_key(d,m->id,text)){text[--length]=0;d->text_passed=false;return !d->values->failed;}
     }
     set(d->values, "text", lv_make(LV_MEMBER, (int32_t)m->id), lv_text(d->values, text, false));
     d->sel_start = d->sel_end = length;
@@ -4571,15 +4859,21 @@ static bool d6_input(dg_runtime_t *d) {
     char text[21];snprintf(text,sizeof(text),"%s",d6_text(d,m));
     unsigned length=(unsigned)strlen(text);
     d->text_key=(unsigned char)d->text_replacement[d->text_index];
+#if !(defined(DIRECTOR64_D85) && DIRECTOR64_D85)
+    bool apply_text=true;
+#endif
     if (d->text_key) {
 #if !(defined(DIRECTOR64_D85) && DIRECTOR64_D85)
-      if (length<20) {text[length++]=(char)d->text_key;text[length]=0;}
+      if (length<20) {
+        text[length++]=(char)d->text_key;text[length]=0;
+        if(!text_box_accepts_key(d,m->id,text)){text[--length]=0;apply_text=false;}
+      }
 #endif
       d->text_index++;
       d->text_key_code=0;
     } else {d->text_key=8;d->text_key_code=51;}
 #if !(defined(DIRECTOR64_D85) && DIRECTOR64_D85)
-    set(d->values,"text",lv_make(LV_MEMBER, (int32_t)m->id),lv_text(d->values,text,false));
+    if(apply_text)set(d->values,"text",lv_make(LV_MEMBER, (int32_t)m->id),lv_text(d->values,text,false));
 #endif
     d->sel_start=d->sel_end=length;
     d->input_stage = 10;
@@ -4661,6 +4955,9 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
     error(d, "invalid scene transition", "state");
     return false;
   }
+#if DG_D10
+  d->tell_depth=0;d->tell_window=false;
+#endif
 #if DG_D5
   if(d->window_open) {
     dg_runtime_t *stage=malloc(sizeof(*stage));
@@ -4680,6 +4977,7 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
 #endif
   dg_stop_sounds(d);
   d->movie = movie;
+  d->transition_active = false;
   d->palette_active = d->palette_puppet = false;
   d->cursor = (dg_cursor_t){0}; // A new Score starts with its default arrow.
 #if DG_MODERN
@@ -4814,7 +5112,10 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
 #if DG_MODERN
   memset(d->field_fonts, 0, sizeof(d->field_fonts));
   memset(d->field_text_changed, 0, sizeof(d->field_text_changed));
+  d->text_format_count=0;
   memset(d->field_font_changed, 0, sizeof(d->field_font_changed));
+  memset(d->field_face_changed, 0, sizeof(d->field_face_changed));
+  memset(d->field_size_changed, 0, sizeof(d->field_size_changed));
 #endif
 #endif
   d->click_on = 0;
@@ -4841,6 +5142,15 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
 }
 #if DG_EXTENDED
 bool dg_edit_text(dg_runtime_t *d, unsigned channel, const char *text) {
+#if DG_D10
+  if(channel&DG_WINDOW_SPRITE) {
+    if(!d->window_visible || !d->window_runtime)return false;
+    dg_runtime_t *child=dg_window_begin(d);if(!child)return false;
+    bool ok=dg_edit_text(child,channel&~DG_WINDOW_SPRITE,text);
+    dg_window_end(d);if(ok)d->window_focus=true;
+    return ok;
+  }
+#endif
   if (!channel || channel >= DG_SPRITES || strlen(text) > 20) return false;
   const dg_member_t *m = dg_member(d, d->sprites[channel].value.member);
   if (!dg_text_editable(d, channel) || d->text_pending) return false;
@@ -4870,6 +5180,9 @@ bool dg_edit_text(dg_runtime_t *d, unsigned channel, const char *text) {
 }
 #endif
 bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
+  // Modal host I/O owns the interpreter continuation. A bulk replay may ask
+  // for more ticks before the host polls it; these must not age game timers.
+  if (dg_user_request()) return !d->values->failed;
   // Any change to a sprite between ticks reports through dg_sprite_changed;
   // a tick boundary refreshes the draw order regardless.
   d->order_serial++;
@@ -4880,6 +5193,9 @@ bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
   if(d->native_dialog){x-=112;y-=100;}
 #endif
   d->ticks++;
+#if DG_D10
+  window_pointer(d, &x, &y, &down);
+#endif
 #if DG_D5
   d5_media_tick(d);
 #endif
@@ -4915,6 +5231,15 @@ bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
     down=false;
   }
 #endif
+  if(d->transition_active) {
+    // Presentation consumes its skip click without dragging or dispatching it
+    // to the destination sprites. Audio/video clocks above continue normally.
+    d->mouse_pressed=down && !d->mouse_down;
+    d->mouse_down=down;
+    d->mouse_released=d->mouse_up_dispatch=false;
+    if(d->mouse_pressed)d->await_release=true;
+    return dg_service(d,budget);
+  }
   bool pressed = down && !d->mouse_down;
   if (pressed) {
     d->click_x = x;
@@ -4935,6 +5260,10 @@ bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
   if (!down && d->mouse_down)
     d->mouse_up_sprite = dg_mouse_hit(d, x, y);
 #endif
+#if DG_MODERN
+  if(!down && d->mouse_down)
+    button_release(d,d->click_on,d->click_on && dg_mouse_hit(d,x,y)==d->click_on);
+#endif
   d->mouse_pressed |= pressed;
   d->mouse_released |= !down && d->mouse_down;
   d->mouse_down = down;
@@ -4951,6 +5280,9 @@ bool dg_tick(dg_runtime_t *d, int x, int y, bool down, unsigned budget) {
     if(d->score_wait==128)d->score_wait=0;
 #endif
     d->click_on = dg_mouse_hit(d, x, y);
+#if DG_MODERN
+    button_press(d,d->click_on);
+#endif
     dg_sprite_t *s = &d->sprites[d->click_on];
     if (d->click_on && s->moveable) {
       d->drag_sprite = d->click_on;
@@ -5072,6 +5404,7 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
 #endif
   // Dispatch itself is bounded as well as the total native handler work.
   for (unsigned guard = 0; guard < 4096 && !d->quit; guard++) {
+    if (transition_waiting(d)) break;
     // A script-class failure matches an original alert: discard the call
     // contexts and continue with the next queued event. Hard failures stop.
     if (r->failed && !recover_script_error(d))
@@ -5249,8 +5582,9 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
       d->key_event_tick = d->ticks;
 #if DG_D10
       d->key_dispatch_down = down;
+      d->text_key=0;
       d->input_channel = d->keyboard_focus;
-      d->input_stage = 20;
+      d->input_stage = 19;
       continue;
 #else
       if (dg_event(d, down ? "keydown" : "keyup", 0)) continue;
@@ -5415,6 +5749,7 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
 #endif
       d->phase = 1;
       d->event_cursor = 0;
+      if (begin_transition(d)) break;
     } else if (d->phase == 1 || d->phase == 2) {
 #if DG_D5
       if(d->phase==2 && !d->event_cursor && d5_waiting(d))break;
@@ -5511,10 +5846,12 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
   if (!r->failed) {
     dg_flash_service(d,budget?budget:DG_SERVICE_BUDGET);
     if(!r->failed)linked_update(d, budget ? budget : DG_SERVICE_BUDGET);
+    if(!r->failed)window_update(d, budget ? budget : DG_SERVICE_BUDGET);
   }
 #endif
   return !r->failed;
 }
 #if DG_D10
 #include "linked.inc"
+#include "window.inc"
 #endif

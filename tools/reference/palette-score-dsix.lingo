@@ -1,0 +1,47 @@
+-- Diagnostic experiment: no successful palette pixel comparison was obtained.
+-- director64: fileio-functions
+-- Synchronous D6 bitmap/palette phases; hidden windows may be externally
+-- mapped only when the reference records that window-system intervention.
+global out
+openXLib("XTRAS\FILEIO.X32")
+set out = new(xtra("fileio"))
+createFile(out, "C:\palette-score-dsix.txt")
+openFile(out, "C:\palette-score-dsix.txt", 2)
+writeString(out, string(["colorDepth", the colorDepth]) & RETURN)
+set the fileName of window "director64-palette-probe" = "DATA\BALL16.DXR"
+open(window("director64-palette-probe"))
+set the rect of window "director64-palette-probe" = rect(0,0,800,600)
+tell window "director64-palette-probe"
+  set the stageColor = 100
+  go(74)
+  puppetSprite(1, TRUE)
+  set the castNum of sprite 1 = 14
+  set the rect of sprite 1 = rect(100,100,400,400)
+  set the visible of sprite 1 = TRUE
+  updateStage()
+  writeString(out, string(["baseline", the ticks, the frame]) & RETURN)
+  set waitUntil = the ticks + 360
+  repeat while the ticks < waitUntil
+  end repeat
+  puppetPalette("Grayscale")
+  updateStage()
+  writeString(out, string(["grayscale", the ticks, the frame]) & RETURN)
+  set waitUntil = the ticks + 360
+  repeat while the ticks < waitUntil
+  end repeat
+  puppetPalette(0)
+  updateStage()
+  writeString(out, string(["restored", the ticks, the frame]) & RETURN)
+  set waitUntil = the ticks + 360
+  repeat while the ticks < waitUntil
+  end repeat
+  set beforeTick = the ticks
+  go(75)
+  updateStage()
+  writeString(out, string(["whiteScore", the ticks, "elapsed", the ticks-beforeTick, the frame]) & RETURN)
+  set waitUntil = the ticks + 360
+  repeat while the ticks < waitUntil
+  end repeat
+end tell
+closeFile(out)
+close(window("director64-palette-probe"))

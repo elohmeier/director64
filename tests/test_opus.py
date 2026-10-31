@@ -54,11 +54,16 @@ globalThis.AudioDecoder = class {
 };
 globalThis.AudioContext = class {
   destination = {};
-  createGain() {return {connect() {}};}
+  createGain() {return {gain: {value: 1}, targets: [], connect(node) {this.targets.push(node);}};}
+  createWaveShaper() {return {curve: null, targets: [], connect(node) {this.targets.push(node);}};}
   createBuffer(numberOfChannels, length, sampleRate) {
     return {numberOfChannels, length, duration: length / sampleRate, copyToChannel() {}};}
 };
 const audio = new AudioEngine(() => bytes, 2);
+assert.deepEqual(audio.master.targets, [audio.output]);
+assert.deepEqual(audio.output.targets, [audio.context.destination]);
+assert.deepEqual([...audio.output.curve], [-1, 1]);
+assert.equal(audio.output.oversample, 'none');
 assert.equal(audio.duration('cue'), info.frames / info.rate);
 assert.equal(audio.load('cue'), null);
 const entry = await audio.whenLoaded('cue');

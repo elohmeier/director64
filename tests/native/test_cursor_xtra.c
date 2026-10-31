@@ -38,16 +38,16 @@ int main(void) {
   assert(!strcmp(lv_cstr(&values, lv_get(&values, NULL, "type", reference)),
                  "cursor"));
   uint16_t source[256] = {0}, pixels[256];
-  source[0] = dg_cursor_ink(0, 255, 0);
+  source[0] = dg_cursor_color_pixel(0, 255, 0);
   source[1] = 1;      // Black body.
   source[2] = 0xfffe; // White with converted Auto Mask alpha cleared.
   dg_cursor_bitmap_t cursor;
   assert(dg_cursor_color(&cursor, source, 16, 16, 7, 0));
   uint32_t hash = dg_cursor_bitmap_hash(&cursor);
-  dg_cursor_pixels_ink(&cursor, pixels, dg_cursor_ink(255, 0, 0));
+  dg_cursor_pixels(&cursor, pixels);
   assert(pixels[0] == source[0] && pixels[1] == 1 && !(pixels[2] & 1));
   assert(cursor.hot_x == 7 && cursor.hot_y == 0);
-  source[0] = dg_cursor_ink(0, 0, 255);
+  source[0] = dg_cursor_color_pixel(0, 0, 255);
   assert(dg_cursor_color(&cursor, source, 16, 16, 7, 0));
   assert(dg_cursor_bitmap_hash(&cursor) != hash);
   assert(!dg_cursor_color(&cursor, source, 17, 16, 7, 0));

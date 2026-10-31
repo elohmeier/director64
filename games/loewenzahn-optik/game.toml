@@ -48,3 +48,23 @@ handler = "getregoptimal"
 all = true
 calls = "glunew"
 body = "return serNum"
+
+# Enter the authored single-player name screen directly. Historical names and
+# scores remain available; the multiple-player mode chooser is bypassed.
+[[convert.patch]]
+id = "single-player-quiz-entry"
+movie = "QUIZ__QUIZ.DXR"
+cast = "Interne"
+member = 37
+handler = "preparemovie"
+source_sha256 = "26a76cfb2e1818e1cca23ddf594145dfb9185b8ed32dab4404851c8139ed0f2d"
+prepend = 'go("1_wer")'
+
+[[convert.patch]]
+id = "single-player-pinball-entry"
+movie = "FLIPPER__FLIPPER.DXR"
+cast = "Interne"
+member = 37
+handler = "preparemovie"
+source_sha256 = "26a76cfb2e1818e1cca23ddf594145dfb9185b8ed32dab4404851c8139ed0f2d"
+prepend = 'go("1_wer")'

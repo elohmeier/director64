@@ -14,6 +14,10 @@ uv run --locked director64 web --game loewenzahn-8 --serve
 serial. `[player]` saves the `.usr` preferences file, which the game writes
 through the vList Xtra.
 
+The telephone activity keeps its introduction and enters the authored
+single-player setup on entry and restart. Source-pinned patches bypass its
+hotseat mode chooser without clearing profiles or past scores.
+
 The `login-dog-registration` journey exercises registration, the save on
 return, reboot and restored dog state. The opt-in [invariant model](invariants.json)
 adds conditional checks for this named route; see the

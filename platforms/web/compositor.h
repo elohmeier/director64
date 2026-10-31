@@ -6,6 +6,9 @@
 // Android player on its surface. Both hosts draw the same Director state from
 // the same converted images through it, so they show the same game.
 #include "director.h"
+#if defined(DIRECTOR64_SOURCE_CURSOR_MASK) && DIRECTOR64_SOURCE_CURSOR_MASK
+#include "cursor_resource.h"
+#endif
 #include "film_transform.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -30,6 +33,7 @@ enum { WC_WIDTH = 640, WC_HEIGHT = 480 };
 typedef struct {
   unsigned font, size, align;
   int ascent, line_height;
+  unsigned face; // bold1, italic2, underline4, strikeout8.
 } wc_text_style_t;
 
 typedef struct {
@@ -42,6 +46,11 @@ typedef struct {
   // Optional; text colour runs and hit tests need it.
   int (*layout)(void *ctx, const char *utf8, int width, int height,
                 const wc_text_style_t *style, int16_t *boxes, int max_chars);
+#if DG_MODERN
+  // Initial styled text, as straight-alpha RGBA, with shared character layout.
+  bool (*rich_text)(void *,const char *,int,int,const dg_text_format_t *,unsigned,uint32_t *);
+  int (*rich_layout)(void *,const char *,int,int,const dg_text_format_t *,unsigned,int16_t *,int);
+#endif
   void *ctx;
   // The digital video frame a sprite shows now (D5), as RGBA8888 in `out`
   // (at most `cap` pixels); returns false while none is decoded. Optional.
@@ -91,16 +100,8 @@ typedef struct {
   // Per pixel, which colour run set it (0: the box's own colour), built
   // when the text has runs.
   uint8_t *runs;
+  uint32_t *rgba;
 } wc_text_t;
-
-// One cursor on the stage: where it points and the ink its glyph's black
-// body takes (dg_cursor_ink; 1 keeps it black). Controllers each draw one,
-// in their player's colour.
-typedef struct {
-  int x, y;
-  uint32_t ink; // a 16-bit ink; the full word keeps the struct unpadded
-} wc_pointer_t;
-enum { WC_POINTERS = 4 };
 
 typedef struct {
   dg_cursor_t cursor;
@@ -118,6 +119,9 @@ typedef struct {
   size_t image_bytes, image_budget;
   wc_text_t texts[WC_TEXT_SLOTS];
   wc_cursor_t cursors[WC_CURSOR_SLOTS];
+#if defined(DIRECTOR64_SOURCE_CURSOR_MASK) && DIRECTOR64_SOURCE_CURSOR_MASK
+  wc_resource_cursor_t resource_cursor;
+#endif
   unsigned serial;
   // What the last composite showed; an unchanged stage is not redrawn.
   bool drawn;
@@ -126,8 +130,8 @@ typedef struct {
   const dg_movie_t *movie;
   unsigned revision;
   dg_cursor_t cursor;
-  wc_pointer_t pointers[WC_POINTERS];
-  unsigned pointer_count;
+  int pointer_x, pointer_y;
+  bool pointer_shown;
   uint32_t background;
   // What else the composite shows that the stage revision does not track:
   // the host's decoded video frames, a D5 alert or source dialog.
@@ -138,8 +142,13 @@ typedef struct {
   // The last composited scene without its cursors, and the snapshot of it a
   // script kept as a member's image (`member.image = (the stage).image`).
   uint32_t scene[WC_WIDTH * WC_HEIGHT];
-  uint32_t *palette_previous;
-  uint32_t palette_serial, palette_tick;
+  uint32_t *transition_previous, *transition_next;
+  uint32_t transition_serial, transition_tick;
+  int transition_l, transition_t, transition_r, transition_b;
+  unsigned transition_cell_w, transition_cell_h, transition_bit_group;
+  unsigned transition_grid_w, transition_grid_h;
+  uint32_t transition_polynomial, transition_random_state;
+  uint32_t transition_random_done, transition_random_total;
 #if DG_D10
   uint32_t *film_scratch[8];
   unsigned film_depth;
@@ -149,6 +158,11 @@ typedef struct {
   uint32_t snapshot_member;
 #endif
 } wc_t;
+
+#if defined(DIRECTOR64_SOURCE_CURSOR_MASK) && DIRECTOR64_SOURCE_CURSOR_MASK
+// Read-only asset metadata for source cursor rendering and probe observations.
+const wc_resource_cursor_t *wc_source_cursor(wc_t *,lv_runtime_t *,unsigned resource);
+#endif
 
 void wc_init(wc_t *, wc_host_t, size_t image_budget);
 void wc_release(wc_t *);
@@ -170,6 +184,7 @@ bool wc_hit(wc_t *, lv_runtime_t *, const dg_member_t *, unsigned ink, int x,
 // Keeps what the stage shows now (without cursors) as the member's image.
 void wc_capture_stage(wc_t *, uint32_t member);
 bool wc_read_image(wc_t *, dg_runtime_t *, uint32_t member, dg_pixel_image_t *);
+bool wc_member_resident(wc_t *,dg_runtime_t *,uint32_t member,bool load);
 bool wc_flash_field_hit(wc_t *, dg_runtime_t *, struct dg_flash_instance *, float, float);
 #endif
 // Which character of a text member's `text`, set in a width x height box,
@@ -177,11 +192,16 @@ bool wc_flash_field_hit(wc_t *, dg_runtime_t *, struct dg_flash_instance *, floa
 // layout callback places them).
 int wc_text_char_at(wc_t *, dg_runtime_t *, const dg_member_t *, const char *text, int width, int height, int x,
                     int y);
+bool wc_text_position(wc_t *,dg_runtime_t *,const dg_member_t *,const char *text,
+                        int width,int position,int *x,int *y);
+#if DG_CAP_TEXT_BOX
+int wc_text_height(wc_t *,dg_runtime_t *,const dg_member_t *,const char *text,int width);
+#endif
 bool wc_render(wc_t *, dg_runtime_t *, int pointer_x, int pointer_y,
                bool pointer_shown, unsigned externals);
-// The same with up to WC_POINTERS cursors, drawn in order (the last on top).
-bool wc_render_pointers(wc_t *, dg_runtime_t *, const wc_pointer_t *,
-                        unsigned count, unsigned externals);
+// OS-native cursor role, or -1 when source artwork/software composition is needed.
+// 0 arrow, 1 I-beam, 2/3 crosshair, 4 wait, 200 hidden.
+int wc_native_cursor(dg_runtime_t *);
 // A member's cursor bitmap, as the probe state line's cursor hash reads it
 // (state.inc calls it as native_cursor_bitmap); fails the runtime on a bad
 // asset.

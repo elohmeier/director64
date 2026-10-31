@@ -158,12 +158,9 @@ static inline host_pointer_sample_t host_pointer_sample(host_pointer_t *p,
   p->delivered = sample.buttons;
   return sample;
 }
-static inline void host_input_resume(host_pad_t *pads, unsigned count,
-                                     host_pointer_t *pointer) {
-  for (unsigned i = 0; i < count; i++) {
-    pads[i].masked = pads[i].buttons;
-    pads[i].count = pads[i].head = 0;
-  }
+static inline void host_input_resume(host_pad_t *pad, host_pointer_t *pointer) {
+  pad->masked = pad->buttons;
+  pad->count = pad->head = 0;
   pointer->masked = pointer->current.buttons;
   pointer->count = pointer->head = 0;
 }

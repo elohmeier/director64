@@ -407,6 +407,22 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    fn text_property_owner(&mut self, node: &Expr, property: &str) -> Result<(), String> {
+        if matches!(property, "font" | "textfont" | "fontsize" | "textsize" |
+                    "fontstyle" | "textstyle" | "color" | "textcolor" |
+                    "forecolor" | "charspacing" | "fixedlinespace" | "hilite")
+            && let Expr::Chunk {kind,first,last,source}=node
+        {
+            self.expr(&Expr::Str(kind.clone()))?;
+            self.expr(first)?;
+            self.expr(last)?;
+            self.text_property_owner(source,property)?;
+            let index=self.name("text_range");
+            return self.emit(op("call_builtin_expr",vec![index,4]),-3);
+        }
+        self.owner_expr(node)
+    }
+
     fn expr(&mut self, node: &Expr) -> Result<(), String> {
         match node {
             Expr::Number(Num::Float(value)) => {
@@ -522,25 +538,14 @@ impl<'a> Compiler<'a> {
                     let index = self.name(&inner[..inner.len() - 1]);
                     return self.emit(op("chunk_count", vec![index]), 0);
                 }
-                // A text chunk's reference and colour read the member, not
-                // the chunk's text: `the ref of line 1 to n of member m` is
-                // the member (whose text a put into its chars rewrites), and
-                // `the foreColor of word n of member m` its run colour.
-                if let Expr::Chunk { kind, first, last, source } = &**value {
+                // A chunk's ref reads its source member. Formatting reads
+                // use the range proxy below, including mutable foreColor.
+                if let Expr::Chunk { source, .. } = &**value {
                     if name == "ref" {
                         return self.owner_expr(source);
                     }
-                    if name == "forecolor" {
-                        self.expr(source)?;
-                        self.expr(&Expr::Str(kind.clone()))?;
-                        self.expr(first)?;
-                        self.expr(last)?;
-                        self.builtin_call("chunkforecolor");
-                        let index = self.name("chunkforecolor");
-                        return self.emit(op("call_builtin_expr", vec![index, 4]), -3);
-                    }
                 }
-                self.owner_expr(value)?;
+                self.text_property_owner(value,name)?;
                 let index = self.name(name);
                 self.emit(op("get", vec![index]), 0)
             }
@@ -584,7 +589,9 @@ impl<'a> Compiler<'a> {
             }
             Expr::Call(name, args) => {
                 for argument in args {
-                    self.expr(argument)?;
+                    if matches!(name.as_str(),"hilite_chunk"|"hilite") && args.len()==1 {
+                        self.text_property_owner(argument,"hilite")?;
+                    } else {self.expr(argument)?;}
                 }
                 if self.custom_calls.contains(name) {
                     // An expression handler can show a dialogue and wait for
@@ -619,7 +626,7 @@ impl<'a> Compiler<'a> {
                 self.emit(op("set", vec![index]), -2)
             }
             Expr::Get(name, value) => {
-                self.owner_expr(value)?;
+                self.text_property_owner(value,name)?;
                 let index = self.name(name);
                 self.emit(op("set", vec![index]), -2)
             }
@@ -788,7 +795,9 @@ impl<'a> Compiler<'a> {
                 StmtKind::Call(value) => match value {
                     Expr::Call(name, args) => {
                         for argument in args {
-                            self.expr(argument)?;
+                            if matches!(name.as_str(),"hilite_chunk"|"hilite") && args.len()==1 {
+                                self.text_property_owner(argument,"hilite")?;
+                            } else {self.expr(argument)?;}
                         }
                         if self.builtin_call(name) {
                             let index = self.name(name);

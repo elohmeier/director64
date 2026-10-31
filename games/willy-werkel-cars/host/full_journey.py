@@ -1,4 +1,4 @@
-"""Exercise workshop UI and saves, then driving with a recovered makeCar fixture."""
+"""Exercise workshop navigation, car saves and certificate printing through input."""
 
 import hashlib
 import json
@@ -154,10 +154,12 @@ def run(executable, output):
             state = click(310, 200)
             assert (state["movie"], state["frame"]) == ("08.DXR", 1)
             state = click(610, 375)
-            assert "Drucken" in state["notice"]
-            command("step 1 610 375 0")
-            state = command("step 1 610 375 2")
-            assert not state["notice"]
+            document = state["user_request"]
+            assert document["kind"] == 4
+            assert (document["width"], document["height"]) == (595, 842)
+            assert document["size"] > 1_000_000 and document["sha256"]
+            state = command("document cancel")
+            assert state["user_request"] is None
             command("step 60 610 375 0")
             left, top, right, bottom = field(state, 80)["bounds"]
             state = click((left + right) // 2, (top + bottom) // 2)
@@ -196,7 +198,7 @@ def run(executable, output):
             "load-car",
             "reboot-load-saved-car",
             "toolbox-certificate-and-return",
-            "certificate-print-notice-and-dismissal",
+            "certificate-native-print-and-cancellation",
             "toolbox-close",
         ],
         "commands": len(commands),

@@ -30,7 +30,7 @@ int main(void) {
   assert(host_pad_update(&pad, true, 1, 0, 0, true));
   assert(host_pointer_update(&pointer, (host_pointer_sample_t){40, 50, 1, true},
                              true));
-  host_input_resume(&pad, 1, &pointer);
+  host_input_resume(&pad, &pointer);
   assert(host_pad_sample(&pad, &pressed) == 0);
   assert(host_pointer_sample(&pointer, &pressed).buttons == 0);
   assert(host_pad_update(&pad, true, 0, 0, 0, false));

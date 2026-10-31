@@ -1,0 +1,39 @@
+-- Synthetic transition measurements in an original debug-movie window.
+w = window("director64-transition-probe")
+w.fileName = the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+w.rect = rect(100,100,740,580)
+tell w
+-- Synthetic stage-color changes measure whether updateStage blocks on a
+-- queued transition. No recovered game script or game image is used.
+global out
+out = new(xtra("fileio"))
+out.createFile("C:\transition-timing.txt")
+out.openFile("C:\transition-timing.txt", 2)
+out.writeString(string(["colorDepth", the colorDepth]) & RETURN)
+the stageColor = 0
+updateStage()
+cases = [[1, 1, 1, 0], [1, 2, 1, 0], [9, 1, 1, 0], [9, 2, 1, 0], [10, 1, 20, 1], [10, 2, 20, 1], [23, 2, 1, 0], [50, 2, 8, 0], [51, 2, 8, 0], [52, 2, 8, 0], [37, 2, 4, 0], [26, 2, 4, 0], [0, 2, 1, 0]]
+repeat with caseNumber = 1 to cases.count
+  testCase = cases[caseNumber]
+  puppetTransition(testCase[1], testCase[2], testCase[3], testCase[4])
+  the stageColor = (caseNumber mod 2) * 255
+  beforeTick = the ticks
+  beforeFrame = the frame
+  updateStage()
+  out.writeString(string([testCase, "elapsed", the ticks - beforeTick, "frameBefore", beforeFrame, "frameAfter", the frame]) & RETURN)
+end repeat
+the stageColor = 0
+updateStage()
+puppetTransition(1,2,1,1)
+beforeTick = the ticks
+updateStage()
+out.writeString(string(["unchanged",the ticks-beforeTick]) & RETURN)
+puppetTransition(1,0,1,0)
+the stageColor = 255
+beforeTick = the ticks
+updateStage()
+out.writeString(string(["zeroTime",the ticks-beforeTick]) & RETURN)
+out.closeFile()
+end tell
+w.close()

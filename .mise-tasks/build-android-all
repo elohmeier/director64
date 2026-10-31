@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+#MISE description="Build all local games for three Android ABIs and verify fresh APK receipts"
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+uv run --locked python - "$@" <<'PY'
+import argparse
+import concurrent.futures
+import json
+import struct
+import subprocess
+import sys
+import time
+import zipfile
+from datetime import UTC, datetime
+from pathlib import Path
+
+from director64 import android
+from director64.project import GameSpec
+
+parser = argparse.ArgumentParser(description='Static Android qualification; never installs or connects hardware')
+parser.add_argument('--output', type=Path, default=Path('build/validation/android-builds') /
+                    datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ'))
+parser.add_argument('--workers', type=int, default=2)
+parser.add_argument('--jobs', type=int, default=4)
+args = parser.parse_args()
+if not 1 <= args.workers <= 4 or not 1 <= args.jobs <= 16:
+    parser.error('workers must be 1..4 and jobs 1..16')
+output = args.output.resolve()
+if not output.is_relative_to(Path('build').resolve()):
+    parser.error('output must remain under ignored build/')
+output.mkdir(parents=True, exist_ok=False)
+abis = sorted(android.ABIS)
+names = [p.parent.name for p in sorted(Path('games').glob('*/game.toml'))
+         if GameSpec.load(p.parent.name).data['status'] != 'catalogued']
+
+def verify(name):
+    game = GameSpec.load(name)
+    apk = android.verify_apk(game)
+    receipt = json.loads(android.apk_receipt_path(game).read_text())
+    if sorted(receipt['abis']) != abis or receipt['validation']:
+        raise ValueError('expected production APK with all three ABIs')
+    machines = {'armeabi-v7a': (1, 40), 'arm64-v8a': (2, 183), 'x86_64': (2, 62)}
+    with zipfile.ZipFile(apk) as archive:
+        for abi in abis:
+            data = archive.read(f"lib/{abi}/libd64_{name.replace('-', '_')}.so")
+            expected_class, expected_machine = machines[abi]
+            if len(data) < 52 or data[:4] != b'\x7fELF' or data[4] != expected_class or data[5] != 1:
+                raise ValueError(f'{abi}: native ELF header differs')
+            if struct.unpack_from('<H', data, 18)[0] != expected_machine:
+                raise ValueError(f'{abi}: native ELF machine differs')
+    return {'source_sha256': receipt['source_sha256'], 'abis': abis,
+            'apk_sha256': receipt['apk_sha256'], 'bytes': receipt['bytes'],
+            'inputs': receipt['inputs']}
+
+def build(name):
+    start = time.monotonic()
+    result = {'game': name, 'status': 'failed'}
+    try:
+        with (output / (name + '.log')).open('w') as log:
+            process = subprocess.run([sys.executable, '-m', 'director64', 'android', 'build',
+                                      '--game', name, '--jobs', str(args.jobs)],
+                                     stdout=log, stderr=log, check=False, timeout=2700)
+        result['exit'] = process.returncode
+        if process.returncode:
+            raise ValueError('APK build failed; inspect this game log')
+        result.update(verify(name))
+        result['status'] = 'passed'
+    except Exception as error:
+        result['error'] = str(error)
+    result['seconds'] = round(time.monotonic() - start, 2)
+    (output / (name + '.json')).write_text(json.dumps(result, indent=2) + '\n')
+    print(json.dumps(result), flush=True)
+    return result
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
+    results = list(pool.map(build, names))
+# Check every completed artifact again against the final tree: source movement
+# during another game's build must not leave an apparently qualified old APK.
+for result in results:
+    if result['status'] == 'passed':
+        try:
+            result.update(verify(result['game']))
+        except Exception as error:
+            result.update(status='failed', error='final source freshness: ' + str(error))
+    (output / (result['game'] + '.json')).write_text(json.dumps(result, indent=2) + '\n')
+summary = {'kind': 'production-android-static-builds', 'status': 'passed' if all(
+    row['status'] == 'passed' for row in results) else 'failed',
+    'physical_device_evidence': False, 'emulator_evidence': False, 'results': results}
+(output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+print(output / 'summary.json', flush=True)
+raise SystemExit(summary['status'] != 'passed')
+PY

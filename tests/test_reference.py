@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import struct
 from dataclasses import replace
 from itertools import product
 
@@ -13,9 +14,82 @@ from director64.reference import (
     layout_for,
     optical_metadata,
     parse_precision,
+    pe32_gui_launcher,
     relative,
     runner,
 )
+
+
+def synthetic_pe32():
+    data = bytearray(0x80 + 24 + 224 + 40)
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 60, 0x80)
+    data[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<HH", data, 0x84, 0x14c, 1)
+    struct.pack_into("<HH", data, 0x94, 224, 2)
+    struct.pack_into("<H", data, 0x98, 0x10b)
+    struct.pack_into("<I", data, 0xa8, 0x1000)
+    struct.pack_into("<H", data, 0xdc, 2)
+    return data
+
+
+def test_declared_dat_launcher_is_pinned_original_pe_without_renaming(tmp_path):
+    game = replace(GameSpec.load("lernerfolg-deutsch-1-2"), root=tmp_path)
+    host = game.directory / "host"
+    host.mkdir(parents=True)
+    (host / "source-policy.json").write_text('{"native_stage":true}')
+    data = synthetic_pe32()
+    launcher = tmp_path / "Deutsch.dat"
+    launcher.write_bytes(data)
+    recipe = {"schema_version": 1, "source_sha256": game.source["sha256"],
+              "launcher": "Deutsch.dat", "launcher_sha256": hashlib.sha256(data).hexdigest(),
+              "cwd": "."}
+    path = host / "reference.json"
+    path.write_text(json.dumps(recipe))
+    assert layout_for(game, tmp_path)["launcher"] == "Deutsch.dat"
+    assert launcher.read_bytes() == data and not (tmp_path / "Deutsch.exe").exists()
+    del recipe["launcher_sha256"]
+    path.write_text(json.dumps(recipe))
+    with pytest.raises(ValueError, match="pinned contained"):
+        layout_for(game, tmp_path)
+    recipe["launcher_sha256"] = "0" * 64
+    path.write_text(json.dumps(recipe))
+    with pytest.raises(ValueError, match="hash differs"):
+        layout_for(game, tmp_path)
+    recipe["launcher_sha256"] = hashlib.sha256(data).hexdigest()
+    path.write_text(json.dumps(recipe))
+    external = tmp_path.parent / (tmp_path.name + "-external.dat")
+    external.write_bytes(data)
+    launcher.unlink()
+    launcher.symlink_to(external)
+    with pytest.raises(ValueError, match="pinned contained"):
+        layout_for(game, tmp_path)
+    launcher.unlink()
+    launcher.write_bytes(data)
+    path.unlink()
+    with pytest.raises(ValueError, match="expected one original"):
+        layout_for(game, tmp_path)
+
+
+@pytest.mark.parametrize(("offset", "fmt", "value"), [
+    (0, "H", 0), (60, "I", 0xffffffff), (0x84, "H", 0x8664), (0x86, "H", 97),
+    (0x94, "H", 69), (0x94, "H", 4097), (0x96, "H", 0x2002),
+    (0x96, "H", 0), (0x98, "H", 0x20b), (0xa8, "I", 0), (0xdc, "H", 3),
+])
+def test_declared_dat_rejects_dll_console_pe64_and_malformed_headers(tmp_path, offset, fmt, value):
+    data = synthetic_pe32()
+    struct.pack_into("<" + fmt, data, offset, value)
+    path = tmp_path / "Deutsch.dat"
+    path.write_bytes(data)
+    assert not pe32_gui_launcher(path)
+
+
+def test_dat_header_parser_refuses_every_truncated_header(tmp_path):
+    data = synthetic_pe32()
+    path = tmp_path / "Deutsch.dat"
+    for length in [0, 2, 63, 64, 0x80, 0x98, len(data) - 1]:
+        path.write_bytes(data[:length])
+        assert not pe32_gui_launcher(path)
 
 
 def test_birthday_original_layout_uses_actual_launcher_and_debug_ini(tmp_path):

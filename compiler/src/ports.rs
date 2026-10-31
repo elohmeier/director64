@@ -240,6 +240,21 @@ pub fn plan(port: &Port, model: &Value) -> R<Value> {
         measure.push(json!({"key": format!("substitute:{size}"), "font": "substitute",
                             "size": size, "ranges": ["0x20-0x7e"]}));
     }
+    if convert["substitute_font"]["measure"] == true {
+        let sizes: BTreeSet<i64> = list(&model["movies"])
+            .flat_map(|movie| list(&movie["members"]))
+            .flat_map(|member| list(&member["sourceTextStyles"]).chain(list(&member["textFormats"])))
+            .filter_map(|run| run["size"].as_i64())
+            .map(|size|if size==0 {12}else{size})
+            .collect();
+        for size in sizes {
+            let key = format!("substitute:{size}");
+            if !measure.iter().any(|request| request["key"] == key) {
+                measure.push(json!({"key": key, "font": "substitute", "size": size,
+                                    "ranges": ["0x20-0x7e"]}));
+            }
+        }
+    }
     if convert["measure_fonts"] == true {
         measure.extend(measure_requests(model)?);
     }
@@ -276,6 +291,10 @@ fn measure_requests(model: &Value) -> R<Vec<Value>> {
             {
                 pairs.insert((font, size));
             }
+        }
+        for run in list(&member["textFormats"]) {
+            if let (Some(font),Some(size))=(run["fontId"].as_i64(),run["size"].as_i64())
+                && font!=0 { pairs.insert((font,if size==0 {12}else{size})); }
         }
         for field in list(&member["flashFields"]).chain(list(&member["flashFontUses"])) {
             if let Some(&number) = aliases.get(&text(&field["fontName"]).to_lowercase()) {
@@ -354,6 +373,17 @@ pub fn postprocess_model(
         let mut chars: Vec<char> = text(&member["text"]).chars().collect();
         chars.truncate(chars.len().saturating_sub(fix["trim"].as_u64().unwrap_or(0) as usize));
         member["text"] = json!(chars.into_iter().collect::<String>());
+        let extent=text(&member["text"]).encode_utf16().count() as u64;
+        if let Some(formats)=member["textFormats"].as_array_mut() {
+            let insertion=formats.last().filter(|r|r["offset"].as_u64().is_some_and(|o|o>extent)).cloned();
+            formats.retain(|r|r["offset"].as_u64().is_some_and(|o|o<=extent));
+            if let Some(mut insertion)=insertion {
+                insertion["offset"]=json!(extent);
+                if formats.last().is_some_and(|r|r["offset"]==extent){formats.pop();}
+                formats.push(insertion);
+            }
+        }
+
     }
     for fix in list(&convert["tempo_fix"]) {
         tempo_fix(model, fix)?;
@@ -403,7 +433,7 @@ fn tempo_fix(model: &mut Value, fix: &Value) -> R<()> {
 }
 
 /// [convert.substitute_font]: every member with source text styles sets in
-/// the pinned Droid Sans (font 1) at its first run's size and metrics, under
+/// the pinned Droid Sans (font 1), preserving every run's size and metrics, under
 /// `asset`. `names` maps source font ids to the names scripts see (default
 /// "Director system font N"); `sizes` adds variants; `controller` {members,
 /// size} gives those fields the measured metrics of controller entry.
@@ -421,18 +451,61 @@ fn substitute(
     let controller_members: Vec<&str> = list(&spec["controller"]["members"]).map(text).collect();
     let mut sizes: BTreeSet<i64> = list(&spec["sizes"]).filter_map(Value::as_i64).collect();
     let mut source_fonts = BTreeSet::new();
-    for member in model["movies"]
-        .as_array_mut()
-        .into_iter()
-        .flatten()
-        .flat_map(|m| m["members"].as_array_mut().into_iter().flatten())
-    {
+    let mut measured_sizes = BTreeMap::new();
+    if let Some((size, metrics)) = &controller {
+        measured_sizes.insert(*size, metrics.clone());
+    }
+    let mut run_limits=Vec::new();
+    for movie in model["movies"].as_array_mut().into_iter().flatten() {
+      let modern=movie["directorVersion"].as_i64().is_none_or(|v|v>=600);
+      let movie_name=movie["name"].clone();
+      for member in movie["members"].as_array_mut().into_iter().flatten() {
+        for style in list(&member["sourceTextStyles"]) {
+            source_fonts.insert(style["sourceFontId"].as_i64().unwrap_or(0));
+        }
+        if modern {
+            if let Some(formats)=member["textFormats"].as_array_mut() {
+                for run in formats {run["fontId"]=json!(1);let size=run["size"].as_i64().unwrap_or(0);sizes.insert(if size==0 {12}else{size});}
+            } else if let Some(styles)=member["sourceTextStyles"].as_array() {
+                let align=match member["textAlign"].as_i64().unwrap_or(0){-1=>2,1=>1,_=>0};
+                let mut formats=Vec::new();
+                for style in styles {
+                    let size=style["size"].as_i64().unwrap_or(0);
+                    // Preserve zero in STXT/RICH, as in the source data. Rendering
+                    // uses the twelve-point default measured on original8.5;
+                    // this is an explicit fallback inference for older D6 STXT,
+                    // whose selected zero-size records are database text styles.
+                    if !(0..=255).contains(&size){return Err("invalid substitute text run size".into());}
+                    sizes.insert(if size==0 {12}else{size});source_fonts.insert(style["sourceFontId"].as_i64().unwrap_or(0));
+                    let face=style["face"].as_u64().unwrap_or(0);
+                    if face&!7!=0{run_limits.push(json!({"movie":movie_name,"cast":member["cast"],"member":member["number"],"kind":"text-layout","detail":"unsupported character face effects"}));}
+                    let offset=style["offset"].as_u64().unwrap_or(0);
+                    if formats.last().is_some_and(|last:&Value|last["offset"]==offset){formats.pop();}
+                    formats.push(json!({"offset":offset,
+                        "fontId":1,"size":size,"face":face&7,"align":align,
+                        "ascent":style["ascent"].as_i64().unwrap_or(0),
+                        "lineHeight":style["lineHeight"].as_i64().unwrap_or(0).max(0),
+                        "color":style["color"].as_u64().unwrap_or(0)}));
+                }
+                member["textFormats"]=json!(formats);
+            }
+        }
         let Some(style) = member.get("sourceTextStyles").and_then(|s| s.get(0)).cloned() else {
+            if modern && member["textFormats"].is_array() {
+                for key in ["textStyle","textInsertStyle"] {
+                    if member[key].is_object() {
+                        member[key]["fontId"]=json!(1);
+                        if let Some(size)=member[key]["size"].as_i64(){sizes.insert(size);}
+                    }
+                }
+                member["textPresentation"]=json!("explicit-system-font-substitute");
+            }
             continue;
         };
         let font = style["sourceFontId"].as_i64().unwrap_or(0);
         source_fonts.insert(font);
-        let size = style["size"].as_i64().unwrap_or(0);
+        let raw_size = style["size"].as_i64().unwrap_or(0);
+        let size = if raw_size==0 {12}else{raw_size};
         sizes.insert(size);
         let align = match member.get("textAlign").and_then(Value::as_i64).unwrap_or(0) {
             -1 => 2,
@@ -444,10 +517,16 @@ fn substitute(
         let name = spec["names"][font.to_string()]
             .as_str()
             .map_or(format!("Director system font {font}"), str::to_string);
-        let mut text_style = json!({"fontName": name, "fontId": 1, "size": style["size"],
+        let mut text_style = json!({"fontName": name, "fontId": 1, "size": size,
             "align": align, "ascent": style["ascent"], "descent": (line_height - ascent).max(0),
             "leading": 0, "lineHeight": line_height.max(1), "color": style["color"]});
-        if let Some((controller_size, metrics)) = &controller
+        if spec["measure"] == true {
+            if !measured_sizes.contains_key(&size) {
+                let metrics = ascii_metrics(&measure(&format!("substitute:{size}"))?)?;
+                measured_sizes.insert(size, metrics);
+            }
+            text_style["controllerMetrics"] = measured_sizes[&size].clone();
+        } else if let Some((controller_size, metrics)) = &controller
             && size == *controller_size
             && controller_members.contains(&text(&member["name"]))
         {
@@ -456,6 +535,11 @@ fn substitute(
         let m = member.as_object_mut().ok_or("member")?;
         m.insert("textStyle".into(), text_style);
         m.insert("textPresentation".into(), json!("explicit-system-font-substitute"));
+    }
+    }
+    if !run_limits.is_empty() {
+        if !model["approximations"].is_array(){model["approximations"]=json!([]);}
+        model["approximations"].as_array_mut().unwrap().extend(run_limits);
     }
     model["fonts"] = json!([{
         "number": 1, "asset": spec["asset"], "sha256": sha256(source),
@@ -704,6 +788,89 @@ pub fn ascii_metrics(measured: &[u8]) -> R<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn substitute_metrics_follow_each_authored_size() {
+        let spec=json!({"asset":"fonts/substitute.ttf","measure":true,
+            "controller":{"size":24,"members":["entry"]}});
+        let mut model=json!({"movies":[{"members":[
+            {"name":"entry","sourceTextStyles":[{"sourceFontId":20,"size":24,"lineHeight":28,"ascent":22,"color":0}]},
+            {"name":"certificate","sourceTextStyles":[{"sourceFontId":20,"size":36,"lineHeight":42,"ascent":33,"color":0}]}
+        ]}]});
+        let port=Port{convert:json!({"substitute_font":spec}),..Port::default()};
+        let requests=plan(&port,&model).unwrap();
+        let keys:Vec<&str>=list(&requests["measure"]).map(|v|text(&v["key"])).collect();
+        assert_eq!(keys,vec!["substitute:24","substitute:36"]);
+        let mut measured=Vec::new();
+        substitute(&mut model,&spec,&PortFonts{droid_sans:Some(b"source-free transport".to_vec()),..PortFonts::default()},
+            &mut |key|{
+                measured.push(key.to_owned());
+                let size=key.rsplit(':').next().unwrap().parse::<i32>().unwrap();
+                Ok(serde_json::to_vec(&json!({"size":size,"advances":vec![size/2;224],"kerning":[]})).unwrap())
+            }).unwrap();
+        assert_eq!(measured,vec!["substitute:24","substitute:36"]);
+        let members=&model["movies"][0]["members"];
+        assert_eq!(members[0]["textStyle"]["controllerMetrics"]["advances"][0],12);
+        assert_eq!(members[1]["textStyle"]["size"],36);
+        assert_eq!(members[1]["textStyle"]["controllerMetrics"]["advances"][0],18);
+    }
+
+    #[test]
+    fn substitute_retains_every_run_size_face_and_measured_request() {
+        let spec=json!({"asset":"fonts/substitute.ttf","measure":true});
+        let mut model=json!({"movies":[{"directorVersion":600,"name":"TEXT.DXR","members":[
+            {"type":3,"cast":1,"number":1,"text":"AB","sourceTextStyles":[
+             {"offset":0,"sourceFontId":20,"size":12,"face":1,"lineHeight":14,"ascent":10,"color":0},
+             {"offset":1,"sourceFontId":21,"size":18,"face":10,"lineHeight":21,"ascent":16,"color":0x123456}]}]}]});
+        let port=Port{convert:json!({"substitute_font":spec}),..Port::default()};
+        let planned=plan(&port,&model).unwrap();
+        assert_eq!(list(&planned["measure"]).map(|r|text(&r["key"])).collect::<Vec<_>>(),["substitute:12","substitute:18"]);
+        substitute(&mut model,&spec,&PortFonts{droid_sans:Some(b"synthetic font transport".to_vec()),..PortFonts::default()},
+            &mut |key|{let size=key.rsplit(':').next().unwrap().parse::<i32>().unwrap();
+                Ok(serde_json::to_vec(&json!({"size":size,"advances":vec![size/2;224],"kerning":[]})).unwrap())}).unwrap();
+        let runs=&model["movies"][0]["members"][0]["textFormats"];
+        assert_eq!(runs[0]["fontId"],1);assert_eq!(runs[1]["fontId"],1);
+        assert_eq!(runs[1]["size"],18);assert_eq!(runs[1]["face"],2);
+        assert_eq!(model["fonts"][0]["variants"].as_array().unwrap().len(),2);
+        assert_eq!(model["fonts"][0]["sourceFontIds"],json!([20,21]));
+        assert_eq!(model["approximations"][0]["detail"],"unsupported character face effects");
+    }
+
+    #[test]
+    fn substitute_keeps_zero_point_stxt_but_measures_its_effective_default() {
+        let spec=json!({"asset":"fonts/substitute.ttf","measure":true});
+        let mut model=json!({"movies":[{"directorVersion":600,"members":[
+            {"type":3,"cast":1,"number":1,"text":"AB","sourceTextStyles":[
+             {"offset":0,"sourceFontId":224,"size":0,"lineHeight":16,"ascent":12,"color":0},
+             {"offset":1,"sourceFontId":224,"size":12,"lineHeight":16,"ascent":12,"color":0}]}]}]});
+        let port=Port{convert:json!({"substitute_font":spec}),..Port::default()};
+        let planned=plan(&port,&model).unwrap();
+        assert_eq!(list(&planned["measure"]).map(|r|text(&r["key"])).collect::<Vec<_>>(),["substitute:12"]);
+        substitute(&mut model,&spec,&PortFonts{droid_sans:Some(b"synthetic font transport".to_vec()),..PortFonts::default()},
+            &mut |key|{
+                assert_eq!(key,"substitute:12");
+                Ok(serde_json::to_vec(&json!({"size":12,"advances":vec![6;224],"kerning":[]})).unwrap())
+            }).unwrap();
+        let member=&model["movies"][0]["members"][0];
+        assert_eq!(member["sourceTextStyles"][0]["size"],0);
+        assert_eq!(member["textFormats"][0]["size"],0);
+        assert_eq!(member["textFormats"][1]["size"],12);
+        assert_eq!(member["textStyle"]["size"],12);
+        assert_eq!(member["textStyle"]["controllerMetrics"]["advances"][0],6);
+        assert_eq!(model["fonts"][0]["variants"],json!([{"size":12,"asset":"fonts/f1-12.font64"}]));
+    }
+
+    #[test]
+    fn source_pinned_text_trimming_keeps_insertion_format_inside_utf16_extent() {
+        let mut model=json!({"movies":[{"name":"TEXT.DXR","members":[{"number":1,
+          "text":"A😀BC","textFormats":[{"offset":0,"face":1},{"offset":5,"face":2}]}]}]});
+        let port=Port{convert:json!({"text_fix":[{"movie":"TEXT.DXR","member":1,
+          "text_sha256":sha256("A😀BC".as_bytes()),"trim":2}]}),..Port::default()};
+        postprocess_model(&mut model,&port,&PortFonts::default(),&mut |_|Err("not measured".into())).unwrap();
+        assert_eq!(model["movies"][0]["members"][0]["text"],"A😀");
+        assert_eq!(model["movies"][0]["members"][0]["textFormats"][1]["offset"],3);
+        assert_eq!(model["movies"][0]["members"][0]["textFormats"][1]["face"],2);
+    }
 
     fn program() -> Value {
         json!({"files": [], "handlers": [

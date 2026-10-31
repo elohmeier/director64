@@ -13,7 +13,7 @@ standalone per-game web app ([web.md](web.md)).
 | `tools/convert/` | Host tools the converter builds: the WebP packer and the font measurer |
 | `runtime/lingo/` | Values, heap, bytecode VM; `family.h` names each Director family's capabilities |
 | `runtime/director/` | Score, sprites, inks, film loops, Flash, shapes, events, sound and video services |
-| `runtime/interaction/` | Controller input and the per-player pointer |
+| `runtime/interaction/` | One logical controller and pointer |
 | `runtime/storage/saves.c` | The game's files and save image, configured by `[player]` |
 | `runtime/package/` | Package loader ([package-format.md](package-format.md)) |
 | `platforms/web/` | Runtime host, software compositor, the web page, the Node probe |
@@ -87,19 +87,25 @@ reproduce the projector's alert-and-continue: the Lingo call is discarded,
 the message is recorded (`script_errors`/`last_script_error` in the probe
 state) and the score keeps running. Integrity failures halt.
 
-Up to four players each own a cursor. Director has one mouse: a press, or
-failing that movement, claims it; the holder keeps it until its click
-finishes. Idle cursors hide after five seconds, except the holder's.
+The runtime has one logical controller and one pointer. Mouse, touch and
+controller input all drive Director's single mouse. There are no player slots,
+colored secondary cursors or ownership handoffs. Recorded `pad ticks x y buttons`
+and `step ticks x y buttons` commands retain their single-player shape.
 
 ### Saves and files
 
 `runtime/storage/saves.c` gives the game's Lingo its files: the saves it may
 write and the read-only files an installed game would find beside it. Saves
-live in one 128 KiB save image of two 64 KiB generations; each generation is
+live in one save image of two generations (64 KiB each by default); each generation is
 a `D64S` header (version, generation, size, CRC-32, entry count) and named
 entries, and a commit writes the slot not in use, so a failed write keeps
 the previous generation. The host stores the whole image after every
-commit.
+commit. `player.save_slot_bytes` selects a larger generation for bitmap-cast
+activities: Löwenzahn 6, 7 and Advent use 16 MiB per generation. The hosts
+migrate CRC-valid legacy 128 KiB preference images without changing file bytes,
+and replace the durable image only after the migrated game boots. Rename and
+delete use the same generation commit; registered virtual names never resolve
+to arbitrary host paths.
 
 ## `game.toml`
 
@@ -119,6 +125,7 @@ game's `host/` journeys).
 | Key | Meaning |
 | --- | --- |
 | `saves` | Files the game may write. Patterns: `?` any character, `#` a digit, `*` any run; `a\|b` aliases one file |
+| `save_slot_bytes` | Bytes per save generation, 65536 by default; bitmap-cast activities use 16777216 |
 | `files` | Read-only installation files, name to contents (`"a\|b"` aliases) |
 | `folders` | Directory listings: `[folder, file...]`, `"*"` for any folder |
 | `long_date` | Fixed `the long date` |

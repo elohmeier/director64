@@ -7,9 +7,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Controllers as the runtime's four ports, mapped as the browser player maps a standard gamepad
- * (platforms/web/site/gamepad.js): each device that gives input takes the lowest free port and
- * reports a controller sample (input.h buttons, stick about ±80). A DualShock 4 is Android's
+ * Controllers share the game's single input, mapped as the browser maps a standard gamepad
+ * (platforms/web/site/gamepad.js): the most recently used device reports one controller sample (input.h buttons, stick about ±80). A DualShock 4 is Android's
  * standard gamepad; an N64-style pad maps the same way, its C buttons arriving as the right stick.
  * The TV remote's D-pad moves a cursor and its centre clicks.
  */
@@ -17,7 +16,6 @@ final class Pads {
   // runtime/interaction/input.h
   static final int A = 1, B = 2, LEFT = 4, RIGHT = 8, UP = 16, DOWN = 32, START = 64;
   static final int C_LEFT = 128, C_RIGHT = 256, C_UP = 512, C_DOWN = 1024;
-  static final int PORTS = 4;
   // A worn DualShock stick rests up to about a tenth off centre.
   static final float DEAD_ZONE = 0.12f;
   // The sample's stick reaches about ±80; input.c ignores ±8.
@@ -28,7 +26,6 @@ final class Pads {
   static final long REMOTE_IDLE_MS = 30_000;
 
   static final class Port {
-    final int index;
     final int device;
     final String name;
     final boolean remote;
@@ -38,8 +35,7 @@ final class Pads {
     long lastInput;
     String last = "";
 
-    Port(int index, InputDevice device) {
-      this.index = index;
+    Port(InputDevice device) {
       this.device = device.getId();
       this.name = device.getName();
       int sources = device.getSources();
@@ -62,7 +58,7 @@ final class Pads {
     }
   }
 
-  private final Port[] ports = new Port[PORTS];
+  private Port active;
   private final Map<Integer, Port> byDevice = new HashMap<>();
   String lastInput = "";
 
@@ -85,15 +81,19 @@ final class Pads {
 
   private Port port(InputDevice device) {
     Port port = byDevice.get(device.getId());
-    if (port != null) return port;
-    for (int i = 0; i < PORTS; i++)
-      if (ports[i] == null) {
-        port = new Port(i, device);
-        ports[i] = port;
-        byDevice.put(device.getId(), port);
-        return port;
-      }
-    return null;
+    if (port == null) {
+      port = new Port(device);
+      byDevice.put(device.getId(), port);
+    }
+    return port;
+  }
+
+  private void activate(Port port) {
+    if (active == port) return;
+    // Release the previous device before a new device's press. A later release
+    // from the old device cannot clear the new device's held buttons.
+    Native.pad(true, 0, 0, 0);
+    active = port;
   }
 
   private static int bit(int keyCode) {
@@ -127,7 +127,6 @@ final class Pads {
     boolean fine = event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_L1;
     if (bit == 0 && !fine) return false;
     Port port = port(device);
-    if (port == null) return true;
     boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
     if (fine) port.fine = down;
     else if (down) port.keys |= bit;
@@ -135,7 +134,8 @@ final class Pads {
     port.lastInput = event.getEventTime();
     port.last = KeyEvent.keyCodeToString(event.getKeyCode()) + (down ? " down" : " up");
     lastInput = port.name + ": " + port.last;
-    send(port);
+    if (down && event.getRepeatCount() == 0) activate(port);
+    if (active == port) send(port);
     return true;
   }
 
@@ -146,7 +146,8 @@ final class Pads {
         || !isController(device)
         || event.getAction() != MotionEvent.ACTION_MOVE) return false;
     Port port = port(device);
-    if (port == null) return true;
+    float oldX=port.x,oldY=port.y,oldRx=port.rx,oldRy=port.ry;
+    int oldButtons=port.buttons();
     port.x = event.getAxisValue(MotionEvent.AXIS_X);
     port.y = event.getAxisValue(MotionEvent.AXIS_Y);
     port.rx = event.getAxisValue(MotionEvent.AXIS_Z);
@@ -160,7 +161,11 @@ final class Pads {
             "x %.2f y %.2f z %.2f rz %.2f hat %.0f/%.0f",
             port.x, port.y, port.rx, port.ry, port.hatX, port.hatY);
     lastInput = port.name + ": " + port.last;
-    send(port);
+    boolean moved=(oldX!=port.x||oldY!=port.y) && Math.hypot(port.x,port.y)>DEAD_ZONE;
+    boolean rightMoved=(oldRx!=port.rx||oldRy!=port.ry)
+        && (Math.abs(port.rx)>.5f||Math.abs(port.ry)>.5f);
+    if (moved||rightMoved||(port.buttons()&~oldButtons)!=0) activate(port);
+    if (active == port) send(port);
     return true;
   }
 
@@ -176,40 +181,36 @@ final class Pads {
 
   private void send(Port port) {
     int[] stick = consoleStick(port.x, port.y, port.fine ? FINE : 1);
-    Native.pad(port.index, true, port.buttons(), stick[0], stick[1]);
+    Native.pad(true, port.buttons(), stick[0], stick[1]);
   }
 
-  /** A device left: its port is free again. */
+  /** A device left; held buttons from it are released. */
   void removed(int deviceId) {
     Port port = byDevice.remove(deviceId);
-    if (port == null) return;
-    ports[port.index] = null;
-    Native.pad(port.index, false, 0, 0, 0);
+    if (port != null && port == active) {
+      active = null;
+      Native.pad(false, 0, 0, 0);
+    }
   }
 
-  /** Remotes give their ports back after a while without input. */
+  /** Idle remotes do not retain ownership forever. */
   void expire(long now) {
-    for (Port port : ports)
-      if (port != null && port.remote && port.keys == 0 && now - port.lastInput > REMOTE_IDLE_MS)
+    for (Port port : new java.util.ArrayList<>(byDevice.values()))
+      if (port.remote && port.keys == 0 && now - port.lastInput > REMOTE_IDLE_MS)
         removed(port.device);
   }
 
-  /** Whatever is held now belongs to the dialog that opens. */
+  /** Whatever was held belongs to the modal that opens. */
   void release() {
-    for (Port port : ports)
-      if (port != null) {
-        port.keys = 0;
-        port.fine = false;
-        port.x = port.y = port.rx = port.ry = port.hatX = port.hatY = 0;
-        Native.pad(port.index, true, 0, 0, 0);
-      }
+    for (Port port : byDevice.values()) {
+      port.keys = 0;
+      port.fine = false;
+      port.x = port.y = port.rx = port.ry = port.hatX = port.hatY = 0;
+    }
+    Native.pad(active != null, 0, 0, 0);
   }
 
   String describe() {
-    StringBuilder text = new StringBuilder();
-    for (Port port : ports)
-      if (port != null)
-        text.append(port.index + 1).append(": ").append(port.name).append('\n');
-    return text.toString();
+    return active == null ? "" : active.name + "\n";
   }
 }

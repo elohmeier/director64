@@ -109,6 +109,8 @@ static const dg_movie_t extra2={.code=&extra2_code,.id=4,.tempo=1,.cast_count=1,
  .frame_count=1,.frames=empty_frames,.deltas=empty_deltas};
 static const dg_movie_t *find_movie(void *ctx,const char *stem,unsigned file) {
  (void)ctx;
+ if(stem && (!strcmp(stem,"control") || !strcmp(stem,"CONTROL")))return &control;
+ if(stem && (!strcmp(stem,"check") || !strcmp(stem,"CHECK")))return &check;
  if(stem?!strcmp(stem,"extra2"):file==4)return &extra2;
  return NULL;
 }
@@ -282,19 +284,20 @@ int main(void) {
  lv_t win=call("window",1,(lv_t[]){lv_text(&r,"control",false)});
  assert(!r.failed && lv_type(win)==LV_WINDOW);
  lv_set(&r,NULL,"filename",win,lv_text(&r,"@:global:control.dir",false));
- assert(!r.failed && !strcmp(d.window_movie_name,"control") && !d.window_movie);
+ assert(!r.failed && !strcmp(d.window_movie_name,"CONTROL.DXR") && d.window_movie==&control);
  assert(lv_numeric(call("windowpresent",1,(lv_t[]){lv_text(&r,"Control",false)}))==1);
- // A navigation issued while the load is pending queues in authored order.
+ // Window navigation changes its independent context, never the stage.
  call("tell_window",1,(lv_t[]){win});
  assert(d.tell_window);
- call("gotomovie",1,(lv_t[]){lv_text(&r,"check",false)});
+ assert(lv_invoke(&r,&caller,"gotomovie",1,(lv_t[]){lv_text(&r,"check",false)})==LV_YIELD);
  call("tell_end",0,NULL);
- assert(!r.failed && !strcmp(d.window_movie_name,"control") && !strcmp(d.window_movie_queue,"check"));
+ assert(!r.failed && !strcmp(d.window_movie_name,"CONTROL.DXR") &&
+        !strcmp(d.window_runtime->next_movie,"check.DXR"));
  dg_window_attach(&d,&control);
  assert(d.window_movie==&control && d.window_home==&control);
  assert(lv_numeric(call("geticommon",0,NULL))==77 && !r.failed);
  dg_window_loaded(&d);
- assert(!strcmp(d.window_movie_name,"check") && !d.window_movie && !d.window_movie_queue[0]);
+ assert(d.window_movie==&control);
  dg_window_attach(&d,&check);
  assert(d.window_movie==&check && d.window_home==&control);
  // The home controller's handlers stay resident beside the focused movie.
@@ -389,5 +392,6 @@ int main(void) {
  }
  call("undecompiled_bytecode",1,(lv_t[]){lv_text(&r,"unk26",false)});
  assert(r.failed);
+ dg_linked_dispose(&d);dg_films_dispose(&d);dg_images_dispose(&d);
  puts("D10 profile bounds, top-channel staging, hover cache, controller window services, FileIO and transition passed");
 }

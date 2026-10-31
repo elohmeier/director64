@@ -1,0 +1,21 @@
+-- Diagnostic experiment: no successful palette pixel comparison was obtained.
+-- director64: fileio-functions
+-- Structural check of explicit MIAW cast targets; no pixel claim.
+global out
+openXLib("XTRAS\FILEIO.X32")
+set out = new(xtra("fileio"))
+createFile(out, "C:\palette-script-context.txt")
+openFile(out, "C:\palette-script-context.txt", 2)
+set w = window("director64-palette-probe")
+set the fileName of w = "DATA\ANFANG.DXR"
+open(w)
+tell w
+  writeString(out, string(["context", the movieName, the frame, the number of castLibs]) & RETURN)
+  set newScript = new(#script, 1)
+  writeString(out, string(["numericCast", newScript]) & RETURN)
+  set newScript = new(#script, castLib 1)
+  writeString(out, string(["castReference", newScript]) & RETURN)
+  writeString(out, string(["visible", the visible of w, "windowList", the windowList]) & RETURN)
+end tell
+closeFile(out)
+close(w)

@@ -56,6 +56,23 @@ def test_replay_checkpoint_indexes_include_boot_state():
     assert "label" not in plan["steps"][1]
 
 
+def test_document_cancel_is_android_back_only_for_an_observed_modal(tmp_path, monkeypatch):
+    validation.validate_plan({"steps": [{"command": "document cancel"}]})
+    adb = FakeAdb()
+    session = validation.Session(GameSpec.load("findus-birthday"), adb, tmp_path)
+    observations = iter([{"document_id": 7, "document_kind": 4},
+                         {"document_id": 0, "document_kind": 0}])
+    session.observe = lambda: next(observations)
+    session.idle = lambda ticks: {"resumed_ticks": ticks}
+    monkeypatch.setattr(validation.time, "sleep", lambda seconds: None)
+    assert session.command("document cancel") == {"resumed_ticks": 6}
+    assert adb.calls == [("input", "keyevent", "KEYCODE_BACK")]
+    session.observe = lambda: {"document_id": 0, "document_kind": 0}
+    with pytest.raises(ValueError, match="requires an active"):
+        session.command("document cancel")
+    assert len(adb.calls) == 1
+
+
 class FakeAdb:
     def __init__(self):
         self.calls = []

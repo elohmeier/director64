@@ -29,7 +29,7 @@ regressions; none is an original-projector comparison or Android TV result.
 | Port | Default journeys | Checked behavior |
 | --- | --- | --- |
 | Findus workshop | `hubs`, `profiles`, `garden` | Hubs and all 12 constructions; profile saves/reload; repeated visible farmyard animations |
-| Willy Werkel cars | `full_journey` | Player creation/reload; part collection and dragging; car save, rename, reboot/load; certificate and print notice |
+| Willy Werkel cars | `full_journey` | Player creation/reload; part collection and dragging; car save, rename, reboot/load; certificate and native print request/cancel |
 | Findus Christmas | `full_journey` | All 24 calendar doors and returns; day 16 drag/removal |
 | Findus Mucklas | `full_journey` with activity; `train-station-soak` | Player creation/reload; clock victory, inventory reward/reload; ten simulated minutes in the reported train-station slowdown scene |
 | Findus ghosts | `player-yard` | Publisher skip, name entry, player save, story to yard, sustained scene playback |
@@ -41,7 +41,7 @@ regressions; none is an original-projector comparison or Android TV result.
 | Löwenzahn 8 | `login-dog-registration` | Boat profile, intro skip, pet name entry, return/save, reboot and restored dog state |
 | Löwenzahn Advent | `countdown-wagon-desk` | Seasonal start, countdown exit, desk navigation and nutcracker interaction |
 | Löwenzahn Optik | `wagon-laptop-topic` | Intro, desk, laptop, first topic menu, quiz entry and sustained playback |
-| Lernerfolg Deutsch 1–2 | `full_journey` | Name/class selection, saved profile, room and exercise entry, Flash prompt layout and answer selection |
+| Lernerfolg Deutsch 1–2 | `full_journey` | Name/class selection, saved profile, room and exercise entry, Flash answer selection, Ctrl+Shift+Q statistics, controller task selection and TEST2CB1 field layout |
 
 The six additional experimental adapters register these routes:
 

@@ -1,0 +1,21 @@
+-- Actual Director10.1 native checkbox metadata and mutable checked state.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\native-button-types.txt")
+out.openFile("C:\native-button-types.txt",2)
+out.writeString(string([#version,the productVersion]) & RETURN)
+w=window().new("director64-native-buttons")
+w.fileName=the applicationPath & "data\TEST2CB1.DXR"
+w.open()
+tell w
+ repeat with kind in [#pushButton,#checkBox,#radioButton]
+  t=new(#button)
+  t.buttonType=kind
+  out.writeString(string([#created,kind,t.type,t.buttonType,t.hilite,t.rect]) & RETURN)
+  repeat with checked in [1,0]
+   t.hilite=checked
+   out.writeString(string([#assigned,kind,checked,t.hilite]) & RETURN)
+  end repeat
+ end repeat
+end tell
+out.closeFile()

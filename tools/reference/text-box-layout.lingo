@@ -1,0 +1,27 @@
+-- Authored text geometry probe. Director 8.5 runtime under Wine; no game text.
+global out
+out = new(xtra("fileio"))
+out.createFile("C:\text-box-layout.txt")
+out.openFile("C:\text-box-layout.txt", 2)
+w = window("director64-probe")
+w.fileName = the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+tell w
+repeat with boxKind in [#fixed, #adjust, #scroll]
+  t = new(#text)
+  t.font = "Arial"
+  t.fontSize = 12
+  t.boxType = boxKind
+  t.width = 40
+  t.height = 10
+  repeat with sample in [EMPTY, "abc", "abc" & RETURN & "abc", "abc abc abc abc", "abcdefghijk"]
+    t.text = sample
+    sprite(1).member = t
+    out.writeString(string([boxKind, sample, t.rect, t.width, t.height, t.pageHeight, sprite(1).rect, t.image.rect, t.fontStyle]) & RETURN)
+  end repeat
+  t.fontStyle = [#bold]
+  out.writeString("bold=" & string([boxKind, t.rect, t.pageHeight, sprite(1).rect, t.image.rect, t.fontStyle]) & RETURN)
+  t.erase()
+end repeat
+end tell
+out.closeFile()

@@ -77,29 +77,22 @@ static inline bool dg_cursor_color(dg_cursor_bitmap_t *out,
   return true;
 }
 
-// RGBA5551 with the coverage bit set, for tinting a cursor's ink.
-static inline uint16_t dg_cursor_ink(uint8_t r, uint8_t g, uint8_t b) {
+// RGBA5551 with coverage, for retained color-cursor artwork.
+static inline uint16_t dg_cursor_color_pixel(uint8_t r, uint8_t g, uint8_t b) {
   return (uint16_t)((r >> 3) << 11 | (g >> 3) << 6 | (b >> 3) << 1 | 1);
 }
-// The ink replaces the glyph's black body; the white contrast pixels never
-// tint, so a coloured cursor still reads against the art underneath it.
-static inline void dg_cursor_pixels_ink(const dg_cursor_bitmap_t *bitmap,
-                                        uint16_t pixels[256], uint16_t ink) {
+static inline void dg_cursor_pixels(const dg_cursor_bitmap_t *bitmap,
+                                     uint16_t pixels[256]) {
   if (bitmap->color) {
     memcpy(pixels, bitmap->colors, sizeof(bitmap->colors));
     return;
   }
-  if (!ink) ink = 1;
   for (unsigned y = 0; y < DG_CURSOR_SIZE; y++)
     for (unsigned x = 0; x < DG_CURSOR_SIZE; x++) {
       unsigned bit = 0x8000u >> x;
       pixels[y * DG_CURSOR_SIZE + x] = !(bitmap->opaque[y] & bit) ? 0 :
-          (bitmap->black[y] & bit) ? ink : 0xffff;
+          (bitmap->black[y] & bit) ? 1 : 0xffff;
     }
-}
-static inline void dg_cursor_pixels(const dg_cursor_bitmap_t *bitmap,
-                                     uint16_t pixels[256]) {
-  dg_cursor_pixels_ink(bitmap, pixels, 1);
 }
 static inline uint32_t dg_cursor_bitmap_hash(const dg_cursor_bitmap_t *bitmap) {
   uint32_t hash = 2166136261u;

@@ -1,6 +1,8 @@
 // Shared by reboot and native Activity teardown. Host callbacks and package
 // tables must remain valid until every owned runtime object has been released.
+#include "user_files.h"
 static void release_runtime(void) {
+  dg_user_reset();
   if (!booted) return;
   dg_stop_sounds(&director);
 #if DG_D5 || DG_D10

@@ -124,3 +124,7 @@ button:disabled { opacity: .5; cursor: default; }
 .osk-grid button { padding: .35rem 0; font-size: 1rem; min-width: 0; }
 .osk-grid button.current { border-color: var(--accent); background: #50789b; color: #fff; }
 .osk-help { margin: .45rem 0 0; font-size: 12px; color: var(--muted); text-align: center; }
+
+.user-files .field { text-align: left; margin: 1rem 0; }
+.user-files input[type="text"] { min-width: 0; width: 100%; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: .5rem; }
+.user-file-preview { display: block; max-width: 100%; max-height: 55vh; margin: 1rem auto; object-fit: contain; background: white; }

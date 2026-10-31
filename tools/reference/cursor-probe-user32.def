@@ -1,0 +1,5 @@
+LIBRARY user32.dll
+EXPORTS
+LoadCursorA@8
+GetIconInfo@8
+DrawIconEx@36

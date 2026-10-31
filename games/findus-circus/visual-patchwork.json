@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "name": "patchwork-puzzle",
+  "description": "Register a player, visit the yard, listen to the washing-basket introduction, then enter the imaging puzzle.",
+  "covers": [
+    "startup",
+    "profiles",
+    "keyboard",
+    "save",
+    "navigation",
+    "sustained-playback",
+    "imaging",
+    "vector-vertex-edit",
+    "image-alpha"
+  ],
+  "steps": [
+    {
+      "idle": 600,
+      "expect": {
+        "movie": "VORSPANN.DXR"
+      }
+    },
+    {
+      "sprite": 151,
+      "settle": 600
+    },
+    {
+      "wait": {
+        "movie": "LOGIN.DXR",
+        "frame": 45
+      },
+      "label": "player-selection"
+    },
+    {
+      "sprite": 11,
+      "settle": 600,
+      "expect": {
+        "movie": "LOGIN.DXR",
+        "frame": 181
+      },
+      "label": "name-entry"
+    },
+    {
+      "command": "key 0 65 1"
+    },
+    {
+      "command": "key 0 65 0"
+    },
+    {
+      "sprite": 33,
+      "settle": 600
+    },
+    {
+      "idle": 2400,
+      "expect": {
+        "movie": "INTRO.DXR",
+        "save_generation": {
+          "gte": 1
+        }
+      },
+      "label": "player-saved"
+    },
+    {
+      "sprite": 41,
+      "settle": 2400,
+      "expect": {
+        "movie": "HOFINTRO.DXR"
+      }
+    },
+    {
+      "sprite": 17,
+      "settle": 1200
+    },
+    {
+      "wait": {
+        "movie": "HOF.DXR"
+      },
+      "ticks": 12000,
+      "label": "yard"
+    },
+    {
+      "idle": 3600,
+      "expect": {
+        "movie": "HOF.DXR"
+      },
+      "label": "yard-playback",
+      "observe": {
+        "label": "yard-animation-window",
+        "sequence": {
+          "frames": 13,
+          "stride_ticks": 5,
+          "max_blank_frames": 0
+        },
+        "audio": {
+          "seconds": 0.8
+        }
+      }
+    },
+    {
+      "click": [
+        415,
+        376
+      ],
+      "settle": 2400,
+      "expect": {
+        "movie": "HOF.DXR"
+      }
+    },
+    {
+      "click": [
+        415,
+        376
+      ],
+      "settle": 2400,
+      "wait": {
+        "movie": "FLICKENP.DXR"
+      },
+      "ticks": 6000,
+      "label": "patchwork-puzzle"
+    }
+  ],
+  "based_on": {
+    "journey_file": "journeys.json",
+    "sha256": "816e9f492e1a7d3eb2b4cf25619c34bb8ddd32a8740c1a095dc7b348fecdb49c"
+  },
+  "scope_note": "Input-only route reaches generated patchwork pieces. Shape/alpha pixel regressions use source-free imaging tests; no original-projector image match is inferred.",
+  "observations": {
+    "patchwork-puzzle": {
+      "sequence": {
+        "frames": 5,
+        "stride_ticks": 5,
+        "max_blank_frames": 0
+      }
+    }
+  }
+}

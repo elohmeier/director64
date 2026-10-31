@@ -7,6 +7,7 @@ class Context {
   sources = [];
   destination = {};
   createGain() { return {connect() {}, gain: {value: 1}}; }
+  createWaveShaper() { return {connect() {}, curve: null, oversample: "none"}; }
   createBufferSource() {
     const node = {connect() {}, disconnect() {}, stop() { this.stopped = true; },
       start(when, offset) { this.offset = offset; }};

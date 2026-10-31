@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "source_sha256": "a90d31062bfb8514df01bd6a5ffff47e7417e5ebe43006b571a289cfd7149653",
+  "launcher": "MEDIA/WIN95.EXE",
+  "cwd": "MEDIA",
+  "optical_drive": {"letter": "D", "raw_image": false}
+}

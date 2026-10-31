@@ -148,6 +148,18 @@ static void render_contracts(void) {
   wc_init(&compositor, (wc_host_t){.read = read_asset, .text = text}, 1024);
   dg_init(&director, &values, (dg_platform_t){0}, NULL, names, 1, 1);
   assert(dg_enter(&director, &movie, 1, NULL, 0));
+  // Native roles use the same resolved cursor as software composition.
+  for (int role = -1; role <= 4; role++) {
+    director.cursor = (dg_cursor_t){.resource = role};
+    assert(wc_native_cursor(&director) == (role < 0 ? 0 : role));
+  }
+  director.cursor = (dg_cursor_t){.resource = 200};
+  assert(wc_native_cursor(&director) == 200);
+  director.cursor = (dg_cursor_t){.image = 0x210001};
+  assert(wc_native_cursor(&director) == -1);
+  director.cursor = (dg_cursor_t){.resource = 5};
+  assert(wc_native_cursor(&director) == -1);
+  director.cursor = (dg_cursor_t){0};
   // Channel order is draw order: the shape under three bitmaps.
   place(1, 0x210002, 0, 0, 40, 20, 0, 100);
   place(2, 0x210001, 0, 0, 4, 2, 0, 100);   // copy
@@ -155,6 +167,10 @@ static void render_contracts(void) {
   place(4, 0x210001, 16, 0, 8, 4, 36, 100); // background transparent, doubled
   place(5, 0x210001, 30, 0, 4, 2, 0, 50);   // blended copy
   place(6, 0x210003, 50, 50, 20, 10, 0, 100);
+  director.sprites[1].cursor = (dg_cursor_t){.resource = 1};
+  director.mouse_x = 10; director.mouse_y = 10;
+  assert(wc_native_cursor(&director) == 1); // Sprite rollover, not just movie default.
+  director.sprites[1].cursor = (dg_cursor_t){0};
   assert(wc_render(&compositor, &director, 600, 400, false, 0));
   assert(!values.failed);
   // The D6 stage is white; the shape fills its rectangle with its palette colour.
@@ -177,16 +193,17 @@ static void render_contracts(void) {
   assert(wc_render(&compositor, &director, 300, 300, true, 0));
   assert(reads == before); // images came from the cache
   assert(pixel(300, 300) == rgba(0, 0, 0)); // the arrow's tip
-  // Controllers' cursors take their ink; the last one draws on top, and an
-  // unchanged set is not recomposited.
-  const wc_pointer_t players[2] = {{200, 200, dg_cursor_ink(255, 0, 0)},
-                                   {202, 202, dg_cursor_ink(0, 0, 255)}};
-  assert(wc_render_pointers(&compositor, &director, players, 2, 0));
-  assert(pixel(200, 200) == rgba(255, 0, 0) && pixel(202, 202) == rgba(0, 0, 255));
+  // Moving or hiding the single cursor restores its old pixels without
+  // redrawing the scene. Hidden cursor movement does not redraw at all.
+  unsigned scenes = compositor.scene_renders;
+  assert(wc_render(&compositor, &director, 200, 200, true, 0));
+  assert(pixel(200, 200) == rgba(0, 0, 0));
   assert(pixel(300, 300) != rgba(0, 0, 0));
-  assert(!wc_render_pointers(&compositor, &director, players, 2, 0));
-  assert(wc_render_pointers(&compositor, &director, players, 1, 0));
-  assert(pixel(202, 202) != rgba(0, 0, 255));
+  assert(!wc_render(&compositor, &director, 200, 200, true, 0));
+  assert(wc_render(&compositor, &director, 200, 200, false, 0));
+  assert(pixel(200, 200) != rgba(0, 0, 0));
+  assert(!wc_render(&compositor, &director, 300, 300, false, 0));
+  assert(compositor.scene_renders == scenes);
   assert(wc_render(&compositor, &director, 300, 300, true, 0));
   // Matte hits answer from coverage; other inks from the rectangle.
   assert(wc_hit(&compositor, &values, &members[0], 8, 0, 0));

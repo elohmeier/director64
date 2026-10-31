@@ -125,7 +125,6 @@ static void selection(void) {
   assert(!dg_cursor_active(d.cursor) && !dg_cursor_active(d.sprites[1].cursor));
   assert(!v.failed);
 }
-static void tinting(void);
 static void composition(void) {
   uint16_t image[256],mask[256],pixels[256];
   for(unsigned i=0;i<256;i++){image[i]=0xfffe;mask[i]=0xffff;}
@@ -153,27 +152,8 @@ static void composition(void) {
   dg_cursor_pixels(&b,pixels);
   for(unsigned i=0;i<256;i++)assert(!pixels[i]);
   assert(!dg_cursor_builtin(&b,128));
-  tinting();
 }
-/* Several players share one cursor shape and are told apart by its ink. The
- * white contrast pixels and the transparent ones never take a player colour. */
-static void tinting(void) {
-  uint16_t image[256],mask[256],plain[256],tinted[256];
-  for(unsigned i=0;i<256;i++){image[i]=0xfffe;mask[i]=0xffff;}
-  image[0]=1;mask[0]=mask[1]=1;
-  dg_cursor_bitmap_t b;
-  assert(dg_cursor_compose(&b,image,16,16,mask,16,16,7,6));
-  dg_cursor_pixels(&b,plain);
-  uint16_t ink=dg_cursor_ink(248,32,16);
-  assert(ink==(uint16_t)((31u<<11)|(4u<<6)|(2u<<1)|1u) && ink!=1);
-  dg_cursor_pixels_ink(&b,tinted,ink);
-  for(unsigned i=0;i<256;i++)
-    assert(tinted[i]==(plain[i]==1?ink:plain[i]));
-  assert(tinted[0]==ink && tinted[1]==0xffff && !tinted[2]);
-  /* No colour at all keeps the authored black rather than losing coverage. */
-  dg_cursor_pixels_ink(&b,tinted,0);
-  assert(!memcmp(tinted,plain,sizeof(plain)));
-}
+
 int main(void) {
   references();selection();composition();
   printf("cursor D%d%s: references, selection, lifecycle, masks passed\n",

@@ -26,7 +26,7 @@ COMPARE_PATTERNS = [
     r'\bIS\("([^"]+)"\)',
     r'\bNAME_IS\("([^"]+)"\)',
     r'\bPROPERTY_IS\("([^"]+)"\)',
-    r'\b(?:eq|equal_text|strcmp)\((?:name|property|kind), *"([^"]+)"\)',
+    r'\b(?:eq|eq_full|equal_text|strcmp)\((?:name|property|kind), *"([^"]+)"\)',
     r"\bLN_([A-Z0-9_]+)\b",
 ]
 RUNTIME_SOURCES = [
@@ -35,6 +35,7 @@ RUNTIME_SOURCES = [
     "runtime/director/d6.inc",
     "runtime/director/d6_events.inc",
     "runtime/director/d10.inc",
+    "runtime/director/user_files.inc",
     "runtime/lingo/lingo_runtime.c",
 ]
 

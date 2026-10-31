@@ -1,0 +1,21 @@
+-- Original Director8.5 full justification property spelling and row layout.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\text-full-alignment.txt")
+out.openFile("C:\text-full-alignment.txt",2)
+w=window("director64-probe")
+w.fileName=the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+tell w
+ t=new(#text)
+ t.width=90
+ t.font="Arial"
+ t.fontSize=12
+ t.text="AB CD EF GH IJ"
+ t.alignment=#full
+ out.writeString(string([#full,t.alignment,t.rect]) & RETURN)
+ repeat with i=1 to t.text.length+1
+  out.writeString(string([i,charPosToLoc(t,i)]) & RETURN)
+ end repeat
+end tell
+out.closeFile()

@@ -12,6 +12,14 @@ use crate::scene::{Profile, Scene, Spec, TextStyle};
 
 #[path = "package_flash.rs"]
 mod flash;
+#[path = "package_transition.rs"]
+mod transition;
+#[path = "package_rich.rs"]
+mod rich;
+#[path = "package_spacing.rs"]
+mod spacing;
+#[path = "package_text_box.rs"]
+mod text_box;
 
 pub const FORMAT: u16 = 9;
 
@@ -386,6 +394,21 @@ pub fn write(
             movies.u16(*frame);
         }
     }
+    let mut vectors = Out::default();
+    let vector_count = scenes.iter().flat_map(|s| &s.members).filter(|m| m.vector_shape.is_some()).count();
+    vectors.count(vector_count)?;
+    for m in scenes.iter().flat_map(|s| &s.members) {
+        if let Some(v) = &m.vector_shape {
+            vectors.u32(m.id);
+            vectors.u16(u16_of(v.vertices.len(), "vector vertex count")?);
+            vectors.u8(u8::from(v.filled) | (u8::from(v.closed) << 1));
+            vectors.u8(0);
+            vectors.f64(v.stroke_width);
+            vectors.u32(v.stroke);
+            vectors.u32(v.fill);
+            for &(x, y) in &v.vertices { vectors.f64(x); vectors.f64(y); }
+        }
+    }
     let sections: Vec<(&[u8; 4], Vec<u8>)> = vec![
         (b"META", meta.as_bytes().to_vec()),
         (b"STRS", strings.bytes),
@@ -393,6 +416,11 @@ pub fn write(
         (b"SYMB", symbols.0),
         (b"GLOB", globals.0),
         (b"MOVI", movies.0),
+        (b"VECT", vectors.0),
+        (b"TRAN", transition::write_transitions(scenes)?),
+        (b"RICH", rich::write_rich(scenes)?),
+        (b"RSPC", spacing::write(scenes)?),
+        (b"TBOX", text_box::write(scenes)?),
     ];
     let mut out = Out::default();
     out.0.extend_from_slice(b"D64P");

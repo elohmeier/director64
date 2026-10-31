@@ -15,7 +15,7 @@ publishes artifacts or connects a projector automatically.
 mise run check
 mise run test-sanitize
 mise run test-mutations
-mise run fuzz-native                 # bounded 15-second synthetic corpus run
+mise run fuzz-native                 # bounded 15 seconds per D6/D8.5 corpus
 FUZZ_SECONDS=120 mise run fuzz-native
 npx playwright install chromium      # once, after npm ci
 mise run test-browser
@@ -24,6 +24,9 @@ mise run test-browser
 `test-sanitize` checks native rendering, film/Flash ownership and lifecycle with
 ASan/UBSan. `fuzz-native` instruments package loading and image decoding with
 libFuzzer, ASan and UBSan. Its seeds are generated synthetic packages/images.
+Separate D6 and D8.5 runs exercise both package layouts. The modern seed comes
+from the real Rust writer/C loader fixture and includes vector, transition and
+rich-text sections, so those readers start with valid structured inputs.
 Crashes retain the reproducer under `build/validation/native-fuzz/`.
 
 `test-mutations` compiles isolated source copies with deliberately broken stage
@@ -38,7 +41,8 @@ these checks alongside the Python, Node, Rust and native contracts.
 ## Gameplay and exploration
 
 ```sh
-mise run build-web-all                # local discs required; logs each game
+mise run build-web-all                # local discs required; final source/artifact receipts
+mise run build-android-all            # production APKs, all 3 ABIs; no device install
 mise run test-journeys --output build/validation/journeys
 uv run --locked director64 fuzz --game findus-birthday \
   --episodes 20 --seed 7 --strict-alerts
@@ -47,7 +51,11 @@ uv run --locked director64 fuzz --game findus-birthday \
 Builds record hashes of the actual runtime/player inputs and reject source changes
 during compilation. Browser captures require a matching receipt, package, Wasm,
 player and edition; a stale build is a failure. Conversions of the same edition
-are serialized across the web, Android and convert entrypoints.
+are serialized across the web, Android and convert entrypoints. The two full
+build tasks create timestamped reports below ignored `build/validation/`;
+`--output` chooses another ignored build directory. They recheck all completed
+artifacts against the final tree, so a source edit during another port's build
+cannot leave an older artifact marked passing.
 
 The fuzzer mixes pointer, dragging, controller, keyboard and editable-text input.
 It uses the actual stage dimensions and retains bounded prefixes that discover
@@ -270,9 +278,19 @@ including records relabelled as original while retaining modification markers.
 The unchanged original comparison and native hardware qualification remain
 separate from this compatibility run.
 
-The observed Wine runs still report missing 32-bit GStreamer base plugins and
-show a black intro-video panel. The gameplay check skips that intro before
-selecting a profile and entering the wagon exterior.
+The reference image includes 32-bit GStreamer base/good/bad/libav plugins and
+verifies them with a generated MPEG audio/video decode during its build.
+Its entrypoint records and limits CPU affinity to four available CPUs, with
+two llvmpipe workers; this prevents decoder worker pools from exhausting an
+old 32-bit projector's address space. The capture container retains a bounded
+512-task limit and an init process.
+
+A fresh Löwenzahn 4 compatibility run displays the publisher MPEG and captures
+nonzero audio without decoder, allocation or thread-creation errors. Its later
+DirectMedia actor-video overlay remains absent over the drawn wagon background;
+the complete intro therefore remains visually unqualified under Wine. The
+gameplay check skips that intro before selecting a profile and entering the
+wagon exterior.
 
 The optional source-free Win32 drive probe records API results and raw-read
 availability in `C:\director64-drive-probe.txt` inside a private Wine prefix.
@@ -302,6 +320,27 @@ patches the DLL or substitutes CD information.
 
 ## Android and bug reports
 
+Player file operations suspend a native Lingo continuation until the host
+returns the selected bytes, cancellation, or write/print completion. The native
+contracts cover token validation, timer suspension, exact car-file bytes,
+owned RGBA imports, cropped bottom-up BMP export, and the certificate's original
+PrintOMatic commands. The compiler/interpreter regression also checks that a
+locally bound `print(doc)` dispatches to its explicit Xtra receiver.
+
+The browser test opens a real file input, checks opaque and translucent image
+pixels, normalizes UTF-8 car text losslessly to Windows-1252, downloads exact
+export bytes, cancels an outstanding read, and exercises the print handoff.
+Image limits are checked before decode. Android uses the document picker and
+PrintManager; its queue tests cover buffer ownership, stale operations,
+SAVE-to-EXPORT token reuse, cancellation, and Activity teardown.
+
+Mutable image-cast saves use D6TF version 2: the existing field records followed
+by a D8IM version 1 block. Each bitmap records its member number, dimensions,
+name, registration point, alpha/grayscale flags and depth, then exact RGBA words
+in big-endian order. Text-only casts retain version 1. The native round trip
+uses a 560 by 420 pixel image, tests truncation/trailing data rejection before
+member installation, and verifies erasure does not leave a stale surface.
+
 Use [the Android validation APK](android.md#automated-android-journeys) to replay
 the actual keyboard, pointer and remote paths in an isolated emulator app. It
 has a separate application identity and saves. Read-only snapshots, normalized
@@ -315,3 +354,397 @@ checkpoint and recent image/audio/log evidence locally. Minimize the input and
 add an assertion that fails before the fix. Validate the fix in the cheapest
 relevant layer, then repeat the affected real browser/APK route. Never replace a
 failed reference with newly generated output simply to make a test pass.
+
+The authored `visual-patchwork.json` Circus plan follows the washing-basket
+introduction into the puzzle itself; the default yard plan does not exercise
+its imaging code. The source assigns polygon `vertexList` values to an alpha
+shape and an outline, then uses `extractAlpha`, `copyPixels` and `setAlpha` to
+build the cloth pieces. The converter now retains straight-polygon vertices
+and original fill/stroke values, and the runtime rasterizes later edits into
+owned image surfaces. Empty vector templates and compound/Bezier paths such as
+the selected LZ6 VAMPIRMA members retain their recovered static SWF raster;
+their descriptor structure is validated before conversion continues.
+Unsupported live compound/curve/gradient edits report their
+missing descriptor support. The synthetic imaging regression exercises that
+complete alpha chain and checks transparent exterior corners.
+
+The actual Deutsch FieldV template uses a Director10.1 FLSHv26 descriptor,
+with an authored four-point list rather than a newly constructed shape.
+The v26 parser retains the checked source header, points and typed trailer;
+the local42-member audit finds40 editable straight shapes and2 curves retained
+as static SWF artwork. Live fill/stroke colors own fresh raster surfaces, so
+field feedback preserves source geometry and earlier image snapshots. Synthetic
+D10/D8.5 tests check rectangle resizing, current color getters, alpha and cached
+pixels independently from the original-projector constructor experiment.
+
+`vector-polygon.lingo` and `text-box-layout.lingo` open a private window on the
+original Birthday debug movie before creating synthetic members. Startup alone
+has no current movie or cast libraries, so member creation at frame zero is not
+a valid test. Loaded DIRAPI/IML32 8.5.1r104 under Wine reports a 12-by-12 image
+and centered registration point for the authored triangle spanning eight pixels
+with a two-pixel stroke: vector image bounds include a full stroke width of
+exterior padding. No game script or artwork is copied into these probes.
+
+The text probe distinguishes intrinsic member bounds from the visible page.
+At width 40 and requested Arial 12, the synthetic eleven-letter word wraps into
+two lines; fixed/scroll retain the requested ten-pixel `pageHeight` and image
+height, while adjust follows the content height. The implementation shares the
+host's line placement between text images, visible glyphs, and hit testing.
+Long words also wrap within a line on both browser and Android. Native tests
+check page geometry and invalidation; a source-free Chromium test checks actual
+wrapped glyph pixels and live bold/underline changes. These are original-engine
+structural observations under Wine, not native Windows or Android TV fidelity
+qualification. The three later Findus ports now recover the original Arial
+resource through the existing pinned Microsoft core-font installer transport;
+unavailable requested faces use that recovered Arial resource while `.font`
+retains the requested name. `text-font-fallback` tests a fresh member for each
+face and both property orders; under the same original 8.5 Wine engine, missing
+Corsetta/Elephant and a synthetic absent name produced identical geometry and
+alpha totals to Arial. Rendering traces this substitution and still fails if its
+required recovered fallback resource is absent. This is qualified Wine evidence,
+not a claim that every native Windows font-selection policy has been measured.
+
+The synthetic `text-char-position` probe uses the same 8.5 movie context and
+records one-based `charPosToLoc` results for left/center/right fields, wrapped
+text, newlines, empty text and final carets. At Arial 18 in a 100 px box, centered
+`WI` begins at point(39,20); the next row ends at y41. The y coordinate is the
+character cell's bottom row. Browser/Android character queries now use host
+glyph layout for x, line wrapping and that bottom-row coordinate, including
+live field alignment and legacy Windows1252 characters.
+
+`text-mixed-format`, `text-spacing` and `text-zero-size` use that original 8.5
+context to qualify character formatting. Arial 12 `AB` followed by Arial 24 bold
+`CD EF` in 60 px wraps into two 28 px rows; character coordinates end at y27/55.
+Tracking 2 adds two pixels after every character, including the final caret;
+changing only character 2 to tracking 4 shifts later characters by four pixels.
+Fixed line spacing 32/10 gives row ends31/9 respectively. Point size 0 remains 0
+when queried and renders the same 12 px glyphs as the explicit size 12 case.
+Paige's stored zero size is also documented as the default 12 by its primary
+format manual. RICH package metadata preserves these raw sizes, with measured
+host font metrics used when source ascent/line height are absent.
+The selected Willy Director 6 STXT database members also contain raw zero sizes.
+These remain zero in retained run metadata and use the same measured 12 px
+fallback. Applying the original 8.5 default to these older STXT records is an
+explicit compatibility inference, not a Director 6 glyph-pixel comparison.
+
+The runtime keeps member references for character formatting and shifts live
+styles through chunk edits. Native regressions cover overlaps, nested ranges,
+Unicode offsets, alpha/color, cache invalidation and put/delete retention. Browser
+and Android share each host's formatted rows between rendering and character
+queries. Source-free Chromium checks two real fonts, mixed sizes/colors/faces,
+tracking, fixed leading, zero-size equivalence, expanded full-justification hit
+boxes, and no-wrap rows clipped against the viewport; pure-Java layout and strict
+JNI/Android35 compilation checks cover the Android bridge. These checks do not
+qualify native Windows glyph pixels or Android TV display fidelity. The current
+Christmas source has 19 text members with single STXT styles; it exercises source
+bold and multiple sizes, while synthetic fixtures exercise mixed runs.
+
+`text-field-lines` measures an existing classic CASt field separately from a
+modern text member. Under the pinned original 8.5 engine and Wine environment,
+an Arial 12 request reports row pitch 15 with character-position y 13/28; fixed
+lineHeight 32 changes the second position to 45 while the first remains 13.
+The prefix contains Liberation Sans and no Arial font file, so these numeric
+font results include Wine substitution. Hosts preserve the structural distinction:
+source/fixed line height controls row advance; a classic character position ends
+two pixels below its measured baseline. Missing source metrics use the actual
+loaded host font's ascent/descent, without a hardcoded per-size font table.
+The private text-height callback accepts width 0 to query row pitch without
+reentering member rectangle measurement. Source-free native, Java and Chromium
+checks cover this separation; they do not establish identical glyph rasterization
+between Wine's substitute and recovered Arial.
+
+Untouched classic fixed fields use their source viewport independently from
+measured content: the original Birthday LogfileName field reports a145×15
+content rectangle with pageHeight48. Source geometry queries do not reserve a
+mutable slot for each static field. The fourth boxType, `#limit`, clips to its
+fixed viewport and rejects default keyboard insertion that would exceed it;
+scripted text assignment may still exceed that page. Source-free input tests
+run both extended Director6 and Director8.5 default insertion paths, force GC
+during measurement, and check wrapped-height and unwrapped-caret limits.
+
+The synthetic transition probes run inside an original movie window so that
+`updateStage` has an active cast and score. Run
+`director64 reference --game findus-birthday --windows-version win7 --experiment transition-window-timing`
+for Director 8.5.1r104, or
+`director64 reference --game loewenzahn-4 --windows-version win95 --experiment transition-window-dseven`
+for Director 7.0.2r85. The latter retains the declared private OPTGRAPH
+compatibility patch; it is a compatibility reference. These experiments use
+an original debug/check movie as a window context and synthetic stage-color
+changes. They are experiments, rather than unmodified gameplay comparisons.
+At 32-bit color depth, original 7/8.5 effects 1,9,10,23,26,37,50,51,52 block
+`updateStage` for approximately 15/30 ticks at time 1/2, while the score frame
+stays unchanged. Effect 0 returns immediately. The 8.5 probe additionally
+confirms that an unchanged destination still waits and time 0 has a minimum
+quarter-second duration. Startup frame 0 measurements are not valid evidence
+for presentation timing.
+
+The portable transition contracts (`test_transitions.c` in
+`mise run test-native`) cover score-cast descriptors, paused enterFrame,
+click-to-skip consumption, intermediate geometry, repeat reveals and equal
+cached/uncached frames across Director 5–8.5 profiles. Wipes, pushes, reveals,
+cover effects, pattern dissolves, blinds and grouped pixel/bit dissolves now
+present over time. Dissolve order uses independently implemented maximal-length
+registers with polynomial exponents from [Xilinx XAPP052](https://docs.amd.com/v/u/en-US/xapp052).
+Exact original dissolve permutation and indexed-color bit-plane behavior
+remain unverified; these tests establish timing and deterministic presentation,
+not pixel parity with every original effect. Changed-area bounds use the
+changed pixel rectangle, which can differ from the original dirty-sprite
+rectangle around transparent padding. Effects 47–48 currently fail explicitly; none occurs in the selected games'
+recovered transition requirements. Required checkerboard and diagonal strip
+effects are included in the source audit and native intermediate-frame tests.
+
+Early Director projectors can embed the playback engine in the executable.
+The module recorder also retains mapped executables under the private original
+installation when no DIRAPI/IML32 DLL exists. The selected Löwenzahn 1 launcher
+contains Director 5.0.1r26; Löwenzahn 2 contains 6.0.2r32. Their pinned recipes
+select the original 32-bit launchers and an optical namespace from the selected
+ISO. Löwenzahn 1 declares a 256 MiB legacy RAM/swap report through a private,
+read-only `/proc/meminfo` mount: the old executable otherwise adds two large
+legacy memory counters into a signed overflow and rejects the machine as
+having less than 3 MiB available. This changes Wine's reported environment,
+while the original executable bytes remain unchanged. The generated report's
+hash and reported totals are recorded separately from the actual container
+memory limit and process affinity (both remain at host defaults).
+
+Synthetic probes explicitly choose their FileIO notation. Ordinary probes use
+Xtra object methods; `-- director64: fileio-functions` selects the source syntax
+required by Director 6; `-- director64: fileio-xobject` selects classic XObject
+calls where a compatible FileIO module exists. Completion is injected before
+the matching close/dispose call and its interface is recorded as `io_mode`.
+`-- director64: full-script` preserves explicitly authored event handlers;
+without that first-line marker the existing startup wrapper is retained.
+A missing result or completion marker remains an unsuccessful experiment.
+The bundled Löwenzahn 1 FILEIO.DLL is 16-bit and cannot instrument its 32-bit
+launcher; successful launch after the memory repair is not a successful D5
+FileIO or palette experiment.
+
+Palette transitions and high-color output
+----------------------------------------
+
+The previous compositor substituted a full-stage RGB fade for palette animation.
+That invented black/white flashes at the default high-color display depth. It has
+been removed. Macromedia's [Using Lingo, Version 4, chapter 4, p132](https://macos.retro-os.live/index.php/downloads?catid=183&id=16568&m=0&task=download.send)
+documents palette transitions as a 256-color display effect, absent in thousands
+or millions of colors. The later [Director MX2004 Using Director, p154](https://dit.uoi.gr/files/director_mx_2004using_director_compressed-151-350.pdf)
+also explains that 8-bit bitmap palette mismatches are confined to 256-color
+systems. Selecting that rule for the intermediate D5/D6 engines is an inference
+from these primary manuals. The selected D6 6.0.2r32 engine reports depth24 under
+Wine8, but our experimental MIAW baseline remained black; one activation variant
+crashed the original. Neither is a successful original pixel comparison. We do
+not use them as visual evidence for a no-op. The native palette test verifies that
+high-color score commands do not paint an invented stage overlay, while attempted
+8-bit interpolation fails with a specific diagnostic. The selected 8-bit Garden
+port has no recovered palette interpolation requirement. Authentic indexed fades
+and their timing remain unqualified, rather than being called implemented.
+
+Text transport and byte operations
+----------------------------------
+
+Package and host text uses UTF-8. Character indexing, count, offset, comparisons
+and edits decode that representation, so German umlauts do not occupy two Lingo
+characters. `numToChar` and binary FileIO reads retain byte strings with explicit
+lengths, including NUL. Concatenation preserves the authored Western byte
+encoding when either operand is raw; assignment to a displayed member converts
+that byte text to UTF-8 once. The same boundary preserves authentic desktop CAR
+files without changing image headers or the recovered manual UTF-8 encoders.
+`test_lingo_encoding.c` exercises both representations, mixed text, byte-level
+edits and collection across all seven build profiles. Member chunk writes and
+deletes retain owner identity and carry formatting runs through their splice;
+`test_text_splice.py` runs the real compiler/package/VM with frequent collection.
+Non-BMP text and other historical platform encodings have no original-player
+qualification from these Western source cases.
+
+The Deutsch controller is a separate movie context with shared globals and heap
+objects, independent score timing, persistent member state and bounded startup
+initialization. Its recovered launcher and common scripts require synchronous
+interface initialization, immediate forget/recreate, and a hidden running score.
+[Using Director MX2004, chapter18](https://www.manualslib.com/manual/389802/Macromedia-Director-Mx-2004-Using-Director.html?page=409)
+describes simultaneous movie windows. The clean ScummVM reference revision
+`41ac2b31847622d0662d22c03fe6979e3b43cfbc` independently corroborates separate
+window stepping and transferring the active Lingo context for tell blocks;
+its implementation was not copied. Support here covers the selected game's
+single named controller and authored panel rectangle, rather than a desktop
+window manager.
+
+`test_windows.c` covers hidden score timing, bounded multi-budget startup,
+shared object/member/range/image identity, nested tells, modifier keys, mouse
+capture, clipped cached/uncached frames and lifecycle cleanup under ASan/UBSan.
+The registered Deutsch journey now opens the statistics panel with the authored
+Control+Shift+Q shortcut after login/class/room/exercise navigation. It requires
+the controller's own score sprites, populated fields, a continuing clock, zero
+script alerts and a changed rendered frame. This is source-driven portable
+validation, not an original Director10 or physical Android TV comparison.
+The same journey uses the visible Sequence Info tab, task-number text field,
+room dropdown and Go button to reach `TEST2CB1.DXR`. It requires the authored
+`InitFields` handler's completed, nonempty answer ranges within the sentence,
+visible editable answer fields and vector backgrounds with positive geometry,
+and a visible Flash prompt with measured text height. This covers the previously
+missing font variants, tracking and live vector geometry on that concrete route;
+entering the movie alone does not pass the check.
+
+Single-player policies are checked by six source-free compiler-to-VM fixtures,
+the ordinary 23 journeys, and strict alternate-entry source components. The
+components skip `START` and establish bounded activity behavior, rather than
+complete input-driven playthroughs: Mucklas race and battleships retain one
+human and one computer, and ball retains one human and two computers. Their
+human-opponent controls are hidden and inactive; Shift+2 cannot activate the
+ball game's second human. The ordinary Optik quiz route and alternate-entry
+pinball reach the authored single-player name screen; telephone reaches its
+single-player setup after the retained introduction. These policies preserve
+saved profiles and historical scores. The ordinary journeys separately check
+profile persistence and reboot/reload paths; the component checks do not replace
+those checks or original-projector comparisons.
+
+`director64 reference --game loewenzahn-2 --experiment string-bytes-dsix`
+corroborates the byte boundary with the original embedded 6.0.2r32 engine under
+Wine 8. The ASCII-only probe observes `length(numToChar(n))=1` and the unchanged
+character code for 0, 128, 164, 195, 223, 228 and 255. Concatenating bytes 195/164
+has length 2 and retains both codes; the ä/ß/Euro byte triple has length 3.
+The result includes the completion marker and the mapped executable version/hash.
+This is an original-player numeric experiment under Wine, not a native Windows
+or projector-display qualification.
+
+Classic field boxes and chunk expansion
+--------------------------------------
+
+`text-color-values` verifies original 8.5 color getter types: a member or character
+`.color` is RGB; `.foreColor` is an integer palette index. For synthetic
+RGB(17,34,51), the tested original returns 239; setting a character's foreColor 255
+changes only that character to black. Mutable/nested getters now read the same
+live run data that rendering and chunk splices use.
+
+`text-field-chrome` and `text-field-position` mutate only the existing classic
+field 7 in the private debug movie. Unlike a new modern Text member, it supports
+field-only chrome. Under 8.5.1r104/Wine 8, Arial request 12 yields lineHeight 15;
+word wrapping changes a 40-pixel-wide two-row logical rect from 30 to 15 high when
+turned off. Margins 0/2, borders 0/1 and box shadows 0/2 leave that logical rectangle
+and character positions unchanged. The compositor keeps chrome outside the text
+rectangle, retains exact recovered background RGB and shares geometry with hits.
+The private prefix substitutes Wine Liberation for the Arial request; those row
+numbers are observations of that environment, not proof of native Arial metrics.
+The separate `text-field-lines` probe records this distinction at four sizes and
+an explicit 32-pixel line-height override. The native chrome contract verifies
+source settings, pixels, logical bounds, scrolling row selection and equality of
+cached/uncached rendering. Primary box-property scope is documented in
+[Macromedia Using Director MX2004, p178](https://dit.uoi.gr/files/director_mx_2004using_director_compressed-151-350.pdf).
+The untouched `text-source-box-type` probe reports the same field's source
+CASt type byte 2 as `#fixed`, with intrinsic rect 145 by 15 and pageHeight 48.
+Source box descriptors therefore need the viewport and content distinction
+before any script changes a property.
+The `text-field-source-types` experiment uses Deutsch's actual TEST2CB1 fields
+under its original Director 10 engine. The launcher advertises 10.1r11; loaded
+DIRAPI/IML32 identify 10.1.1r16. Under Wine 8, six untouched fields with source
+type byte 3 report `#limit`, wrapping enabled and zero margin/border/shadow.
+The fourth mode limits keyboard input to the field's box; a script can still
+assign overflowing text. Package type values distinguish adjust, fixed, scroll
+and limit independently from the source byte ordering.
+
+The controller's hidden task-information update also requires a native checkbox's
+`hilite` property. Recovered button kinds use existing member fields; mutable
+checked state occupies an independent GC root rather than a text-field slot.
+The source checkbox handler marks data edited and relies on the native control
+to toggle before mouseUp. Native regressions check that ordering, release outside,
+radio selection, push-button feedback, direct edits and collection. The separate
+pixel regression covers all three portable controls, labels, state changes and
+cached/uncached equality. Its source checkbox has logical text width -2 but an
+authored 16-by-16 sprite; that value must not become a 65,534-pixel allocation.
+Original 10.1.1r16 constructor experiments under Wine confirm button types and
+default false / mutable true-false hilite values. Portable control appearance is
+not an original Windows theme pixel comparison.
+
+`text-field-types` also distinguishes getter types: the existing classic field
+returns strings for fontStyle and alignment, whereas a modern Text member
+returns a style list and an alignment symbol. `text-large-spacing` confirms that
+tracking -1000 is an actual negative advance, not an absent-value sentinel.
+The selected Deutsch TEST2CB1 source contains that value. Hosts retain negative
+coordinates and saturate bounded hit-box transport rather than wrapping distant
+positions back onto the stage. In `text-spacing-inheritance`, tracking also
+changes the advance of ASCII spaces; this Director behavior is measured
+separately from the underlying Paige manual's character-extra description.
+Whole-text replacement inherits the first character's tracking: mixed 3/-2
+runs become a uniform 3 after replacement. The runtime retains that value for
+both recovered source runs and later character edits, including a source -1000
+run that previously lost its spacing after a script assigned new text.
+The `text-hilite` experiment completed and confirmed the classic compound style
+string `bold,italic`. Its Wine window remained black and global selection
+indices stayed zero even after assigning a puppet field sprite. Those results
+do not qualify selection indices or highlight pixels; portable selection tests
+and the recovered dropdown route are separate evidence.
+
+`chunk-expansion` corroborates original 8.5 gap writes with numeric byte lists.
+Writing line 3 of EMPTY creates two carriage returns before the new text;
+writing item 3 creates two commas. Writing char 5 of "ab" pads two spaces; writing
+word 3 of "one" appends directly. The VM now preserves those distinctions.
+This repairs the Deutsch controller's numbered dropdowns, which previously
+concatenated all entries into one line. Native tests and the real compiler/VM
+exercise the delimiter expansion alongside UTF-8/raw-byte handling and collection.
+The controller also checks mouseLine against -1 when the pointer leaves a field.
+The getter uses that documented outside-field result and counts logical Return
+delimiters, consistent with the pinned ScummVM behavior and
+[Macromedia's mouseLine reference](https://www.manualslib.com/manual/389805/Macromedia-Director-Mx-Lingo-Dictionary.html?page=397).
+
+The Deutsch original-player recipe names the source's unchanged `Deutsch.dat`,
+an x86 PE32 GUI projector despite its extension. Its separate launcher hash is
+verified before Wine executes it; `.dat` files are never discovered implicitly,
+and DLLs, PE64, console binaries and malformed headers are rejected. No executable
+renaming or retail-byte patch is needed. The launcher and `proj.dll` advertise
+10.1r11, while the actually loaded `DIRAPI.DLL` and `IML32.DLL` report
+**10.1.1r16**. Reproduce the authored source-field probe with:
+
+```sh
+uv run --locked director64 reference --game lernerfolg-deutsch-1-2 \
+  --windows-version win7 --experiment text-field-source-types
+```
+
+It reads actual `TEST2CB1.DXR` fields 49, 50, 56 and 73–75 before changing any
+properties: all six raw CASt box-type-3 records report `#limit`, with their
+authored rectangles, wrap enabled and zero margin/border/shadow. Subsequent
+`#adjust`, `#fixed` and `#scroll` assignments report the assigned values. The
+probe requires MX2004's explicit `window().new(name)`; `window(name)` returns
+VOID for an absent window in this engine. The completed Wine8 experiment and
+mapped DLL identities corroborate the fourth documented mode in
+[Macromedia's MX2004 Scripting Reference, p671](https://eclass.hmu.gr/modules/document/file.php/TP194/drmx2004_scripting_ref.pdf).
+This is original-projector semantic evidence under Wine, with no native Windows
+or hardware claim. Completion records the output; this probe has no registered
+automatic image or semantic comparator.
+
+`--experiment native-button-types` uses that same original10.1 recipe and creates
+authored push-button, checkbox and radio-button members in a safe source movie
+window. All three report type `#button`, their assigned `buttonType`, initial
+`hilite=0`, then exact `1,0` hilite updates. The completed probe corroborates the
+runtime checked-state default; it does not claim that the original controller's
+startup or pixels were compared. The [MX2004 Scripting Reference, p798](https://eclass.hmu.gr/modules/document/file.php/TP194/drmx2004_scripting_ref.pdf)
+also documents the unchecked default. Clean ScummVM41ac2b3's text-cast decoder and an
+audit of 164 selected native-button records independently identify the BE16 kind
+after the 28-byte classic descriptor. Source type7 records now retain that kind
+through the existing MOVI shape/filled fields, including Deutsch's empty-label
+`TaskInfo_UseIntest` checkbox. No game artwork or retail bytes are rewritten.
+
+`--experiment vector-defaults-dten` observes a new native vector shape in that
+same original10.1/Wine environment: empty `vertexList`, rect(0,0,320,240),
+stroke width1, fill RGB(221,221,221), and closed0. The completed getter probe
+does not support inventing a default four-vertex rectangle. A source handler
+that expects four vertices must receive them from its authored template or
+initialization; constructor defaults and recovered shape data are separate
+requirements.
+
+The input runtime is single-player. The source-free `input-selftest` uses the
+production browser controller selector and cursor policy in Chromium: an extra
+controller cannot generate game/menu actions, menu presses remain consumed until
+release, disconnect selects a replacement, and standard OS cursor roles suppress
+the software glyph. Its gamepad samples are synthetic, so this is component
+validation rather than physical gamepad, Android PointerIcon or original cursor
+pixel qualification. Native input/compositor tests cover button release on
+disconnect, absolute journey compatibility, one cursor's restored pixels, and
+source bitmap/mask/invert fallback. Existing `pad ticks x y buttons` recordings
+remain valid; indexed controller samples are rejected.
+
+Mucklas KR's source direction helper returns a point that its driver negates.
+Geometric unary negation now preserves point/rect identity and returns an
+independent value. This agrees with ScummVM's array/geometry negation behavior
+at clean revision `41ac2b31847622d0662d22c03fe6979e3b43cfbc`; no implementation
+code was copied. A source-free compiler-to-VM regression executes the helper
+call, negation and coordinate mutation with collection between small budgets
+on D8 and D8.5. Numeric contracts check both coordinates, source independence
+and rectangle identity under ASan/UBSan across all seven runtime profiles.
+These are source/reference and runtime checks, not original-projector parity.

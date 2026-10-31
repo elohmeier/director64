@@ -50,7 +50,8 @@ FAMILY = {500: "5", 600: "6", 700: "7", 800: "8", 850: "10", 1000: "10"}
 
 
 def run_lingo(tmp_path: Path, source: str, body: str, *, version: int = 600,
-              extended: bool = False, movie: str = "FIXTURE.DXR", director: bool = False) -> None:
+              extended: bool = False, movie: str = "FIXTURE.DXR", director: bool = False,
+              program_transform=None, cast_name: str = "Internal") -> None:
     """Compiles `source` as `movie` and runs `body`, C whose main() calls
     load_fixture(argv[1]); `director` links the score runtime too."""
     cc = shutil.which("cc")
@@ -58,10 +59,12 @@ def run_lingo(tmp_path: Path, source: str, body: str, *, version: int = 600,
         pytest.skip("native C compiler unavailable")
     root = repository()
     program = {"files": [{"name": f"{movie}.lingo"}], "handlers": parse_movie(source, movie)}
+    if program_transform:
+        program = program_transform(program)
     model = {"problems": [], "extendedD6": extended, "movies": [{
         "id": 1, "name": movie, "directorVersion": version, "tempo": 15,
         "palette": [i * 0x010101 for i in range(256)],
-        "casts": [{"number": 1, "name": "Internal", "file": movie}], "members": [],
+        "casts": [{"number": 1, "name": cast_name, "file": movie}], "members": [],
         "score": {"frames": [{"channels": []}], "labels": []}}]}
     meta = {"director_version": version, "extended_d6": extended}
     for name, value in (("program.json", program), ("model.json", model), ("meta.json", meta)):

@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {KeyEvents} from "../../platforms/web/site/keyboard.js";
+import {KeyEvents, MAC_KEYS} from "../../platforms/web/site/keyboard.js";
+
+test("projector shortcuts carry distinct physical modifiers and their releases", () => {
+  const module = engine(), keys = new KeyEvents(module);
+  for (const [physical, character] of [["ControlLeft", 0], ["ShiftRight", 0], ["KeyQ", 81]])
+    keys.forward(MAC_KEYS[physical], character, true);
+  keys.releaseAll(); module.step();
+  assert.deepEqual(module.received, [[59,0,1], [60,0,1], [12,81,1], [59,0,0], [60,0,0], [12,81,0]]);
+  assert.notEqual(MAC_KEYS.ControlLeft, MAC_KEYS.ControlRight);
+  assert.notEqual(MAC_KEYS.AltLeft, MAC_KEYS.AltRight);
+});
 
 function engine(limit = 32) {
   const received = [], batch = [];

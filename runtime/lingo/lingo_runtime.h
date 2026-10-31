@@ -262,6 +262,7 @@ typedef struct {
   bool (*property_get)(lv_runtime_t *, lv_t, const char *, lv_t *);
   bool (*property_set)(lv_runtime_t *, lv_t, const char *, lv_t);
   void (*property_changed)(lv_runtime_t *, lv_t, const char *);
+  bool (*text_splice)(lv_runtime_t *, lv_t, const char *, lv_t, lv_t, lv_t, lv_t);
 } lv_services_t;
 typedef struct {
   uint32_t offset, count, capacity;
@@ -400,6 +401,10 @@ bool lv_truth(lv_runtime_t *, lv_t);
 const char *lv_cstr(lv_runtime_t *, lv_t);
 lv_t lv_text(lv_runtime_t *, const char *, bool);
 lv_t lv_bytes(lv_runtime_t *, const void *, unsigned);
+// Byte strings retain numToChar/FileIO data, including embedded NULs. Text
+// supplied by the package and hosts uses UTF-8. Normalize only at text sinks.
+unsigned lv_byte_count(lv_runtime_t *, lv_t);
+lv_t lv_text_utf8(lv_runtime_t *, lv_t);
 #if DG_D10
 lv_t lv_byte_list(lv_runtime_t *, const unsigned char *, unsigned);
 #endif

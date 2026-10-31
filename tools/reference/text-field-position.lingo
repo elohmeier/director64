@@ -1,0 +1,24 @@
+-- Existing classic field geometry, independent of modern Text members.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\text-field-position.txt")
+out.openFile("C:\text-field-position.txt",2)
+w=window("director64-probe")
+w.fileName=the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+tell w
+ t=member(7,1)
+ t.text="AB CD EF GH"
+ t.font="Arial"
+ t.fontSize=12
+ t.rect=rect(0,0,40,40)
+ t.boxType=#adjust
+ repeat with m in [0,2]
+  t.margin=m
+  t.border=1
+  t.boxDropShadow=2
+  t.wordWrap=1
+  out.writeString(string([m,t.rect,charPosToLoc(t,1),charPosToLoc(t,4)]) & RETURN)
+ end repeat
+end tell
+out.closeFile()

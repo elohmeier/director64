@@ -1,0 +1,26 @@
+-- Existing classic field line pitch versus modern character-position cells.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\text-field-lines.txt")
+out.openFile("C:\text-field-lines.txt",2)
+w=window("director64-probe")
+w.fileName=the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+tell w
+ t=member(7,1)
+ t.text="ABCD" & RETURN & "EF"
+ t.font="Arial"
+ t.rect=rect(0,0,100,40)
+ t.boxType=#adjust
+ t.margin=0
+ t.border=0
+ t.boxDropShadow=0
+ repeat with size in [10,12,18,24]
+  t.fontSize=size
+  out.writeString(string([size,t.lineHeight,t.rect,charPosToLoc(t,1),charPosToLoc(t,6)]) & RETURN)
+ end repeat
+ t.fontSize=12
+ t.lineHeight=32
+ out.writeString(string([#fixed,t.lineHeight,t.rect,charPosToLoc(t,1),charPosToLoc(t,6)]) & RETURN)
+end tell
+out.closeFile()

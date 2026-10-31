@@ -12,10 +12,19 @@ static void state(void) {
     }
     (void)native_cursor_bitmap(&values,m,mask,&bitmap);
   } else (void)dg_cursor_builtin(&bitmap,cursor.resource);
+  unsigned hot_x=bitmap.hot_x,hot_y=bitmap.hot_y;
+  uint32_t cursor_hash=dg_cursor_bitmap_hash(&bitmap);
+#if defined(DIRECTOR64_SOURCE_CURSOR_MASK) && DIRECTOR64_SOURCE_CURSOR_MASK
+  if(!cursor.image && cursor.resource>=0 && cursor.resource<32 &&
+      (DIRECTOR64_SOURCE_CURSOR_MASK & (UINT32_C(1)<<(unsigned)cursor.resource))) {
+    const wc_resource_cursor_t *source=wc_source_cursor(&compositor,&values,(unsigned)cursor.resource);
+    if(source) { hot_x=source->hot_x;hot_y=source->hot_y;cursor_hash=wc_resource_cursor_hash(source); }
+  }
+#endif
   printf("{\"movie\":"); quoted(director.movie ? director.movie->code->name : "");
   printf(",\"cursor\":{\"resource\":%ld,\"image\":%lu,\"mask\":%lu,\"hotspot\":[%u,%u],\"hash\":%lu}",
          (long)cursor.resource,(unsigned long)cursor.image,(unsigned long)cursor.mask,
-         bitmap.hot_x,bitmap.hot_y,(unsigned long)dg_cursor_bitmap_hash(&bitmap));
+         hot_x,hot_y,(unsigned long)cursor_hash);
   printf(",\"print_id\":%u,\"print_paused\":%s", game_print_id(), game_print_paused() ? "true":"false");
   printf(",\"frame\":%u,\"tick\":%u,\"depth\":%u,\"quit\":%s,\"sounds\":%u,\"save_generation\":%u,\"error\":", director.frame, director.ticks, values.depth, director.quit ? "true":"false", sound_count, game_save_generation());
   quoted(values.failed ? values.error : "");

@@ -1,0 +1,18 @@
+-- director64: fileio-functions
+-- Original Director6 byte-string controls; ASCII source has no locale ambiguity.
+-- Verified with original6.0.2r32 underWine8: every byte length1 and charToNum=n;
+-- rawpair length2/codes195,164; german length3/codes228,223,128.
+global out
+openXLib("XTRAS\FILEIO.X32")
+set out = new(xtra("fileio"))
+createFile(out, "C:\string-bytes-dsix.txt")
+openFile(out, "C:\string-bytes-dsix.txt", 2)
+repeat with n in [0, 128, 164, 195, 223, 228, 255]
+  set c = numToChar(n)
+  writeString(out, string(["byte", n, length(c), charToNum(c)]) & RETURN)
+end repeat
+set pair = numToChar(195) & numToChar(164)
+writeString(out, string(["rawpair", length(pair), charToNum(char 1 of pair), charToNum(char 2 of pair)]) & RETURN)
+set german = numToChar(228) & numToChar(223) & numToChar(128)
+writeString(out, string(["german", length(german), charToNum(char 1 of german), charToNum(char 2 of german), charToNum(char 3 of german)]) & RETURN)
+closeFile(out)

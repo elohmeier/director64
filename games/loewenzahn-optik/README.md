@@ -19,3 +19,7 @@ content is reconstructed, not restored.
 
 `[convert]` binds the DirectMedia Xtra's MPEG-1 movies to their disc files
 (converted to VP9). `[player]` saves the `.usr` preferences file.
+
+Quiz and pinball enter their authored single-player name screen directly.
+Source-pinned patches bypass the hotseat mode chooser while preserving the
+available profile names and historical scores.

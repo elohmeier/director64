@@ -34,7 +34,6 @@ import java.io.File;
 import java.io.InputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.charset.Charset;
 import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -48,7 +47,6 @@ import org.json.JSONObject;
  */
 public final class GameActivity extends Activity implements InputManager.InputDeviceListener {
   private static final int WIDTH = 640, HEIGHT = 480;
-  private static final Charset WINDOWS_1252 = Charset.forName("windows-1252");
 
   // Serializes shutdown and recreation without joining a slow worker on the UI thread.
   private static final ExecutorService LIFECYCLE = Executors.newSingleThreadExecutor();
@@ -56,7 +54,9 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   private final Pads pads = new Pads();
   private final Handler handler = new Handler(Looper.getMainLooper());
   private Text text;
-  private SurfaceView stage;
+  private UserFiles userFiles;
+  private CursorSurface stage;
+  private int pointerSequence;
   private TextView overlay;
   private SharedPreferences preferences;
   private InputManager inputs;
@@ -130,8 +130,9 @@ public final class GameActivity extends Activity implements InputManager.InputDe
     keyboardGame = version >= 700;
     german = version >= 1000;
     System.loadLibrary(profile.optString("library"));
+    userFiles = new UserFiles(this);
 
-    stage = new SurfaceView(this);
+    stage = new CursorSurface(this);
     stage.getHolder().addCallback(
         new SurfaceHolder.Callback() {
           @Override
@@ -139,12 +140,14 @@ public final class GameActivity extends Activity implements InputManager.InputDe
 
           @Override
           public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+            stage.apply(200);
             currentSurface = holder.getSurface();
             if (started) Native.surface(currentSurface);
           }
 
           @Override
           public void surfaceDestroyed(SurfaceHolder holder) {
+            stage.apply(200);
             currentSurface = null;
             if (started) Native.surface(null);
           }
@@ -153,6 +156,8 @@ public final class GameActivity extends Activity implements InputManager.InputDe
     stage.setOnGenericMotionListener((view, event) -> mouse(view, event));
     Stage root = new Stage(this, stage);
     root.setBackgroundColor(Color.BLACK);
+    root.setPointerIcon(android.view.PointerIcon.getSystemIcon(this,
+        android.view.PointerIcon.TYPE_NULL));
     overlay = new TextView(this);
     overlay.setTextColor(Color.WHITE);
     overlay.setBackgroundColor(0x99000000);
@@ -167,7 +172,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
 
     inputs = (InputManager) getSystemService(INPUT_SERVICE);
     inputs.registerInputDeviceListener(this, handler);
-    // The 128 KiB save image, in the app's own storage.
+    // The game's save image, in the app's own storage.
     String savePath = new File(getFilesDir(), "flash.bin").getAbsolutePath();
     float level = preferences.getFloat("volume", 0.8f);
     LIFECYCLE.execute(() -> {
@@ -214,6 +219,10 @@ public final class GameActivity extends Activity implements InputManager.InputDe
       observation.put("dialog", dialog != null && dialog.isShowing());
       observation.put("has_surface", currentSurface != null);
       observation.put("paused", paused);
+      observation.put("native_pointer_kind", stage.kind);
+      observation.put("android_pointer_icon", stage.iconType);
+      observation.put("document_id", userFiles == null ? 0 : userFiles.requestId());
+      observation.put("document_kind", userFiles == null ? 0 : userFiles.requestKind());
       int[] location = new int[2];
       stage.getLocationOnScreen(location);
       observation.put("surface", new org.json.JSONArray(new int[] {
@@ -270,7 +279,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
       Native.hold(Native.HOLD_PAUSED, true);
       Keys.releaseAll();
       pads.release();
-      Native.mouse(0, 0, 0, false);
+      Native.mouse(0, 0, 0, false, false);
       mouseButtons = 0;
     }
     super.onPause();
@@ -278,6 +287,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
 
   @Override
   protected void onDestroy() {
+    if (userFiles != null) userFiles.close();
     destroyed = stopped = true;
     if (started) { Keys.releaseAll(); pads.release(); }
     started = false;
@@ -338,7 +348,10 @@ public final class GameActivity extends Activity implements InputManager.InputDe
     int x = (int) (event.getX() * WIDTH / view.getWidth());
     int y = (int) (event.getY() * HEIGHT / view.getHeight());
     int action = event.getActionMasked();
-    if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+    boolean physical = event.isFromSource(InputDevice.SOURCE_MOUSE)
+        || event.isFromSource(InputDevice.SOURCE_TOUCHPAD)
+        || (event.getPointerCount()>0 && event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE);
+    if (physical) {
       int state = event.getButtonState();
       mouseButtons =
           ((state & MotionEvent.BUTTON_PRIMARY) != 0 ? Pads.A : 0)
@@ -349,8 +362,9 @@ public final class GameActivity extends Activity implements InputManager.InputDe
       mouseButtons =
           action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE ? Pads.A : 0;
     }
-    boolean inside = action != MotionEvent.ACTION_HOVER_EXIT;
-    Native.mouse(x, y, mouseButtons, inside);
+    boolean inside = action != MotionEvent.ACTION_HOVER_EXIT
+        && action != MotionEvent.ACTION_CANCEL;
+    Native.mouse(x, y, mouseButtons, inside, physical);
     return true;
   }
 
@@ -436,16 +450,32 @@ public final class GameActivity extends Activity implements InputManager.InputDe
 
   // ---- Called by the game thread ----
 
+  void pointerChanged(int sequence, int kind) {
+    handler.post(() -> {
+      if (destroyed || sequence < pointerSequence || !Native.pointerCurrent(sequence, kind)) return;
+      pointerSequence = sequence;
+      stage.apply(kind);
+      Native.pointerReady(sequence, kind);
+    });
+  }
+
   /** Each character's box in a text box (Text.layout). */
   short[] layout(
-      byte[] utf8, int width, int height, int font, int size, int align, int ascent, int lineHeight) {
-    return text.layout(utf8, width, height, font, size, align, ascent, lineHeight);
+      byte[] utf8, int width, int height, int font, int size, int align, int ascent, int lineHeight, int face) {
+    return text.layout(utf8, width, height, font, size, align, ascent, lineHeight, face);
   }
 
   /** A text box's coverage plane (Text.rasterize). */
   byte[] rasterize(
-      byte[] utf8, int width, int height, int font, int size, int align, int ascent, int lineHeight) {
-    return text.rasterize(utf8, width, height, font, size, align, ascent, lineHeight);
+      byte[] utf8, int width, int height, int font, int size, int align, int ascent, int lineHeight, int face) {
+    return text.rasterize(utf8, width, height, font, size, align, ascent, lineHeight, face);
+  }
+
+  short[] layoutRich(byte[] utf8,int width,int height,int[] styles) {
+    return text.layoutRich(utf8,width,height,styles);
+  }
+  byte[] rasterizeRich(byte[] utf8,int width,int height,int[] styles) {
+    return text.rasterizeRich(utf8,width,height,styles);
   }
 
   /**
@@ -458,7 +488,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
    */
   void openTextEntry(
       int request, byte[] value, int left, int top, int right, int bottom, boolean keys) {
-    String current = new String(value, WINDOWS_1252);
+    String current = new String(value, StandardCharsets.UTF_8);
     handler.post(
         () -> {
           if (stopped || destroyed) return;
@@ -527,7 +557,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
                   String typed = field.getText().toString();
                   if (!allowed.matcher(typed).matches() || typed.length() > 20) {
                     field.setError(getString(R.string.text_bad_character));
-                  } else if (Native.commitText(request, typed.getBytes(WINDOWS_1252))) {
+                  } else if (Native.commitText(request, typed.getBytes(StandardCharsets.UTF_8))) {
                     field.setEnabled(false);
                     entry.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
                   } else {
@@ -580,7 +610,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   }
 
   void gameStopped(int status, byte[] message) {
-    String error = new String(message, WINDOWS_1252);
+    String error = new String(message, StandardCharsets.UTF_8);
     handler.post(
         () -> {
           validationStatus = status;
@@ -599,7 +629,20 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   }
 
   void printRequested(int document) {
-    handler.post(() -> { if (!destroyed) Toast.makeText(this, R.string.no_printing, Toast.LENGTH_LONG).show(); });
+    handler.post(() -> { if (!destroyed) userFiles.legacyPrint(document); });
+  }
+
+  void userRequested(int id, int kind, byte[] title, byte[] name, byte[] filter, byte[] data) {
+    handler.post(() -> { if (!destroyed) userFiles.request(id, kind, title, name, filter, data); });
+  }
+
+  void fileReplyResult(int id, int kind, boolean accepted) {
+    handler.post(() -> { if (!destroyed) userFiles.replyResult(id, kind, accepted); });
+  }
+
+  @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    super.onActivityResult(requestCode, resultCode, data);
+    if (userFiles != null) userFiles.result(requestCode, resultCode, data);
   }
 
   void saveCommitted(boolean ok) {

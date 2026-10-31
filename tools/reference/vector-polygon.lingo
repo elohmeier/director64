@@ -1,0 +1,24 @@
+-- Synthetic polygon geometry in an explicitly opened private movie window.
+global out
+out = new(xtra("fileio"))
+out.createFile("C:\vector-polygon.txt")
+out.openFile("C:\vector-polygon.txt",2)
+w = window("director64-probe")
+w.fileName = the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+tell w
+ v = new(#vectorShape)
+ v.strokeWidth = 2
+ v.strokeColor = rgb(0,0,0)
+ v.fillMode = #solid
+ v.fillColor = rgb(0,0,0)
+ v.closed = 1
+ v.vertexList = [[#vertex:point(-3,-2)],[#vertex:point(5,-2)],[#vertex:point(-3,6)]]
+ out.writeString(string([v.rect,v.width,v.height,v.regPoint,v.vertexList]) & RETURN)
+ v.imageEnabled = 1
+ i = v.image
+ out.writeString(string([i.rect,i.depth,i.useAlpha,i.getPixel(point(0,0)),i.getPixel(point(3,3))]) & RETURN)
+ a = i.extractAlpha()
+ out.writeString(string([a.rect,a.getPixel(point(0,0)),a.getPixel(point(3,3)),a.getPixel(point(9,9))]) & RETURN)
+end tell
+out.closeFile()

@@ -1,0 +1,35 @@
+-- Synthetic out-of-range chunk writes, with numeric byte results.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\chunk-expansion.txt")
+out.openFile("C:\chunk-expansion.txt",2)
+cases=[]
+s=EMPTY
+put "X" into line 3 of s
+add(cases,[#emptyLine,s])
+s="one"
+put "X" into line 3 of s
+add(cases,[#line,s])
+s="one" & RETURN
+put "X" into line 3 of s
+add(cases,[#trailingLine,s])
+s=EMPTY
+put "X" into item 3 of s
+add(cases,[#emptyItem,s])
+s="one"
+put "X" into item 3 of s
+add(cases,[#item,s])
+s="ab"
+put "X" into char 5 of s
+add(cases,[#char,s])
+s="one"
+put "X" into word 3 of s
+add(cases,[#word,s])
+repeat with entry in cases
+ bytes=[]
+ repeat with n=1 to length(entry[2])
+  add(bytes,charToNum(char n of entry[2]))
+ end repeat
+ out.writeString(string([entry[1],bytes]) & RETURN)
+end repeat
+out.closeFile()

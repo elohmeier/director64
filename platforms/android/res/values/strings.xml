@@ -8,7 +8,7 @@
   <string name="menu_hide_diagnostics">Hide diagnostics</string>
   <string name="menu_controls">Controls</string>
   <string name="menu_quit">Quit the game</string>
-  <string name="controls_text">Left stick or D-pad: the cursor (L1 held: fine movement). ✕ or A: click. ○ or B: the second button. Options or Start: Start. Right stick: the C buttons. PS, Share, Back or Menu: this menu. Each controller moves its own cursor.\n\nConnected:</string>
+  <string name="controls_text">Left stick or D-pad: the cursor (L1 held: fine movement). ✕ or A: click. ○ or B: the second button. Options or Start: Start. Right stick: the C buttons. PS, Share, Back or Menu: this menu. All devices control one pointer.\n\nActive controller:</string>
   <string name="text_title">Enter text</string>
   <string name="text_bad_character">This character cannot be typed here.</string>
   <string name="text_refused">The game did not accept this text.</string>

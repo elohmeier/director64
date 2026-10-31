@@ -36,10 +36,11 @@ static const dg_delta_t deltas[]={
   {.channel=5,.value={.member=DG_ID(1,1,2)}},
   {.channel=5,.value={.member=DG_ID(1,1,1)}},
   {.channel=5,.value={.member=DG_ID(1,1,999)}},
+  {.channel=5,.value={.member=0xffff,.ink=0x40,.blend=30}},
 };
-static const dg_frame_t frames[]={{0,1},{1,1},{2,1},{3,1},{4,1}};
+static const dg_frame_t frames[]={{0,1},{1,1},{2,1},{3,1},{4,1},{5,1}};
 static const dg_movie_t movie={.id=1,.code=&code,.casts=&cast,.cast_count=1,
-  .members=members,.member_count=2,.frames=frames,.frame_count=5,.deltas=deltas,.tempo=30,.palette=fallback};
+  .members=members,.member_count=2,.frames=frames,.frame_count=6,.deltas=deltas,.tempo=30,.palette=fallback};
 static uint32_t read_asset(void *ctx,const char *name,uint8_t *out,uint32_t capacity) {
   (void)ctx;
   if(out) {
@@ -112,20 +113,22 @@ int main(void) {
   }
 #endif
 #if DG_MODERN
-  // A true-colour fade retains the preceding scene, reaches white, then
-  // reveals the new scene; cached renders must also update as ticks advance.
-  uint32_t previous=c.pixels[0];
+  // Palette commands must not paint a synthetic full-stage flash on a
+  // high-color display. The destination is visible immediately and cached.
   d.stage_color=0x0000ff;
-  d.palette_fade_serial++;d.palette_fade_start=d.ticks;
-  d.palette_fade_kind=0x40;d.palette_fade_half=2;
-  assert(wc_render(&c,&d,0,0,false,0) && c.pixels[0]==previous);
+  assert(dg_seek(&d,6));
+  assert(wc_render(&c,&d,0,0,false,0));
+  assert((c.pixels[0]&0xffffffu)==0xff0000u);
   d.ticks+=2;
-  assert(wc_render(&c,&d,0,0,false,0) && c.pixels[0]==0xffffffffu);
-  d.ticks+=2;
-  assert(wc_render(&c,&d,0,0,false,0) && (c.pixels[0]&0xffffffu)==0xff0000u);
-  assert(!c.palette_previous);
+  assert(!wc_render(&c,&d,0,0,false,0));
+  assert((c.pixels[0]&0xffffffu)==0xff0000u);
+
 #endif
   lv_set(&r,NULL,"pattern",member,lv_num(65));assert(r.failed);
   wc_release(&c);
+  dg_init(&d,&r,(dg_platform_t){.trace=trace},NULL,NULL,0,1);
+  assert(dg_enter(&d,&movie,1,NULL,0));
+  d.color_depth=8;
+  assert(!dg_seek(&d,6) && r.failed && strstr(r.error,"indexed palette interpolation"));
   puts("Live score/puppet palette indices and per-cast mutable shape patterns passed");
 }

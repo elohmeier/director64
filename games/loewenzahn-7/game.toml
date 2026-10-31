@@ -30,7 +30,8 @@ entry_movie = "START"
 [player]
 stream_paths = true
 # The preferences file, whatever its spelling ("Löwenzahn 7.usr").
-saves = ["*.usr"]
+saves = ["*.usr", "images.cst|images", "temp.cst|temp", "library.cst|library", "tempimages.cst|tempimages", "templib.cst|templib"]
+save_slot_bytes = 16777216
 
 [convert]
 stream_prefer = "lossless"

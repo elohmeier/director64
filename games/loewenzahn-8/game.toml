@@ -41,3 +41,32 @@ handler = "getregoptimal"
 all = true
 calls = "glunew"
 body = "return serNum"
+
+# Keep the telephone introduction and its authored one-player setup, bypassing
+# the hotseat chooser when the introduction ends or the activity is restarted.
+[[convert.patch]]
+id = "single-player-telephone-intro"
+movie = "TELEFONM.DXR"
+cast = "game"
+member = 20
+handler = "exitframe"
+source_sha256 = "6611f3845b00e259e147f2fb2148df0d20d50e1ba6cdb50b829fad27665d8e48"
+prepend = '''
+if not soundBusy(4) then
+  go("1")
+  return
+end if
+'''
+
+[[convert.patch]]
+id = "single-player-telephone-restart"
+movie = "TELEFONM.DXR"
+cast = "game"
+member = 4
+handler = "doagain"
+source_sha256 = "cd46ae79dd47937c37fca5a7df8c7a9315ab11efa9f5847900a8b705dea7e89c"
+body = '''
+sound stop 3
+sound stop 4
+go("1")
+'''

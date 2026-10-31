@@ -20,6 +20,7 @@ media_root = "Willy1"
 
 [port]
 extended_d6 = true
+full_engine = true
 director_version = 600
 media_root = "Willy1"
 entry_movie = "START"
@@ -36,11 +37,11 @@ switches = ["WILLY"]
 "mulle.ico" = ""
 
 [convert]
-substitute_font = { asset = "fonts/willy-system.ttf", controller = { members = ["SavedCarName", "EnterField"], size = 24 } }
+substitute_font = { asset = "fonts/willy-system.ttf", measure = true, controller = { members = ["SavedCarName", "EnterField"], size = 24 } }
 
-# Choosing a car file on the PC: a fail-closed trap instead of the window.
+# The platform file chooser replaces the desktop's separate Choose movie.
 [[convert.patch]]
-id = "external-file-chooser-trap"
+id = "player-file-chooser-cleanup"
 movie = "06.DXR"
 member = 2
 handler = "closewindow"
@@ -57,21 +58,61 @@ doNextFrame = #activateScreen
 """
 
 [[convert.patch]]
-id = "external-file-chooser-opener-trap"
+id = "player-file-chooser"
 movie = "06.DXR"
 member = 2
 handler = "openwindow"
 source_sha256 = "b8cdef14b9e36e5fb60da419e8af19c7fc6841c965fa318a7eda2bb109224500"
-body = "open_window_trap()"
-
-# The certificate prints nowhere: a dismissible notice says so.
-[[convert.patch]]
-id = "certificate-print-notice"
-movie = "08.DXR"
-member = 38
-handler = "print"
-source_sha256 = "408f357aa657c52dfd018fbd3759b070f44a55ba66a9dbb86ae33d2677d388ac"
-body = "certificate_print_notice()"
+body = """
+global gMulleGlobals, gSound
+activateScreen(me, 0)
+set file to new(xtra("FileIO"))
+if mode = #save then
+  set path to displaySave(file, "Speichere dein Auto", defaultFileName & ".car")
+  if stringp(path) then
+    createFile(file, path)
+    openFile(file, path, 2)
+    if status(file) = 0 then
+      if slotOccupied then
+        set tempCar to getSavedCars(the user of gMulleGlobals, chosenSlot)
+      else
+        set tempCar to toList(the car of the user of gMulleGlobals)
+      end if
+      writeString(file, string(tempCar))
+      closeFile(file)
+      if status(file) <> 0 then
+        alert("Problem saving file")
+      end if
+    else
+      alert("Problem creating file")
+    end if
+  end if
+else
+  setFilterMask(file, "Cars (*.car),*.car")
+  set path to displayOpen(file)
+  if stringp(path) then
+    openFile(file, path, 1)
+    if status(file) = 0 then
+      set tempList to value(readFile(file))
+      closeFile(file)
+      if listp(tempList) then
+        if checkCar(fileObject, tempList) then
+          loadCar(me, tempList)
+        else
+          stopAllEffects(gSound)
+          play(gSound, "07d002v0", #EFFECT)
+        end if
+      else
+        alert("File corrupt")
+      end if
+    else
+      alert("Problem opening file")
+    end if
+  end if
+end if
+dispose(file)
+activateScreen(me, 1)
+"""
 
 # The new-player template ends with an unmatched bracket.
 [[convert.text_fix]]

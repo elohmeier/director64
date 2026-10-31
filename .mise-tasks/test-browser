@@ -3,6 +3,10 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 node tools/validation/browser-selftest.mjs build/validation/browser/selftest
+node tools/validation/audio-output-selftest.mjs build/validation/browser/audio-output
+node tools/validation/input-selftest.mjs build/validation/browser/input-selftest
+node tools/validation/text-selftest.mjs build/validation/browser/text-selftest
+node tools/validation/user-files-selftest.mjs build/validation/browser/user-files-selftest
 uv run --locked python - <<'PY'
 import json
 from pathlib import Path

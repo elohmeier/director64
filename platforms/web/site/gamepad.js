@@ -1,8 +1,6 @@
-// Gamepads as the runtime's controllers. Each connected pad becomes one of
-// the four ports, reported to the runtime as a controller sample (input.h
-// buttons, stick about ±80), so cursors, mouse ownership and every game's
-// controller layer behave as in the Android player. Menus and the on-screen keyboard
-// read the same pads as navigation actions instead.
+// One selected gamepad supplies the player's logical controller. Other
+// connected devices cannot move the pointer or trigger menu actions.
+// Menus and the on-screen keyboard read the same controller as navigation.
 //
 // Indices follow the Gamepad API's standard mapping, which Chrome applies to
 // a DualShock 4 or DualSense on Linux, Windows and macOS.
@@ -16,7 +14,6 @@ export const INPUT = {
   A: 1, B: 2, LEFT: 4, RIGHT: 8, UP: 16, DOWN: 32, START: 64,
   C_LEFT: 128, C_RIGHT: 256, C_UP: 512, C_DOWN: 1024,
 };
-export const PORTS = 4;
 
 const MAPPED = [
   [BUTTON.cross, INPUT.A], [BUTTON.touchpad, INPUT.A], [BUTTON.circle, INPUT.B],
@@ -82,74 +79,66 @@ export function navigation(pad) {
 }
 const DIRECTIONS = new Set(["up", "down", "left", "right"]);
 
-// Polls the pads once per animation frame for every reader. `ports` are the
-// connected pads in index order (at most four), `actions` the navigation
-// actions that began (or repeated) this frame, in port order.
+// Poll once per animation frame. Keep the selected device until it disconnects;
+// connecting another controller never transfers a held click or drag.
 export class Gamepads extends EventTarget {
   constructor(source = () => globalThis.navigator?.getGamepads?.() ?? []) {
     super();
     this.source = source;
     this.at = -1;
-    this.ports = [];
+    this.device = null;
+    this.sample = null;
     this.actions = [];
-    this.held = new Map(); // pad index -> Map(action -> when it last fired)
-    this.ignored = new Map(); // pad index -> actions to ignore until released
-    this.masked = new Map(); // pad index -> input.h buttons to ignore until released
-    this.known = new Set();
+    this.held = new Map();
+    this.ignored = new Set();
+    this.masked = 0;
   }
-  pads() {
-    return [...this.source()].filter((pad) => pad && pad.connected !== false).slice(0, PORTS);
+  selected() {
+    const devices = [...this.source()].filter((pad) => pad && pad.connected !== false && pad.mapping === "standard");
+    return devices.find((pad) => pad.index === this.device?.index) ??
+      devices.sort((a, b) => a.index - b.index)[0] ?? null;
   }
   poll(now) {
     if (now === this.at) return this;
     this.at = now;
-    const pads = this.pads();
-    const present = new Set(pads.map((pad) => pad.index));
-    for (const index of this.known)
-      if (!present.has(index)) this.dispatchEvent(new CustomEvent("disconnected", {detail: index}));
-    for (const pad of pads)
-      if (!this.known.has(pad.index)) this.dispatchEvent(new CustomEvent("connected", {detail: pad.id}));
-    this.known = present;
+    const pad = this.selected();
+    if (pad?.index !== this.device?.index) {
+      if (this.device) this.dispatchEvent(new CustomEvent("disconnected", {detail: this.device.index}));
+      this.held.clear();
+      this.ignored.clear();
+      this.masked = 0;
+      if (pad) this.dispatchEvent(new CustomEvent("connected", {detail: pad.id}));
+    }
+    this.device = pad;
     this.actions = [];
-    this.ports = pads.map((pad) => {
-      const sample = consoleSample(pad);
-      const mask = (this.masked.get(pad.index) ?? 0) & sample.buttons;
-      this.masked.set(pad.index, mask);
-      sample.buttons &= ~mask;
-      sample.active = sample.buttons !== 0 || sample.stickX !== 0 || sample.stickY !== 0;
-      const held = this.held.get(pad.index) ?? new Map();
-      const ignored = this.ignored.get(pad.index) ?? new Set();
-      for (const [action, on] of Object.entries(navigation(pad))) {
-        if (!on) {
-          held.delete(action);
-          ignored.delete(action);
-        } else if (ignored.has(action)) {
-          continue;
-        } else if (!held.has(action)) {
-          held.set(action, now);
-          this.actions.push(action);
-        } else if (DIRECTIONS.has(action) && now - held.get(action) >= REPEAT_DELAY) {
-          held.set(action, now - REPEAT_DELAY + REPEAT_EVERY);
-          this.actions.push(action);
-        }
+    this.sample = pad ? consoleSample(pad) : null;
+    if (!pad) return this;
+    this.masked &= this.sample.buttons;
+    this.sample.buttons &= ~this.masked;
+    for (const [action, on] of Object.entries(navigation(pad))) {
+      if (!on) {
+        this.held.delete(action);
+        this.ignored.delete(action);
+      } else if (this.ignored.has(action)) {
+        continue;
+      } else if (!this.held.has(action)) {
+        this.held.set(action, now);
+        this.actions.push(action);
+      } else if (DIRECTIONS.has(action) && now - this.held.get(action) >= REPEAT_DELAY) {
+        this.held.set(action, now - REPEAT_DELAY + REPEAT_EVERY);
+        this.actions.push(action);
       }
-      this.held.set(pad.index, held);
-      this.ignored.set(pad.index, ignored);
-      return sample;
-    });
+    }
     return this;
   }
-  get connected() { return this.ports.length; }
-  get active() { return this.ports.some((port) => port.active); }
-  // Whatever is held now belongs to the screen that just closed or opened:
-  // neither the game nor a menu reads it until it is released and pressed
-  // again.
+  get connected() { return this.sample !== null; }
+  get active() { return !!this.sample && (this.sample.buttons !== 0 || this.sample.stickX !== 0 || this.sample.stickY !== 0); }
+  // A menu's held buttons stay consumed until released.
   swallow() {
     this.actions = [];
-    for (const pad of this.pads()) {
-      this.masked.set(pad.index, consoleSample(pad).buttons);
-      this.ignored.set(pad.index, new Set(Object.entries(navigation(pad))
-        .filter(([, on]) => on).map(([action]) => action)));
-    }
+    const pad = this.selected();
+    this.masked = pad ? consoleSample(pad).buttons : 0;
+    this.ignored = new Set(pad ? Object.entries(navigation(pad))
+      .filter(([, on]) => on).map(([action]) => action) : []);
   }
 }

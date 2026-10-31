@@ -14,6 +14,73 @@ from director64.reference import runner as load_runner
 runner = load_runner(repository())
 
 
+@pytest.mark.parametrize("full_script", [False, True])
+def test_authored_experiments_preserve_explicit_handler_scope_and_completion(full_script):
+    statements = 'out.writeString("measured")\nout.closeFile()\n'
+    source = ("-- director64: full-script\non startup\n" + statements + "end\n"
+              if full_script else statements)
+    rendered = runner.experiment_lingo(source)
+    assert rendered.count("on startup") == 1
+    assert rendered.count("DIRECTOR64_PROBE_COMPLETE") == 1
+    assert rendered.index("DIRECTOR64_PROBE_COMPLETE") < rendered.index("out.closeFile()")
+    assert rendered.startswith("-- director64: full-script") == full_script
+
+
+def test_legacy_fileio_experiment_records_explicit_interface_and_completion():
+    body = ('-- director64: fileio-xobject\n'
+            'out = FileIO(mNew, "write", "C:\\legacy-probe.txt")\n'
+            'out(mWriteString, "measured")\nout(mDispose)\n')
+    assert runner.experiment_output(body) == ("legacy-probe.txt", "xobject")
+    rendered = runner.experiment_lingo(body)
+    assert 'out(mWriteString, "DIRECTOR64_PROBE_COMPLETE" & RETURN)' in rendered
+    assert rendered.index("DIRECTOR64_PROBE_COMPLETE") < rendered.index("out(mDispose)")
+    assert "out.closeFile" not in rendered
+    with pytest.raises(ValueError, match="write and close"):
+        runner.experiment_output(body.replace('-- director64: fileio-xobject', '-- absent'))
+    with pytest.raises(ValueError, match="write and close"):
+        runner.experiment_output(body.replace('C:\\legacy-probe.txt', 'C:\\..\\escape.txt'))
+
+
+def test_xtra_fileio_experiment_keeps_existing_result_contract():
+    source = 'out.createFile("C:\\probe.txt")\nout.closeFile()\n'
+    assert runner.experiment_output(source) == ("probe.txt", "xtra")
+
+
+def test_director_six_fileio_function_notation_is_explicit_and_closed():
+    body = ('-- director64: fileio-functions\n'
+            'createFile(out, "C:\\function-probe.txt")\ncloseFile(out)\n')
+    assert runner.experiment_output(body) == ("function-probe.txt", "xtra-functions")
+    rendered = runner.experiment_lingo(body)
+    assert 'writeString(out, "DIRECTOR64_PROBE_COMPLETE" & RETURN)' in rendered
+    assert rendered.index("DIRECTOR64_PROBE_COMPLETE") < rendered.index("closeFile(out)")
+
+
+def test_embedded_d5_d6_engines_are_retained_without_playback_dlls():
+    assert runner.playback_process(
+        "00400000-00500000 r-xp /session/wine/drive_c/Original/STARTW95.EXE")
+    assert runner.playback_process(
+        "00400000-00500000 r-xp /session/wine/drive_c/Original/MEDIA/WIN95.EXE")
+    assert runner.playback_process("10000000-10500000 r-xp /temp/DIRAPI.DLL")
+    assert not runner.playback_process("70000000-70500000 r-xp /usr/lib/wine/wineboot.exe")
+
+
+@pytest.mark.parametrize("value", [None, True, 0, 15, 1025, "256", 256.0])
+def test_legacy_memory_report_rejects_unbounded_or_ambiguous_values(value):
+    with pytest.raises(ValueError, match="16..1024"):
+        runner.legacy_meminfo(value)
+
+
+def test_legacy_memory_report_is_explicit_and_does_not_alter_game_files(tmp_path):
+    before = bytes(synthetic_pe32())
+    path = tmp_path / "synthetic.exe"
+    path.write_bytes(before)
+    report = runner.legacy_meminfo(256)
+    assert "MemTotal: 262144 kB\n" in report
+    assert "MemFree: 131072 kB\n" in report
+    assert "SwapTotal: 262144 kB\n" in report
+    assert path.read_bytes() == before
+
+
 PE = 0x80
 COFF = PE + 4
 OPTIONAL = COFF + 20

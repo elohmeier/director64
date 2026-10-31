@@ -339,11 +339,9 @@ static bool d5_call(dg_runtime_t *d, const char *name, unsigned argc,
     play_member(d, (unsigned)channel - 1, sound);
     return true;
   }
-  if ((ln == LN_PUPPETTRANSITION) && (argc == 1 || argc == 4)) {
-    d->transition_type = (unsigned)lv_integer(r, a[0]);
-    d->transition_serial++;
-    return true;
-  }
+  if (ln == LN_PUPPETTRANSITION)
+    return puppet_transition(d, argc, a);
+
   if (((ln == LN_LABEL) || (ln == LN_MARKER)) && argc == 1) {
     unsigned frame = 0;
     if (lv_type(a[0]) == LV_STRING || lv_type(a[0]) == LV_SYMBOL) {

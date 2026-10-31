@@ -19,6 +19,7 @@ function probe(commands, options = [], bootError = false, {measure = false, stri
           _d64_probe_render: enabled => { renderTicks = !!enabled; },
           UTF8ToString: value => value, _d64_error: () => error,
           _d64_script_errors: () => alerts, _d64_last_script_error: () => "recovered script error",
+          _d64_user_request_kind: () => 0,
           _d64_render: () => {
             process.stderr.write("render\\n");
             if (!host.text("text", 10, 10, null)) throw new Error("missing text rasterizer");

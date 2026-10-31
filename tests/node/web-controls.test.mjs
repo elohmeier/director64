@@ -46,28 +46,46 @@ test("navigation fires on press, repeats when held and ignores what was swallowe
   gamepads.poll(600);
   gamepads.swallow();
   assert.deepEqual(gamepads.poll(616).actions, []);
-  assert.equal(gamepads.ports[0].buttons, 0);
+  assert.equal(gamepads.sample.buttons, 0);
   pads = [pad()];
   gamepads.poll(632);
   pads = [pad({pressed: [BUTTON.cross]})];
   assert.deepEqual(gamepads.poll(648).actions, ["accept"]);
-  assert.equal(gamepads.ports[0].buttons, INPUT.A);
+  assert.equal(gamepads.sample.buttons, INPUT.A);
 });
 
-test("pads take ports in order and report connection changes", () => {
-  let pads = [null, pad({index: 1}), pad({index: 3, axes: [1, 0, 0, 0]})];
+test("one selected controller ignores extra devices until disconnect", () => {
+  let pads = [null, pad({index: 1}), pad({index: 3, pressed: [BUTTON.cross], axes: [1, 0, 0, 0]})];
   const gamepads = new Gamepads(() => pads);
   const events = [];
   gamepads.addEventListener("connected", () => events.push("connected"));
   gamepads.addEventListener("disconnected", () => events.push("disconnected"));
   gamepads.poll(0);
-  assert.equal(gamepads.connected, 2);
-  assert.ok(gamepads.active);
-  assert.equal(gamepads.ports[1].stickX, 80);
-  pads = [null, pad({index: 1})];
-  gamepads.poll(16);
-  assert.deepEqual(events, ["connected", "connected", "disconnected"]);
-  assert.ok(!gamepads.active);
+  assert.equal(gamepads.connected, true);
+  assert.equal(gamepads.active, false);
+  assert.equal(gamepads.sample.stickX, 0);
+  assert.deepEqual(gamepads.actions, []);
+  // Even a lower-index device cannot take over the selected controller.
+  pads.unshift(pad({index: 0, pressed: [BUTTON.down]}));
+  assert.deepEqual(gamepads.poll(16).actions, []);
+  assert.equal(gamepads.device.index, 1);
+  pads = [pad({index: 3, pressed: [BUTTON.cross], axes: [1, 0, 0, 0]})];
+  assert.deepEqual(gamepads.poll(32).actions, ["right", "accept"]);
+  assert.equal(gamepads.sample.stickX, 80);
+  assert.deepEqual(events, ["connected", "disconnected", "connected"]);
+  pads = [];
+  gamepads.poll(48);
+  assert.equal(gamepads.sample, null);
+  assert.equal(gamepads.active, false);
+  assert.equal(gamepads.connected, false);
+  assert.deepEqual(events, ["connected", "disconnected", "connected", "disconnected"]);
+});
+
+test("unmapped gamepads cannot generate guessed controller actions", () => {
+  const device = {...pad({pressed: [BUTTON.cross]}), mapping: ""};
+  const gamepads = new Gamepads(() => [device]);
+  assert.equal(gamepads.poll(0).connected, false);
+  assert.deepEqual(gamepads.actions, []);
 });
 
 test("the on-screen keyboard's rows are whole and moves keep the column", () => {

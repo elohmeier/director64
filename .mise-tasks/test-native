@@ -45,12 +45,16 @@ for profile in 5 6 6e 7 8 10 85; do
     if [ "$profile" = 85 ]; then version=10; options+=(-DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1); fi
     compile "lingo_numeric_d$profile" "${options[@]}" -DDIRECTOR64_DIRECTOR_VERSION="$version" \
         tests/native/test_lingo_numeric.c runtime/lingo/lingo_runtime.c
+    compile "lingo_encoding_d$profile" "${options[@]}" -DDIRECTOR64_DIRECTOR_VERSION="$version" \
+        tests/native/test_lingo_encoding.c runtime/lingo/lingo_runtime.c
 done
 compile xml_optional_alias_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 \
     tests/native/test_xml_optional_alias.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile audio_release tests/native/test_audio_release.c
 compile packed_asset tests/native/test_packed_asset.c platforms/web/packed_asset.c -lz
 compile stream_path tests/native/test_stream_path.c
+compile cursor_resource -Iplatforms/web tests/native/test_cursor_resource.c
+compile json_text -Iplatforms/web tests/native/test_json_text.c
 compile android_decode -Itests/native/android_stubs tests/native/test_android_decode.c
 compile android_input tests/native/test_android_input.c
 for profile in d10 d85; do
@@ -87,10 +91,23 @@ compile lingo_collect tests/native/test_lingo_collect.c runtime/lingo/lingo_runt
 compile lingo_collect_extended_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_lingo_collect.c runtime/lingo/lingo_runtime.c
 compile saves -Iruntime -Itests/native/saves_profile tests/native/test_saves.c runtime/storage/saves.c
 compile scoped_saves -Iruntime -Itests/native/scoped_saves_profile tests/native/test_scoped_saves.c runtime/storage/saves.c
+compile large_saves -Iruntime -Itests/native/large_saves_profile tests/native/test_large_saves.c runtime/storage/saves.c
 for test in director director_timing director_state; do
     compile "$test" "tests/native/test_$test.c" runtime/director/director.c runtime/lingo/lingo_runtime.c
 done
-compile pointer tests/native/test_pointer.c runtime/interaction/{pointer,input}.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+for stage in 0 1; do
+    compile "input_$stage" -DDIRECTOR64_NATIVE_STAGE="$stage" tests/native/test_input.c runtime/interaction/input.c
+done
+for profile in 6 10 85; do
+    options=(-DDIRECTOR64_EXTENDED_D6=1)
+    version="$profile"
+    if [ "$profile" = 85 ]; then version=10; options+=(-DDIRECTOR64_D85=1); fi
+    compile "web_input_$profile" "${options[@]}" -DDIRECTOR64_DIRECTOR_VERSION="$version" \
+        -Iruntime -Iruntime/package -Iplatforms/web -Itests/native/input_profile \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        tests/native/test_web_input.c runtime/interaction/input.c \
+        runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
 compile director_d8 -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_director_d8.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 for profile in 5 6 8 10 85; do
     options=()
@@ -119,6 +136,9 @@ for version in 5 6 8; do
     compile "cursor_d$version" -DDIRECTOR64_DIRECTOR_VERSION="$version" tests/native/test_cursor.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 done
 compile cursor_extended_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_cursor.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile web_cursor_resource -DDIRECTOR64_DIRECTOR_VERSION=5 -DDIRECTOR64_SOURCE_CURSOR_MASK=12u \
+    -Iplatforms/web tests/native/test_web_cursor_resource.c platforms/web/compositor.c \
+    runtime/director/director.c runtime/director/shape.c runtime/lingo/lingo_runtime.c
 for profile in 5 6 6e 7 8 10 85; do
     version="$profile"
     options=()
@@ -133,6 +153,61 @@ compile director_d8_events -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_dir
 compile director_d8_controls -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_director_d8_controls.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile mucklas_controls -DDIRECTOR64_DIRECTOR_VERSION=8 -Igames/findus-mucklas/runtime games/findus-mucklas/tests/test_controls.c games/findus-mucklas/runtime/controls.c runtime/interaction/input.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile director_text -DDIRECTOR64_DIRECTOR_VERSION=8 tests/native/test_director_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile text_boxes -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 \
+    -Iplatforms/web tests/native/test_text_boxes.c platforms/web/compositor.c \
+    runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+compile classic_text -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 \
+    -Iplatforms/web tests/native/test_classic_text.c platforms/web/compositor.c \
+    runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+compile text_selection -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 \
+    -Iplatforms/web tests/native/test_text_selection.c platforms/web/compositor.c \
+    runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+compile button_render -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 \
+    -Iplatforms/web tests/native/test_button_render.c platforms/web/compositor.c \
+    runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+for profile in 10 85; do
+    options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$profile" = 85 ]; then options+=(-DDIRECTOR64_D85=1); fi
+    compile "vector_style_d$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_vector_style.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+done
+for profile in 6 85; do
+    options=(-DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$profile" = 85 ]; then options+=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_D85=1); fi
+    compile "text_limit_d$profile" "${options[@]}" tests/native/test_text_limit.c \
+        runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
+for profile in d10 d85; do
+    options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$profile" = d85 ]; then options+=(-DDIRECTOR64_D85=1); fi
+    compile "text_chrome_$profile" "${options[@]}" -Iplatforms/web tests/native/test_text_chrome.c \
+        platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+done
+for profile in 6 85; do
+    options=(-DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$profile" = 85 ]; then options+=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_D85=1); fi
+    compile "text_positions_d$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_text_positions.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+done
+for profile in 7 85; do
+    options=(-DDIRECTOR64_DIRECTOR_VERSION="$profile" -DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$profile" = 85 ]; then options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1); fi
+    compile "formatted_text_d$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_formatted_text.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+done
+for profile in 10 85; do
+    options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$profile" = 85 ]; then options+=(-DDIRECTOR64_D85=1); fi
+    compile "text_ranges_d$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_text_ranges.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+done
+compile member_loaded -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 \
+    -Iplatforms/web tests/native/test_member_loaded.c platforms/web/compositor.c \
+    runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
 compile shape tests/native/test_shape.c runtime/director/shape.c
 compile bitmap_tiles tests/native/test_bitmap_tiles.c
 compile image_alpha tests/native/test_image_alpha.c
@@ -161,7 +236,20 @@ compile film_sounds_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D
 compile film_sounds_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_film_sounds.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile linked_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_linked_movies.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile linked_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_linked_movies.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+for window_profile in d10 d85; do
+    options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$window_profile" = d85 ]; then options+=(-DDIRECTOR64_D85=1); fi
+    compile "windows_$window_profile" "${options[@]}" -Iplatforms/web tests/native/test_windows.c \
+        platforms/web/compositor.c runtime/director/shape.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
 compile keyboard_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_keyboard.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+for button_profile in 6 10 85; do
+    options=(-DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$button_profile" = 85 ]; then options+=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_D85=1);
+    else options+=(-DDIRECTOR64_DIRECTOR_VERSION="$button_profile"); fi
+    compile "buttons_$button_profile" "${options[@]}" tests/native/test_buttons.c \
+        runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
 compile keyboard_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_keyboard.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile imaging_d10 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_imaging.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile imaging_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_imaging.c runtime/director/director.c runtime/lingo/lingo_runtime.c
@@ -174,6 +262,14 @@ compile flash_audio_hosts -Iplatforms/web -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIR
 # The D7/D10 lenient absent-cursor path conflicts with test_cursor's strict
 # D5/D6/D8 contract; test_director_d10.c covers the versioned behavior instead.
 compile director_d10_frame_events -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_frame_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+for profile in 5 6 7 8 10 85; do
+    options=(-DDIRECTOR64_DIRECTOR_VERSION="$profile")
+    if [ "$profile" = 6 ] || [ "$profile" = 7 ] || [ "$profile" = 8 ] || [ "$profile" = 10 ]; then options+=(-DDIRECTOR64_EXTENDED_D6=1); fi
+    if [ "$profile" = 85 ]; then options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1); fi
+    compile "transitions_d$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_transitions.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+done
 compile web_compositor -Iplatforms/web tests/native/test_web_compositor.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
 compile d7_blend_matte -DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1 \
     -DDIRECTOR64_FULL_ENGINE=1 -DDIRECTOR64_NATIVE_STAGE=1 -Iplatforms/web \
@@ -244,4 +340,19 @@ for profile in d10 d85; do
         runtime/director/director.c runtime/lingo/lingo_runtime.c
 done
 compile package -Iruntime/package tests/native/test_package.c runtime/package/package.c
+compile cast_images -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_D85=1 \
+    -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_SAVE_SLOT_BYTES=16777216 \
+    tests/native/test_cast_images.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+for profile in 6 85; do
+    options=(-DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$profile" = 6 ]; then
+        options+=(-DDIRECTOR64_DIRECTOR_VERSION=6 -DDIRECTOR64_FULL_ENGINE=1)
+    else
+        options+=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_D85=1)
+    fi
+    for feature in user_files user_images fileio_bytes; do
+        compile "${feature}_d$profile" "${options[@]}" "tests/native/test_$feature.c" \
+            runtime/director/director.c runtime/lingo/lingo_runtime.c
+    done
+done
 

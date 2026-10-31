@@ -1,0 +1,29 @@
+-- Synthetic zero/small point sizes in original8.5, without source artwork.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\text-zero-size.txt")
+out.openFile("C:\text-zero-size.txt",2)
+w=window("director64-probe")
+w.fileName=the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+tell w
+ repeat with size in [12,0,1]
+  t=new(#text)
+  t.width=100
+  t.font="Arial"
+  t.text="ABCD"
+  t.fontSize=size
+  a=t.image.extractAlpha()
+  total=0
+  repeat with y=0 to a.height-1
+   repeat with x=0 to a.width-1
+    total=total+a.getPixel(point(x,y),#integer)
+   end repeat
+  end repeat
+  out.writeString(string([#member,size,t.fontSize,t.rect,charPosToLoc(t,2),total]) & RETURN)
+ end repeat
+ t.fontSize=12
+ t.char[2..3].fontSize=0
+ out.writeString(string([#range,t.fontSize,t.char[2].fontSize,t.rect,charPosToLoc(t,2),charPosToLoc(t,3),charPosToLoc(t,4)]) & RETURN)
+end tell
+out.closeFile()

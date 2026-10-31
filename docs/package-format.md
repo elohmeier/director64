@@ -220,3 +220,83 @@ specification; omitted groups keep their previous value. Channels and key
 frames strictly increase, and the loader requires exact byte consumption.
 Script, tempo, delay and behavior fields stay zero for film children. Native
 tracks and expanded Flash frames cannot coexist on one member.
+
+Optional `VECT` records retain editable straight vector polygons without
+changing the `MOVI` layout. The section begins with a u32 record count. Each
+record stores member ID u32, vertex count u16 (2..1024), flags u8 (fill 1,
+closed 2), reserved zero u8, stroke width f64 (0..255), stroke RGB u32 and fill
+RGB u32 (each 0xRRGGBB), followed by horizontal/vertical f64 pairs. Coordinates
+must be finite and within +/-65535. Missing, repeated or non-vector member IDs
+are rejected. Valid empty editor templates, compound paths separated by
+`[#newCurve]`, and Bezier vertices with `handle1`/`handle2` retain their original
+static SWF raster rather than an invented editable polygon. A package without
+this section retains its static raster artwork;
+attempting a live vertex edit without retained metadata fails explicitly.
+
+The optional `TRAN` section preserves transition cast descriptors without
+changing `MOVI`: u32 count, then count × (u32 member id; u16 duration in
+milliseconds; u8 effect number, chunk size, changed-area flag; three zero
+reserved bytes). The area flag is the inverse of bit 0 in the source flags.
+The loader rejects missing/non-transition identities, duplicate descriptors,
+effects above 52, invalid area flags and trailing bytes. A used transition
+member without its converted descriptor fails with an actionable diagnostic.
+
+For native CASt button members (type7), the existing `MOVI` shape field carries
+1 push button, 2 checkbox or 3 radio button, and filled carries the initial
+checked boolean. Shape zero retains the descriptor-absent legacy field behavior.
+The converter reads the BE16 button kind following the 28-byte classic text
+descriptor; checked state starts false, as corroborated with original10.1 native
+buttons. These fields keep their existing meanings on other member types. The
+loader rejects button kinds above3 and checked values above1; no layout or Xtra
+identity changes are involved.
+
+The optional `RICH` section preserves text formatting alongside the existing
+single-style `MOVI` field descriptor. It starts with u32 member count. Each
+member has u32 id, u16 run count, u16 reserved zero, followed by that many
+16-byte runs:
+
+```
+u32 UTF-16 code-unit offset
+u8  font id, point size, face flags, alignment
+i16 ascent, line height
+u32 RGB color (0xRRGGBB)
+```
+
+Face flags are bold 1, italic 2, underline 4 and strikeout 8. Alignment is left 0,
+center 1, right 2 or full justification 3. Full justification pads interword
+spaces on wrapped rows and leaves the paragraph's final row left aligned.
+A nonempty table starts at offset zero, strictly increases,
+and has at most 4096 runs. Offsets may reach the end of the text, measured in
+UTF-16 units to match the browser and Android text APIs. Size zero preserves the
+stored Director value and renders Paige's default 12-point glyphs; font assets
+and measurements use that effective size. Line height is nonnegative. The loader
+independently checks identities, supported text member type (3 or 7), counts,
+reserved bits, ordering, ranges and trailing bytes. Director 5 accepts an empty
+`RICH` section and rejects nonempty run data.
+Missing `RICH` retains the existing single-style rendering contract. `VECT`
+and `TRAN` retain their previous layouts and ordering independence.
+
+The optional `RSPC` section preserves nonzero authored character spacing without
+changing the 16-byte `RICH` runs. A u32 count is followed by 12-byte records:
+u32 member ID, u32 UTF-16 run offset, i16 pixel spacing, and u16 reserved zero.
+Each record must target an existing `RICH` run exactly once. Zero spacing,
+missing targets, duplicate targets, nonzero reserved words and trailing bytes
+are rejected; absence retains zero spacing. Paige's signed 16.16 `characterExtra`
+is accepted only when it represents an integral pixel value within i16 range;
+other source values fail conversion with member and run context.
+
+The optional `TBOX` section retains classic CASt field/button presentation
+without changing `MOVI` or `RICH`. It starts with u32 count and count × 12-byte
+records: u32 member ID; u8 box type (1 adjust, 2 fixed, 3 scroll, 4 limit), margin,
+border, box shadow, word-wrap boolean; then three bytes of RGB background.
+Fields and buttons are the only valid targets. The loader checks profile
+support, identities, duplicate targets, type/boolean ranges and exact extent.
+Absent metadata retains the runtime's established defaults. Source recovery
+uses the actual CASt bytes; Paige paragraph indents are separate formatting
+and are not guessed as field margins.
+
+Native button members (type 7) use the existing type-specific `shape` slot for
+control kind: 1 push button, 2 checkbox, 3 radio button. `filled` stores the
+initial checked state (0 or 1). Shape zero retains the legacy field contract.
+The source kind is the big-endian u16 after the 28-byte classic text descriptor;
+recovery validates all three kinds. This adds no section or member-layout bytes.

@@ -1,6 +1,7 @@
 #include "package.h"
 #include "lingo_bytecode.h"
 #include "film_track.h"
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -500,6 +501,8 @@ static bool load_scene(loader_t *l, dg_movie_t *movie, unsigned movies) {
     m->shape = u16(r);
     m->pattern = u16(r);
     m->filled = u8(r);
+    if(m->type==7 && (m->shape>3 || (m->shape && m->filled>1)))
+      return fail(r,"invalid native button kind or checked state");
     m->line_width = u8(r);
     m->looping = u8(r);
     m->film_count = u16(r);
@@ -870,8 +873,15 @@ typedef struct {
   uint32_t offset, length;
   bool present;
 } section_t;
-enum { META, STRS, CODE, SYMB, GLOB, MOVI, SECTIONS };
-static const char tags[SECTIONS][5] = {"META", "STRS", "CODE", "SYMB", "GLOB", "MOVI"};
+#if DG_D10
+#include "vectors.inc"
+#endif
+#include "transitions.inc"
+#include "rich.inc"
+#include "spacing.inc"
+#include "text_boxes.inc"
+enum { META, STRS, CODE, SYMB, GLOB, MOVI, VECT, TRAN, RICH, RSPC, TBOX, SECTIONS };
+static const char tags[SECTIONS][5] = {"META", "STRS", "CODE", "SYMB", "GLOB", "MOVI", "VECT", "TRAN", "RICH", "RSPC", "TBOX"};
 
 bool dg_package_load(dg_package_t *p, const uint8_t *data, size_t length,
                      const uint8_t abi[DG_PACKAGE_ABI_BYTES], char *error,
@@ -913,7 +923,7 @@ bool dg_package_load(dg_package_t *p, const uint8_t *data, size_t length,
         table[k] = (section_t){offset, size, true};
       }
   }
-  for (unsigned k = 0; k < SECTIONS; k++)
+  for (unsigned k = 0; k <= MOVI; k++)
     if (!table[k].present)
       return fail(&header, "section %s missing", tags[k]);
   p->bytes = malloc(length);
@@ -976,6 +986,33 @@ bool dg_package_load(dg_package_t *p, const uint8_t *data, size_t length,
     }
     if (!body.failed && body.at != body.length)
       fail(&body, "trailing bytes after the last movie");
+  }
+#if DG_D10
+  if (!body.failed && table[VECT].present) {
+    body = (reader_t){bytes + table[VECT].offset, table[VECT].length, 0, false,
+                      error, error_size};
+    load_vectors(&l);
+  }
+#endif
+  if (!body.failed && table[TRAN].present) {
+    body = (reader_t){bytes + table[TRAN].offset, table[TRAN].length, 0, false,
+                      error, error_size};
+    load_transitions(&l);
+  }
+  if (!body.failed && table[RICH].present) {
+    body = (reader_t){bytes + table[RICH].offset, table[RICH].length, 0, false,
+                      error, error_size};
+    load_rich(&l);
+  }
+  if (!body.failed && table[RSPC].present) {
+    body = (reader_t){bytes + table[RSPC].offset, table[RSPC].length, 0, false,
+                      error, error_size};
+    load_spacing(&l);
+  }
+  if (!body.failed && table[TBOX].present) {
+    body = (reader_t){bytes + table[TBOX].offset, table[TBOX].length, 0, false,
+                      error, error_size};
+    load_text_boxes(&l);
   }
   if (body.failed) {
     dg_package_free(p);

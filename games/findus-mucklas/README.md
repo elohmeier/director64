@@ -12,13 +12,17 @@ uv run --locked director64 journey --game findus-mucklas full_regressions
 ```
 
 Clicking the player-name field opens the keyboard and sends every key to the
-game's own handlers. In the KR and KB races the first two pads steer
-directly and the right stick gives arrow keys (`runtime/controls.c`, switch
-`MUCKLAS`).
+game's own handlers. KR's single human driver uses the pointer or the
+controller's arrow-key steering (`runtime/controls.c`, switch `MUCKLAS`).
+The ball game retains its mouse-controlled player and computer opponents.
 `[player]` lists the six player files and settings, and installs
 `pettson3.ini` with the VI attic activity (absent from this disc) disabled.
 
 `[convert]` fixes BR's two `getAt` calls on a property list to `getaProp`.
+Source-pinned patches hide the race and battleship human-opponent controls,
+remove their rectangle hit targets, and block the ball game's hidden Shift+2
+shortcut. The original single-player rules and AI remain in use; saved player
+profiles and historical scores are preserved.
 
-Known gaps: full completion of every activity, second-player playthroughs
-and double-click behavior are untested.
+Known gaps: full completion of every activity and double-click behavior are
+untested.

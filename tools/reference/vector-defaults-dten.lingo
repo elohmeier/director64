@@ -1,0 +1,19 @@
+-- Default Director10.1 vectorShape construction, without authored artwork.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\vector-defaults-dten.txt")
+out.openFile("C:\vector-defaults-dten.txt",2)
+out.writeString(string([#version,the productVersion]) & RETURN)
+w=window().new("director64-vector-defaults")
+w.fileName=the applicationPath & "data\TEST2CB1.DXR"
+w.open()
+tell w
+ t=new(#vectorShape)
+ out.writeString(string([#created,t.type]) & RETURN)
+ out.writeString(string([#vertexList,t.vertexList]) & RETURN)
+ out.writeString(string([#rect,t.rect]) & RETURN)
+ out.writeString(string([#strokeWidth,t.strokeWidth]) & RETURN)
+ out.writeString(string([#fillColor,t.fillColor]) & RETURN)
+ out.writeString(string([#closed,t.closed]) & RETURN)
+end tell
+out.closeFile()

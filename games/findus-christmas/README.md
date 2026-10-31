@@ -12,13 +12,13 @@ uv run --locked director64 journey --game findus-christmas
 Click a door to open it, then again to enter; the buttons at the bottom of
 each activity restart it or return to the calendar. `[player]` fixes the
 date to Christmas Eve 2000 so every door is open, and saves `ByggFil.txt`.
-Text uses a Droid Sans substitute (`[convert] substitute_font`).
+Text uses a Droid Sans substitute (`[convert] substitute_font`), preserving
+source character sizes, faces, colors and formatting runs.
 
 The journey (`host/full_journey.py`) enters all 24 doors and returns.
 
-Known gaps:
-
-- Mixed fonts in a text member use the first run's font.
-- Day 13's missing cursor members keep the current cursor; day 23's missing
-  sound plays silence.
-- Puppet square transitions are timed reveals while the score continues.
+Square transitions now block the score and Lingo until the reveal completes;
+audio continues, and a skip click is consumed. Source-absent cursor members on
+day 13 retain the current cursor, and the absent day 23 sound remains silent.
+These source cases have no invented replacement media. Completion of every
+activity and original-player visual parity remain unverified.

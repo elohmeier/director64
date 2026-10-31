@@ -6,6 +6,37 @@ static void state(void) {
   printf(",\"window\":"); quoted(director.window_movie ? director.window_movie->code->name : director.window_movie_name);
   printf(",\"window_visible\":%s,\"error\":", director.window_visible ? "true":"false");
   quoted(values.failed ? values.error : "");
+  printf(",\"window_frame\":%u,\"window_tick\":%u,\"window_fields\":[",
+      director.window_runtime ? director.window_runtime->frame : 0,
+      director.window_runtime ? director.window_runtime->ticks : 0);
+  int window_mouse_line=-1;unsigned window_mouse_hit=0;
+  dg_runtime_t *window=dg_window_begin(&director);
+  if(window) {
+    for(unsigned i=0;i<window->field_count;i++) {
+      if(i)putchar(',');
+      printf("{\"member\":%u,\"text\":",window->field_members[i]);
+      quoted(lv_cstr(&values,lv_get(&values,NULL,"text",lv_make(LV_MEMBER,(int32_t)window->field_members[i]))));
+      putchar('}');
+    }
+    printf("],\"window_editable\":[");bool first=true;
+    for(unsigned i=1;i<DG_SPRITES;i++) {
+      if(!window->sprites[i].value.type || !window->sprites[i].visible || !dg_text_editable(window,i))continue;
+      int l,t,r,b;dg_bounds(window,i,&l,&t,&r,&b);
+      if(!first)putchar(',');first=false;
+      printf("{\"id\":%u,\"bounds\":[%d,%d,%d,%d]}",DG_WINDOW_SPRITE|i,
+          l+director.window_rect[0],t+director.window_rect[1],r+director.window_rect[0],b+director.window_rect[1]);
+    }
+    window_mouse_line=lv_integer(&values,lv_get(&values,NULL,"mouseline",(lv_t){0}));
+    window_mouse_hit=dg_mouse_hit(window,window->mouse_x,window->mouse_y);
+    dg_window_end(&director);
+  }
+  putchar(']');
+  unsigned window_sprites=0;
+  if(director.window_runtime)
+    for(unsigned i=1;i<DG_SPRITES;i++)
+      window_sprites+=director.window_runtime->sprites[i].value.type && director.window_runtime->sprites[i].visible;
+  printf(",\"window_sprites\":%u",window_sprites);
+  printf(",\"window_mouse_line\":%d,\"window_mouse_hit\":%u",window_mouse_line,window_mouse_hit);
   printf(",\"frame_script\":%u,\"event_sprite\":%u",director.score[0].script,director.current_event_sprite);
   printf(",\"script_errors\":%u,\"last_script_error\":", values.script_error_count);
   quoted(values.last_script_error); printf(",\"stack\":[");

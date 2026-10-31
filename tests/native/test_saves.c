@@ -46,6 +46,8 @@ int main(void) {
   // Read-only files answer what the installation had.
   assert(game_read_file("Projector.INI", text, sizeof(text), &n) && n == 12);
   assert(game_read_file("mulle.ico", text, sizeof(text), &n) && n == 0);
+  assert(game_file_exists("Projector.INI") && game_file_exists("mulle.ico"));
+  assert(!game_file_exists("not-registered.exe"));
   assert(!game_write_file("pf3.ini", "x", 1));
   assert(!strcmp(game_nth_file(NULL, "C:\\P3MEDIA\\", 1), "intro.dxr"));
   assert(!strcmp(game_nth_file(NULL, "C:\\SAVES", 2), "b.p3"));

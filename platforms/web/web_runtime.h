@@ -5,8 +5,11 @@
 #include "compositor.h"
 #include "flash_runtime.h"
 
-// The 128 KiB save image; every adapter's archive is laid out in it.
-#define WEB_FLASH_BYTES (128u * 1024u)
+// Two atomic save generations; capacity is selected by this game's profile.
+#ifndef DIRECTOR64_SAVE_SLOT_BYTES
+#define DIRECTOR64_SAVE_SLOT_BYTES 65536u
+#endif
+#define WEB_FLASH_BYTES (2u * DIRECTOR64_SAVE_SLOT_BYTES)
 // Decoded images the compositor keeps, as RGBA8888. A browser tab can afford
 // every scene's working set; a smaller device's build sets its own.
 #ifndef WEB_IMAGE_BUDGET
@@ -24,6 +27,10 @@ typedef struct {
   // Each character's box in the text box `text` set (wc_host_t.layout).
   int (*layout)(void *ctx, const char *utf8, int width, int height,
                 const wc_text_style_t *style, int16_t *boxes, int max_chars);
+#if DG_MODERN
+  bool (*rich_text)(void *,const char *,int,int,const dg_text_format_t *,unsigned,uint32_t *);
+  int (*rich_layout)(void *,const char *,int,int,const dg_text_format_t *,unsigned,int16_t *,int);
+#endif
   // Start (asset non-NULL) or stop a channel.
   void (*sound)(void *ctx, unsigned channel, const char *asset, bool looping,
                 uint32_t loop_start, uint32_t loop_end);
@@ -68,4 +75,17 @@ void web_runtime_host(web_host_t);
 void d64_shutdown(void);
 // Engine event slots available to a single-owner input producer.
 unsigned d64_key_capacity(void);
+// Modal player-file operations. The engine thread owns these entry points;
+// asynchronous hosts queue replies back to that thread.
+unsigned d64_user_request_id(void);
+unsigned d64_user_request_kind(void); // 1 open, 2 choose save destination, 3 write, 4 print
+const char *d64_user_title(void);
+const char *d64_user_name(void);
+const char *d64_user_filter(void);
+const uint8_t *d64_user_data(void);
+unsigned d64_user_size(void);
+int d64_user_reply(unsigned id, const char *name, const uint8_t *data, unsigned size,
+                    const uint32_t *pixels, unsigned width, unsigned height);
+int d64_user_cancel(unsigned id);
+int d64_user_complete(unsigned id, int success);
 #endif

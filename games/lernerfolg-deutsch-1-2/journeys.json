@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
   "journeys": [
-    {"name": "full_journey", "legacy": "full_journey", "description": "Enter a player name, choose class, visit a room and select a laid-out Flash exercise answer.", "covers": ["startup", "profiles", "save", "navigation", "activity", "flash-text", "answer-selection"]}
+    {"name": "full_journey", "legacy": "full_journey", "description": "Enter a player name, choose class, visit a room, select a Flash answer, open controller statistics and use its task selector to complete TEST2CB1 field layout.", "covers": ["startup", "profiles", "save", "navigation", "activity", "flash-text", "answer-selection", "controller-window", "keyboard-shortcut", "controller-task-selector", "native-text-layout", "vector-layout"]}
   ]
 }

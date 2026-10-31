@@ -8,6 +8,7 @@ import itertools
 import json
 import os
 import re
+import struct
 import subprocess
 from pathlib import Path, PurePosixPath
 
@@ -94,6 +95,30 @@ def compatibility_plan(value: dict) -> dict:
     return value
 
 
+def pe32_gui_launcher(path: Path) -> bool:
+    """Recognize the bounded headers of an original x86 GUI executable."""
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        dos = handle.read(64)
+        if len(dos) != 64 or dos[:2] != b"MZ":
+            return False
+        offset = struct.unpack_from("<I", dos, 60)[0]
+        if not 64 <= offset <= min(1048576, size - 24):
+            return False
+        handle.seek(offset)
+        header = handle.read(24)
+        machine, sections = struct.unpack_from("<HH", header, 4)
+        optional_size, flags = struct.unpack_from("<HH", header, 20)
+        if (header[:4] != b"PE\0\0" or machine != 0x14c or not 1 <= sections <= 96
+                or not flags & 2 or flags & 0x2000 or not 70 <= optional_size <= 4096
+                or optional_size + sections * 40 > size - offset - 24):
+            return False
+        optional = handle.read(optional_size)
+        return (struct.unpack_from("<H", optional)[0] == 0x10b
+                and struct.unpack_from("<I", optional, 16)[0] != 0
+                and struct.unpack_from("<H", optional, 68)[0] == 2)
+
+
 def layout_for(game, source: Path, *, iso: Path | None = None,
                windows_version: str = "win95", inventory: dict | None = None,
                unmodified: bool = False) -> dict:
@@ -111,14 +136,26 @@ def layout_for(game, source: Path, *, iso: Path | None = None,
     if recipe is not None:
         required = {"schema_version", "source_sha256", "launcher", "cwd"}
         if (not isinstance(recipe, dict) or not required <= set(recipe)
-                or set(recipe) - required - {"optical_drive", "compatibility"}
+                or set(recipe) - required - {"optical_drive", "compatibility", "memory_report_mib",
+                                            "launcher_sha256"}
                 or recipe["schema_version"] != 1
                 or recipe["source_sha256"] != game.source["sha256"]):
             raise ValueError("original reference layout must match the selected source")
         root = relative(recipe["cwd"])
         launcher = source / relative(recipe["launcher"])
-        if not launcher.is_file() or launcher.suffix.lower() != ".exe":
+        if not launcher.is_file() or launcher.suffix.lower() not in {".exe", ".dat"}:
             raise ValueError("original reference launcher is missing")
+        pinned = recipe.get("launcher_sha256")
+        if pinned is not None or launcher.suffix.lower() == ".dat":
+            if (not isinstance(pinned, str) or not re.fullmatch(r"[a-f0-9]{64}", pinned)
+                    or not launcher.resolve().is_relative_to(source.resolve())):
+                raise ValueError("declared launcher requires a pinned contained source file")
+            with launcher.open("rb") as handle:
+                actual = hashlib.file_digest(handle, "sha256").hexdigest()
+            if actual != pinned:
+                raise ValueError("declared launcher hash differs from the original source")
+        if launcher.suffix.lower() == ".dat" and not pe32_gui_launcher(launcher):
+            raise ValueError("declared .dat launcher must be an x86 PE32 GUI executable, not a DLL")
         candidates = [launcher]
     else:
         root = relative(game.data["port"].get("media_root", "."))
@@ -137,6 +174,11 @@ def layout_for(game, source: Path, *, iso: Path | None = None,
     result = {"stage": stage, "install": "disc-copy",
             "launcher": candidates[0].relative_to(source).as_posix(),
             "cwd": root, "files": files}
+    if recipe and "memory_report_mib" in recipe:
+        value = recipe["memory_report_mib"]
+        if type(value) is not int or not 16 <= value <= 1024:
+            raise ValueError("legacy memory report must be16..1024MiB")
+        result["memory_report_mib"] = value
     if recipe and "compatibility" in recipe and not unmodified:
         result["compatibility"] = compatibility_plan(recipe["compatibility"])
     if recipe and "optical_drive" in recipe:

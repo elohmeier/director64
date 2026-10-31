@@ -53,5 +53,16 @@
   "source_sha256": "40d3f559158e8f606487563c0d9ad4712cbb6cd6836587d7fc555aaa872be9a9",
   "startup_movie": "PF2.DXR",
   "extended_d6": true,
-  "native_stage": true
+  "native_stage": true,
+  "system_font_resources": [
+    {
+      "path": "director64-system-fonts/arial32.exe",
+      "sha256": "85297a4d146e9c87ac6f74822734bdee5f4b2a722d7eaa584b7f2cbf76f478f6",
+      "entry": "Arial.TTF",
+      "font_sha256": "35c0f3559d8db569e36c31095b8a60d441643d95f59139de40e23fada819b833",
+      "aliases": [
+        "Arial"
+      ]
+    }
+  ]
 }

@@ -15,7 +15,6 @@ routes typed keys to the login's name field (`key_field`). `[convert]` binds
 the linked `MOVIES\SOUNDS\*.AIF` voice files and answers the `getCDCode`
 copy check with the authored constant.
 
-Known gaps:
-
-- The patchwork puzzle's patches, built with imaging Lingo, show as squares.
-- `sound(n).pause()` keeps the sound playing.
+The `visual-patchwork.json` input route reaches the imaging puzzle. Its generated
+patches retain their polygon outlines and transparent exteriors; source-free
+imaging tests cover the underlying vertex edits and alpha operations.

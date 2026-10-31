@@ -50,3 +50,80 @@ handler = "ritabana"
 source_sha256 = "d2db226e23a14304b8953395fdbe7684f6109f2bdd386609d3db07ce1d49e906"
 rename_call = ["getat", "getaprop"]
 count = 2
+
+# The port exposes one human player. Keep the authored computer opponents;
+# hide the human-opponent controls and remove their rectangle hit targets.
+[[convert.patch]]
+id = "single-player-race-controls"
+movie = "KR.DXR"
+cast = "script"
+member = 1
+handler = "mainloop"
+source_sha256 = "504b20bec62fa8d6663cafda6f844093f96f7e1c299180405a08e3275b8f96dd"
+prepend = '''
+sprite(gFastaSprites[#kompis]).visible = 0
+sprite(gFastaSprites[#kompisIkon]).visible = 0
+'''
+
+[[convert.patch]]
+id = "single-player-race-hit-list"
+movie = "KR.DXR"
+cast = "script"
+member = 2
+handler = "kollaklick"
+source_sha256 = "0135f26d0c2d6fa2e643e6f8f3868d57051bb6b5bd4486781f495205037d51d3"
+prepend = '''
+gKlickSprite.deleteOne(#kompis)
+gKlickSprite.deleteOne(#kompisIkon)
+'''
+
+[[convert.patch]]
+id = "single-player-ball-shortcut"
+movie = "KB.DXR"
+cast = "Script"
+member = 10
+handler = "keydown"
+source_sha256 = "b2c03bc6734581c594e322df740e17b407d0c3cb89eebe1d4bd370a39a2cbf68"
+prepend = '''
+if the shiftDown and (the key = "2") then
+  return
+end if
+'''
+
+[[convert.patch]]
+id = "single-player-ships-intro"
+movie = "SS.DXR"
+cast = "script"
+member = 1
+handler = "introloop"
+source_sha256 = "cca7dd9030cbe1d433ff032eaaec56058d603f675a9692677ad0372efdea836e"
+prepend = 'sprite(gFastaSprites[#tvaspelare]).visible = 0'
+
+[[convert.patch]]
+id = "single-player-ships-game"
+movie = "SS.DXR"
+cast = "script"
+member = 1
+handler = "mainloop"
+source_sha256 = "19123d2738a6cebfa8fd09e4ff05253d8d8800509a14d494d48a57442eb62815"
+prepend = 'sprite(gFastaSprites[#tvaspelare]).visible = 0'
+
+# These scripts test rectangles directly, independently of sprite visibility.
+# Move the hidden control out of their search area without blocking the board.
+[[convert.patch]]
+id = "single-player-ships-variant-hit"
+movie = "SS.DXR"
+cast = "script"
+member = 2
+handler = "kollavariantklick"
+source_sha256 = "9741c932e9cae9869d49d5e0a7122f51652c480313de95f1287f0fb295f616c8"
+prepend = 'sprite(gFastaSprites[#tvaspelare]).loc = point(-10000, -10000)'
+
+[[convert.patch]]
+id = "single-player-ships-control-hit"
+movie = "SS.DXR"
+cast = "script"
+member = 2
+handler = "vilkenklick"
+source_sha256 = "d8d045f3f5e8262c59393fb71a9a2112fb2403795e70be41236c5e15fe3938c9"
+prepend = 'sprite(gFastaSprites[#tvaspelare]).loc = point(-10000, -10000)'

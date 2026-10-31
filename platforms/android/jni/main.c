@@ -4,6 +4,7 @@
 // (platforms/web/site/player.js). The activity (GameActivity.java) owns the
 // surface, the controllers and the dialogs; this owns the engine.
 #include "compositor.h"
+#include "cursor_policy.h"
 #include "decode.h"
 #include "host_input.h"
 #include "mixer.h"
@@ -14,11 +15,14 @@
 #include <android/log.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
+#include <ctype.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -28,18 +32,18 @@
 // web_runtime.c's entry points (the page calls them through Emscripten).
 uint8_t *d64_flash(void);
 unsigned d64_flash_bytes(void);
+int d64_flash_import(const uint8_t *data, unsigned length);
 int d64_load_package(const uint8_t *data, size_t length);
 const char *d64_package_error(void);
 int d64_boot(unsigned seed);
 int d64_step(int x, int y, int buttons);
-void d64_pad(unsigned player, int connected, unsigned buttons, int stick_x,
+void d64_pad(int connected, unsigned buttons, int stick_x,
              int stick_y);
 void d64_pointer_warp(int x, int y);
 int d64_pointer_x(void);
 int d64_pointer_y(void);
-unsigned d64_pointer_player(void);
-int d64_step_pads(void);
-uint32_t *d64_render_pads(void);
+int d64_step_pad(void);
+int d64_native_cursor(void);
 uint32_t *d64_render(int x, int y, int pointer_shown);
 uint32_t *d64_pixels(void);
 unsigned d64_text_field(int x, int y);
@@ -57,7 +61,7 @@ unsigned d64_script_errors(void);
 unsigned d64_image_bytes(void);
 
 // The stage the runtime draws: 640x480, or an 800x600 game unscaled.
-enum { WIDTH = WC_WIDTH, HEIGHT = WC_HEIGHT, PORTS = 4 };
+enum { WIDTH = WC_WIDTH, HEIGHT = WC_HEIGHT };
 // The catch-up rule: at most four ticks per pass and twelve ticks of
 // backlog; time beyond that is dropped rather than rushed through.
 enum { MAX_STEPS = 4, BACKLOG_TICKS = 12 };
@@ -67,14 +71,17 @@ enum {
   HOLD_PAUSED = 1,
   HOLD_MENU = 2,
   HOLD_TEXT = 4,
-  HOLD_PRINT = 8,
+  HOLD_USER = 8,
   HOLD_SURFACE = 16
 };
 
 static JavaVM *vm;
 static jobject activity;
 static jmethodID on_text, on_layout, on_entry, on_entry_closed, on_committed,
-    on_stopped, on_print, on_saved;
+    on_stopped, on_print, on_saved, on_user, on_user_reply, on_pointer;
+#if DG_MODERN
+static jmethodID on_text_rich,on_layout_rich;
+#endif
 static pthread_t thread;
 static bool thread_running;
 static pthread_mutex_t state = PTHREAD_MUTEX_INITIALIZER;
@@ -83,9 +90,25 @@ static pthread_cond_t changed = PTHREAD_COND_INITIALIZER;
 static unsigned holds = HOLD_PAUSED | HOLD_SURFACE;
 static bool quitting, fresh_surface, reset_clock;
 static ANativeWindow *window;
-static host_pad_t pads[PORTS];
+static host_pad_t pad;
+static host_cursor_t cursor_policy;
+static bool physical_pointer, cursor_dirty, cursor_drawn, input_from_pad;
+static unsigned displayed_generation;
 static host_pointer_t mouse = {.current = {.x = WIDTH / 2, .y = HEIGHT / 2}};
 static host_commands_t commands;
+enum { USER_REPLY = 1, USER_CANCEL, USER_COMPLETE };
+enum { USER_RAW_LIMIT = 16u * 1024u * 1024u,
+       USER_RGBA_LIMIT = 32u * 1024u * 1024u };
+typedef struct {
+  unsigned action, id, kind, size, width, height;
+  bool success;
+  char name[128];
+  uint8_t *data, *pixels;
+} user_message_t;
+// UI callbacks enqueue owned buffers. Only the game worker calls d64_user_*.
+static user_message_t user_message;
+static unsigned user_id, user_kind;
+static bool legacy_print;
 static char input_failure[160], diagnostics[256];
 #ifdef DIRECTOR64_ANDROID_VALIDATION
 // The engine owner publishes observations; the UI never calls the interpreter.
@@ -97,7 +120,22 @@ static void validation_publish(void) {
   const char *snapshot = d64_rpc("state");
   if (!snapshot)
     return;
-  char *copy = strdup(snapshot);
+  size_t length = strlen(snapshot);
+  while (length && isspace((unsigned char)snapshot[length - 1])) length--;
+  char *copy = malloc(length + 512);
+  if (!copy) return;
+  unsigned id = d64_user_request_id(), kind = d64_user_request_kind();
+  if (legacy_print) { id = user_id; kind = 4; }
+  pthread_mutex_lock(&state);
+  int requested=cursor_policy.requested,acknowledged=cursor_policy.acknowledged;
+  bool drawn=cursor_drawn,physical=physical_pointer;
+  pthread_mutex_unlock(&state);
+  if (length && snapshot[length - 1] == '}')
+    snprintf(copy, length + 512, "%.*s,\"user_request\":{\"id\":%u,\"kind\":%u,\"size\":%u},"
+             "\"pointer_presentation\":{\"requested\":%d,\"acknowledged\":%d,\"software\":%s,\"physical\":%s}}",
+             (int)(length - 1), snapshot, id, kind, d64_user_size(),requested,acknowledged,
+             drawn?"true":"false",physical?"true":"false");
+  else snprintf(copy, length + 192, "%s", snapshot);
   pthread_mutex_lock(&state);
   free(validation_snapshot);
   validation_snapshot = copy;
@@ -106,6 +144,7 @@ static void validation_publish(void) {
 #endif
 static unsigned surface_generation;
 static char save_path[512];
+static bool save_migrated;
 static jobject asset_manager;
 static _Atomic float volume = 1.0f;
 // The game thread's own.
@@ -162,7 +201,7 @@ static bool host_text(void *ctx, const char *utf8, int width, int height,
       env, activity, on_text, text, width, height,
       style ? (jint)style->font : 0, style ? (jint)style->size : 0,
       style ? (jint)style->align : 0, style ? style->ascent : 0,
-      style ? style->line_height : 0);
+      style ? style->line_height : 0, style ? (jint)style->face : 0);
   (*env)->DeleteLocalRef(env, text);
   if ((*env)->ExceptionCheck(env)) {
     (*env)->ExceptionDescribe(env);
@@ -178,6 +217,44 @@ static bool host_text(void *ctx, const char *utf8, int width, int height,
   return ok;
 }
 
+#if DG_MODERN
+static jintArray formats_of(JNIEnv *env,const dg_text_format_t *formats,unsigned count) {
+  if(!count || count>4096)return NULL;
+  jint *packed=malloc((size_t)count*10*sizeof(*packed));if(!packed)return NULL;
+  for(unsigned i=0;i<count;i++) {
+    const dg_text_format_t *f=&formats[i];
+    const jint row[]={f->offset,f->font,f->size,f->face,f->align,f->ascent,f->line_height,f->rgb,f->char_spacing,f->layout_flags};
+    memcpy(packed+i*10,row,sizeof(row));
+  }
+  jintArray out=(*env)->NewIntArray(env,(jsize)count*10);
+  if(out)(*env)->SetIntArrayRegion(env,out,0,(jsize)count*10,packed);
+  free(packed);return out;
+}
+static bool host_text_rich(void *ctx,const char *utf8,int width,int height,
+                    const dg_text_format_t *formats,unsigned count,uint32_t *pixels) {
+  (void)ctx;JNIEnv *env=env_of_thread();if(!env || width<=0 || height<=0)return false;
+  jbyteArray text=bytes_of(env,utf8);jintArray styles=formats_of(env,formats,count);
+  jbyteArray plane=styles?(*env)->CallObjectMethod(env,activity,on_text_rich,text,width,height,styles):NULL;
+  (*env)->DeleteLocalRef(env,text);if(styles)(*env)->DeleteLocalRef(env,styles);
+  if((*env)->ExceptionCheck(env)){(*env)->ExceptionDescribe(env);(*env)->ExceptionClear(env);return false;}
+  bool ok=plane && (*env)->GetArrayLength(env,plane)==width*height*4;
+  if(ok)(*env)->GetByteArrayRegion(env,plane,0,width*height*4,(jbyte *)pixels);
+  if(plane)(*env)->DeleteLocalRef(env,plane);
+  return ok;
+}
+static int host_layout_rich(void *ctx,const char *utf8,int width,int height,
+                    const dg_text_format_t *formats,unsigned count,int16_t *boxes,int max) {
+  (void)ctx;JNIEnv *env=env_of_thread();if(!env || width<=0 || height<=0)return 0;
+  jbyteArray text=bytes_of(env,utf8);jintArray styles=formats_of(env,formats,count);
+  jshortArray placed=styles?(*env)->CallObjectMethod(env,activity,on_layout_rich,text,width,height,styles):NULL;
+  (*env)->DeleteLocalRef(env,text);if(styles)(*env)->DeleteLocalRef(env,styles);
+  if((*env)->ExceptionCheck(env)){(*env)->ExceptionDescribe(env);(*env)->ExceptionClear(env);return 0;}
+  if(!placed)return 0;
+  int n=(*env)->GetArrayLength(env,placed)/4;if(n>max)n=max;
+  (*env)->GetShortArrayRegion(env,placed,0,n*4,(jshort *)boxes);(*env)->DeleteLocalRef(env,placed);return n;
+}
+#endif
+
 // Where the activity set each character of a text box (Text.layout).
 static int host_layout(void *ctx, const char *utf8, int width, int height,
                        const wc_text_style_t *style, int16_t *boxes,
@@ -191,7 +268,7 @@ static int host_layout(void *ctx, const char *utf8, int width, int height,
       env, activity, on_layout, text, width, height,
       style ? (jint)style->font : 0, style ? (jint)style->size : 0,
       style ? (jint)style->align : 0, style ? style->ascent : 0,
-      style ? style->line_height : 0);
+      style ? style->line_height : 0, style ? (jint)style->face : 0);
   (*env)->DeleteLocalRef(env, text);
   if ((*env)->ExceptionCheck(env)) {
     (*env)->ExceptionDescribe(env);
@@ -328,16 +405,35 @@ static bool load(char *error, size_t cap) {
   }
   uint8_t *flash = d64_flash();
   size_t saved = 0;
+  struct stat save_info;
+  if (stat(save_path, &save_info) == 0) {
+    if (save_info.st_size < 0 || (uint64_t)save_info.st_size > d64_flash_bytes() ||
+        (save_info.st_size != (off_t)d64_flash_bytes() && save_info.st_size != 131072)) {
+      snprintf(error, cap, "Save data size is invalid; existing saves were not changed");
+      return false;
+    }
+  } else if (errno != ENOENT) {
+    snprintf(error, cap, "Save data could not be opened; existing saves were not changed");
+    return false;
+  }
   char *save = read_file(save_path, &saved);
-  if (save && saved == d64_flash_bytes())
-    memcpy(flash, save, saved);
-  else
+  if (!save && stat(save_path, &save_info) == 0) {
+    snprintf(error, cap, "Save data could not be read; existing saves were not changed");
+    return false;
+  }
+  save_migrated = save && saved != d64_flash_bytes();
+  if (save && (saved > UINT32_MAX || !d64_flash_import((const uint8_t *)save, (unsigned)saved))) {
+    free(save);
+    snprintf(error, cap, "Save data unreadable; existing saves were not changed");
+    return false;
+  }
+  if (!save)
     memset(flash, 0xff, d64_flash_bytes());
   free(save);
   return true;
 }
 
-static void present(const uint32_t *pixels) {
+static bool present(const uint32_t *pixels) {
   // A surface can stall in the compositor. Never hold the UI state lock
   // while waiting for Android's producer/consumer buffers.
   pthread_mutex_lock(&state);
@@ -347,22 +443,31 @@ static void present(const uint32_t *pixels) {
     ANativeWindow_acquire(target);
   pthread_mutex_unlock(&state);
   if (!target)
-    return;
+    return false;
   static unsigned configured;
   if (configured != generation) {
-    ANativeWindow_setBuffersGeometry(target, WIDTH, HEIGHT,
-                                     WINDOW_FORMAT_RGBX_8888);
+    if (ANativeWindow_setBuffersGeometry(target, WIDTH, HEIGHT,
+                                         WINDOW_FORMAT_RGBX_8888) != 0) {
+      ANativeWindow_release(target);
+      return false;
+    }
     configured = generation;
   }
+  bool posted=false;
   ANativeWindow_Buffer buffer;
   if (ANativeWindow_lock(target, &buffer, NULL) == 0) {
     uint32_t *out = buffer.bits;
     for (int y = 0; y < HEIGHT && y < buffer.height; y++)
       memcpy(out + (size_t)y * (size_t)buffer.stride, pixels + y * WIDTH,
              (size_t)(buffer.width < WIDTH ? buffer.width : WIDTH) * 4);
-    ANativeWindow_unlockAndPost(target);
+    posted=ANativeWindow_unlockAndPost(target)==0;
   }
+  pthread_mutex_lock(&state);
+  posted=posted && window==target && surface_generation==generation;
+  if(posted)displayed_generation=generation;
+  pthread_mutex_unlock(&state);
   ANativeWindow_release(target);
+  return posted;
 }
 
 static void text_hold(bool on) {
@@ -373,12 +478,117 @@ static void text_hold(bool on) {
   else
     holds &= ~(unsigned)HOLD_TEXT;
   if (holds != previous) {
+    cursor_dirty = true;
     audio_suspend(holds != 0);
     reset_clock = true;
-    host_input_resume(pads, PORTS, &mouse);
+    host_input_resume(&pad, &mouse);
   }
   pthread_cond_broadcast(&changed);
   pthread_mutex_unlock(&state);
+}
+
+static void user_message_free(user_message_t *message) {
+  free(message->data);
+  free(message->pixels);
+  memset(message, 0, sizeof(*message));
+}
+
+static void user_hold(unsigned id, unsigned kind) {
+  pthread_mutex_lock(&state);
+  user_id = id;
+  user_kind = kind;
+  unsigned previous = holds;
+  if (kind) holds |= HOLD_USER;
+  else holds &= ~(unsigned)HOLD_USER;
+  if (holds != previous) {
+    cursor_dirty = true;
+    audio_suspend(holds != 0);
+    reset_clock = true;
+    host_input_resume(&pad, &mouse);
+  }
+  pthread_cond_broadcast(&changed);
+  pthread_mutex_unlock(&state);
+}
+
+static bool publish_user(JNIEnv *env) {
+  if (legacy_print) return true;
+  unsigned id = d64_user_request_id(), kind = d64_user_request_kind();
+  if (!kind) {
+    pthread_mutex_lock(&state);
+    bool previous = user_kind != 0;
+    pthread_mutex_unlock(&state);
+    if (previous) {
+      user_hold(0, 0);
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+      validation_publish();
+#endif
+    }
+    return false;
+  }
+  pthread_mutex_lock(&state);
+  bool same = user_id == id && user_kind == kind;
+  pthread_mutex_unlock(&state);
+  if (same) return true;
+  unsigned size = d64_user_size();
+  if (!id || kind > 4 || size > USER_RAW_LIMIT || (size && !d64_user_data())) {
+    pthread_mutex_lock(&state);
+    snprintf(input_failure, sizeof(input_failure), "Invalid player document request");
+    pthread_mutex_unlock(&state);
+    return true;
+  }
+  user_hold(id, kind);
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+  validation_publish();
+#endif
+  jbyteArray title = bytes_of(env, d64_user_title());
+  jbyteArray name = bytes_of(env, d64_user_name());
+  jbyteArray filter = bytes_of(env, d64_user_filter());
+  jbyteArray data = (*env)->NewByteArray(env, (jsize)size);
+  if (size && data)
+    (*env)->SetByteArrayRegion(env, data, 0, (jsize)size,
+                               (const jbyte *)d64_user_data());
+  if (!(*env)->ExceptionCheck(env))
+    (*env)->CallVoidMethod(env, activity, on_user, (jint)id, (jint)kind,
+                           title, name, filter, data);
+  if ((*env)->ExceptionCheck(env)) {
+    (*env)->ExceptionClear(env);
+    pthread_mutex_lock(&state);
+    snprintf(input_failure, sizeof(input_failure), "Android could not open the document dialog");
+    pthread_mutex_unlock(&state);
+  }
+  if (title) (*env)->DeleteLocalRef(env, title);
+  if (name) (*env)->DeleteLocalRef(env, name);
+  if (filter) (*env)->DeleteLocalRef(env, filter);
+  if (data) (*env)->DeleteLocalRef(env, data);
+  return true;
+}
+
+// Returns true only for completion of the older document-index print service.
+static bool run_user_message(JNIEnv *env) {
+  pthread_mutex_lock(&state);
+  user_message_t message = user_message;
+  memset(&user_message, 0, sizeof(user_message));
+  bool current = message.id == user_id && message.kind == user_kind;
+  pthread_mutex_unlock(&state);
+  if (!message.action) return false;
+  bool legacy_done = false;
+  if (current && legacy_print && message.kind == 4
+      && (message.action == USER_COMPLETE || message.action == USER_CANCEL)) {
+    legacy_print = false;
+    legacy_done = true;
+  } else if (current && !legacy_print && message.id == d64_user_request_id()
+             && message.kind == d64_user_request_kind()) {
+    if (message.action == USER_REPLY) {
+      bool accepted = d64_user_reply(message.id, message.name, message.data,
+          message.size, (const uint32_t *)message.pixels, message.width, message.height);
+      (*env)->CallVoidMethod(env, activity, on_user_reply, (jint)message.id,
+                             (jint)message.kind, (jboolean)accepted);
+    } else if (message.action == USER_CANCEL) d64_user_cancel(message.id);
+    else if (message.action == USER_COMPLETE) d64_user_complete(message.id, message.success);
+  }
+  user_message_free(&message);
+  publish_user(env);
+  return legacy_done;
 }
 
 // The game worker is the only engine owner. UI commands carry an entry
@@ -457,6 +667,29 @@ static void serve_key_field(bool clicked, int x, int y) {
   was_taking = taking != 0;
 }
 
+static void publish_cursor(JNIEnv *env,int kind) {
+  pthread_mutex_lock(&state);
+  host_cursor_request(&cursor_policy,kind);
+  bool notify=cursor_policy.changed && window && displayed_generation==surface_generation;
+  if(notify)cursor_policy.changed=false;
+  unsigned sequence=cursor_policy.sequence;
+  pthread_mutex_unlock(&state);
+  if(notify)(*env)->CallVoidMethod(env,activity,on_pointer,(jint)sequence,(jint)kind);
+}
+
+// Only a successfully posted current-surface frame authorizes native icons.
+// The caller retries this same CPU image even when the next render is cached.
+static bool post_cursor_frame(JNIEnv *env,const uint32_t *pixels,bool software,
+                              int kind,bool *redraw) {
+  if(!present(pixels)) { *redraw=true;return false; }
+  pthread_mutex_lock(&state);
+  cursor_drawn=software;
+  pthread_mutex_unlock(&state);
+  *redraw=false;
+  publish_cursor(env,kind);
+  return true;
+}
+
 static void *game(void *arg) {
   (void)arg;
   JNIEnv *env;
@@ -470,6 +703,9 @@ static void *game(void *arg) {
       .asset = host_asset,
       .text = host_text,
       .layout = host_layout,
+#if DG_MODERN
+      .rich_text=host_text_rich,.rich_layout=host_layout_rich,
+#endif
       .sound = host_sound,
       .sound_pause = host_sound_pause,
       .sound_break_loop = host_sound_break_loop,
@@ -501,17 +737,21 @@ static void *game(void *arg) {
     stopped(1, failure);
     goto done;
   }
+  if (save_migrated) { host_save_commit(NULL, true); save_migrated = false; }
   double last = now(), phase = 0, dropped = 0, window_start = last;
   double service_cost = 0, render_cost = 0, present_cost = 0;
   unsigned window_sequence = 0;
   unsigned steps = 0, renders = 0, printed = 0, injected[3], injections = 0;
   bool redraw = true, held = false;
+  publish_user(env);
 #ifdef DIRECTOR64_ANDROID_VALIDATION
   double observed_at = 0;
 #endif
   for (;;) {
     pthread_mutex_lock(&state);
     while (!quitting && holds && !input_failure[0]) {
+      if (user_message.action)
+        break;
       if (host_command_index(&commands, d64_key_capacity(), entry_token,
                              key_entry && entry_sprite) >= 0)
         break;
@@ -521,12 +761,22 @@ static void *game(void *arg) {
         service_cost = render_cost = present_cost = 0;
         window_start = now();
       }
-      if (fresh_surface)
+      if (fresh_surface || cursor_dirty)
         break;
+      if(redraw && window) {
+        struct timespec retry;
+        clock_gettime(CLOCK_REALTIME,&retry);
+        retry.tv_nsec+=16000000;
+        if(retry.tv_nsec>=1000000000) {retry.tv_sec++;retry.tv_nsec-=1000000000;}
+        pthread_cond_timedwait(&changed,&state,&retry);
+        break;
+      }
       pthread_cond_wait(&changed, &state);
     }
     bool quit = quitting;
     bool hold_now = holds != 0;
+    bool cursor_redraw = cursor_dirty;
+    cursor_dirty = false;
     if (fresh_surface) {
       fresh_surface = false;
       redraw = true;
@@ -549,6 +799,12 @@ static void *game(void *arg) {
       break;
     }
     double service_start = now();
+    if (run_user_message(env)) {
+      injected[0] = 0;
+      injected[1] = 2;
+      injected[2] = 0;
+      injections = 3;
+    }
     // At most one bounded batch, including commits while HOLD_TEXT is set.
     for (unsigned i = 0; i < HOST_COMMANDS; i++) {
       host_command_t command;
@@ -563,9 +819,13 @@ static void *game(void *arg) {
     }
     audio_poll();
     if (hold_now) {
-      if (redraw)
-        present(d64_pixels());
-      redraw = false;
+      if (redraw || cursor_redraw) {
+        d64_render(0, 0, 0);
+        post_cursor_frame(env,d64_pixels(),false,HOST_CURSOR_HIDDEN,&redraw);
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+        validation_publish();
+#endif
+      }
       continue;
     }
     double t = now();
@@ -582,40 +842,21 @@ static void *game(void *arg) {
     bool clicked = false;
     int status = 0;
     for (unsigned i = 0; i < owed && !status; i++) {
-      host_pad_t sample[PORTS];
       unsigned pad_pressed = 0, mouse_pressed;
       pthread_mutex_lock(&state);
-      // A newly opened menu/pause stops the remaining catch-up ticks.
       if (holds) {
         pthread_mutex_unlock(&state);
         break;
       }
-      bool pads_active = false, pads_connected = false;
-      for (unsigned p = 0; p < PORTS; p++) {
-        unsigned pressed;
-        sample[p] = pads[p];
-        sample[p].buttons = host_pad_sample(&pads[p], &pressed);
-        pad_pressed |= pressed;
-        pads_connected |= sample[p].connected;
-        pads_active |=
-            sample[p].buttons || sample[p].stick_x || sample[p].stick_y;
-      }
-      host_pointer_sample_t pointer =
-          host_pointer_sample(&mouse, &mouse_pressed);
-      bool moved = mouse.moved;
-      mouse.moved = false;
+      host_pad_t sample = pad;
+      sample.buttons = host_pad_sample(&pad, &pad_pressed);
+      host_pointer_sample_t pointer = host_pointer_sample(&mouse, &mouse_pressed);
+      bool next_using_pad = input_from_pad && sample.connected;
       pthread_mutex_unlock(&state);
-      if (moved && !pads_active)
-        using_pads = false;
-      for (unsigned p = 0; p < PORTS; p++)
-        d64_pad(p, sample[p].connected, sample[p].buttons, sample[p].stick_x,
-                sample[p].stick_y);
-      if (pads_active && !using_pads) {
+      d64_pad(sample.connected, sample.buttons, sample.stick_x, sample.stick_y);
+      if (next_using_pad && !using_pads)
         d64_pointer_warp(pointer.x, pointer.y);
-        using_pads = true;
-      }
-      if (using_pads && !pads_connected)
-        using_pads = false;
+      using_pads = next_using_pad;
       bool mouse_press = (mouse_pressed & 1) != 0;
       clicked |= using_pads ? (pad_pressed & 1) != 0 : mouse_press;
       unsigned buttons = pointer.buttons;
@@ -625,7 +866,7 @@ static void *game(void *arg) {
         memmove(injected, injected + 1, sizeof(injected) - sizeof(*injected));
         injections--;
       } else if (using_pads) {
-        status = d64_step_pads();
+        status = d64_step_pad();
         pthread_mutex_lock(&state);
         mx = d64_pointer_x();
         my = d64_pointer_y();
@@ -645,20 +886,22 @@ static void *game(void *arg) {
         status = d64_step(mx, my, (int)buttons);
       }
       steps++;
-      // A print document: the TV has no printer, so it says so
-      // (GameActivity.printRequested) and dismisses the page with B, as the
-      // web player does after printing (games/loewenzahn-1/runtime/printing.c).
+      // Older adapters identify an authored print document by index. The UI
+      // prints that document; only its eventual completion dismisses the page.
       unsigned request = d64_print_request();
       if (request && request != printed && !injections) {
         printed = request;
-        injected[0] = 0;
-        injected[1] = 2;
-        injected[2] = 0;
-        injections = 3;
+        legacy_print = true;
+        user_hold(request, 4);
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+        validation_publish();
+#endif
         (*env)->CallVoidMethod(env, activity, on_print, (jint)request);
       } else if (!request) {
         printed = 0;
       }
+      if (publish_user(env))
+        break;
     }
     if (!status && *d64_error())
       status = 1;
@@ -683,20 +926,24 @@ static void *game(void *arg) {
     pthread_mutex_lock(&state);
     int px = mouse.current.x, py = mouse.current.y;
     bool inside = mouse.current.inside;
+    bool native_pointer = physical_pointer && !using_pads;
     pthread_mutex_unlock(&state);
     serve_key_field(clicked, px, py);
     service_cost += now() - service_start;
     double render_start = now();
-    uint32_t *pixels =
-        using_pads ? d64_render_pads() : d64_render(px, py, inside);
+    int kind = !inside ? HOST_CURSOR_HIDDEN :
+        native_pointer ? d64_native_cursor() : HOST_CURSOR_SOFTWARE;
+    pthread_mutex_lock(&state);
+    host_cursor_request(&cursor_policy, kind);
+    bool show_cursor = inside && host_cursor_software(&cursor_policy);
+    pthread_mutex_unlock(&state);
+    uint32_t *pixels = d64_render(px, py, show_cursor);
     render_cost += now() - render_start;
     if (pixels || redraw) {
       double present_start = now();
-      present(d64_pixels());
+      if(post_cursor_frame(env,d64_pixels(),show_cursor,kind,&redraw))renders++;
       present_cost += now() - present_start;
-      renders++;
-      redraw = false;
-    }
+    } else publish_cursor(env, kind);
 #ifdef DIRECTOR64_ANDROID_VALIDATION
     if (now() - observed_at >= 0.1) {
       validation_publish();
@@ -777,20 +1024,30 @@ JNIEXPORT void NATIVE(start)(JNIEnv *env, jclass cls, jobject owner,
     return;
   activity = (*env)->NewGlobalRef(env, owner);
   jclass type = (*env)->GetObjectClass(env, owner);
-  on_text = (*env)->GetMethodID(env, type, "rasterize", "([BIIIIIII)[B");
-  on_layout = (*env)->GetMethodID(env, type, "layout", "([BIIIIIII)[S");
+  on_text = (*env)->GetMethodID(env, type, "rasterize", "([BIIIIIIII)[B");
+  on_layout = (*env)->GetMethodID(env, type, "layout", "([BIIIIIIII)[S");
+#if DG_MODERN
+  on_text_rich=(*env)->GetMethodID(env,type,"rasterizeRich","([BII[I)[B");
+  on_layout_rich=(*env)->GetMethodID(env,type,"layoutRich","([BII[I)[S");
+#endif
   on_entry = (*env)->GetMethodID(env, type, "openTextEntry", "(I[BIIIIZ)V");
   on_entry_closed = (*env)->GetMethodID(env, type, "closeTextEntry", "(I)V");
   on_committed = (*env)->GetMethodID(env, type, "textCommitted", "(IZ)V");
   on_stopped = (*env)->GetMethodID(env, type, "gameStopped", "(I[B)V");
   on_print = (*env)->GetMethodID(env, type, "printRequested", "(I)V");
+  on_pointer = (*env)->GetMethodID(env, type, "pointerChanged", "(II)V");
   on_saved = (*env)->GetMethodID(env, type, "saveCommitted", "(Z)V");
+  on_user = (*env)->GetMethodID(env, type, "userRequested", "(II[B[B[B[B)V");
+  on_user_reply = (*env)->GetMethodID(env, type, "fileReplyResult", "(IIZ)V");
   // The game's packs ship as the APK's assets.
   asset_manager = (*env)->NewGlobalRef(env, assets);
   packs_use(AAssetManager_fromJava(env, asset_manager));
   copy_string(env, save, save_path, sizeof(save_path));
   atomic_store(&volume, level);
   using_pads = key_entry = was_taking = false;
+  host_cursor_init(&cursor_policy);
+  cursor_dirty = true;
+  physical_pointer = input_from_pad = cursor_drawn = false;
   entry_sprite = 0;
   pthread_mutex_lock(&state);
   diagnostics[0] = input_failure[0] = 0;
@@ -799,6 +1056,9 @@ JNIEXPORT void NATIVE(start)(JNIEnv *env, jclass cls, jobject owner,
   validation_snapshot = NULL;
 #endif
   memset(&commands, 0, sizeof(commands));
+  user_message_free(&user_message);
+  user_id = user_kind = 0;
+  legacy_print = false;
   holds = HOLD_PAUSED | HOLD_SURFACE;
   quitting = false;
   pthread_mutex_unlock(&state);
@@ -825,7 +1085,13 @@ JNIEXPORT void NATIVE(stop)(JNIEnv *env, jclass cls) {
   window = NULL;
   fresh_surface = false;
   holds = HOLD_PAUSED | HOLD_SURFACE;
-  memset(pads, 0, sizeof(pads));
+  user_message_free(&user_message);
+  user_id = user_kind = 0;
+  legacy_print = false;
+  memset(&pad, 0, sizeof(pad));
+  host_cursor_init(&cursor_policy);
+  physical_pointer = input_from_pad = cursor_drawn = false;
+  cursor_dirty = true;
   memset(&mouse, 0, sizeof(mouse));
   mouse.current.x = WIDTH / 2;
   mouse.current.y = HEIGHT / 2;
@@ -843,6 +1109,11 @@ JNIEXPORT void NATIVE(surface)(JNIEnv *env, jclass cls, jobject surface) {
   pthread_mutex_lock(&state);
   ANativeWindow *previous = window;
   window = replacement;
+  cursor_policy.sequence++;
+  cursor_policy.acknowledged_sequence=cursor_policy.sequence;
+  cursor_policy.requested=cursor_policy.acknowledged=HOST_CURSOR_HIDDEN;
+  cursor_policy.changed=true;
+  cursor_dirty=true;
   surface_generation++;
   fresh_surface = window != NULL;
   if (window)
@@ -851,7 +1122,7 @@ JNIEXPORT void NATIVE(surface)(JNIEnv *env, jclass cls, jobject surface) {
     holds |= HOLD_SURFACE;
   audio_suspend(holds != 0);
   reset_clock = true;
-  host_input_resume(pads, PORTS, &mouse);
+  host_input_resume(&pad, &mouse);
   pthread_cond_broadcast(&changed);
   pthread_mutex_unlock(&state);
   if (previous)
@@ -868,26 +1139,45 @@ JNIEXPORT void NATIVE(hold)(JNIEnv *env, jclass cls, jint reason, jboolean on) {
   else
     holds &= ~(unsigned)reason;
   if (holds != previous) {
+    cursor_dirty = true;
     audio_suspend(holds != 0);
     reset_clock = true;
-    host_input_resume(pads, PORTS, &mouse);
+    host_input_resume(&pad, &mouse);
   }
   pthread_cond_broadcast(&changed);
   pthread_mutex_unlock(&state);
 }
 
-JNIEXPORT void NATIVE(pad)(JNIEnv *env, jclass cls, jint port,
-                           jboolean connected, jint buttons, jint stick_x,
-                           jint stick_y) {
-  (void)env;
-  (void)cls;
-  if (port < 0 || port >= PORTS)
-    return;
+JNIEXPORT void NATIVE(pad)(JNIEnv *env, jclass cls, jboolean connected,
+                           jint buttons, jint stick_x, jint stick_y) {
+  (void)env; (void)cls;
   pthread_mutex_lock(&state);
-  if (!host_pad_update(&pads[port], connected, (unsigned)buttons, stick_x,
-                       stick_y, holds != 0))
+  bool active = connected && !holds &&
+      (((unsigned)buttons & ~pad.buttons) ||
+       ((stick_x != pad.stick_x || stick_y != pad.stick_y) &&
+        (abs(stick_x) > 8 || abs(stick_y) > 8)));
+  if (active) input_from_pad = true;
+  if (!host_pad_update(&pad, connected, (unsigned)buttons, stick_x, stick_y, holds != 0))
     snprintf(input_failure, sizeof(input_failure),
              "Controller input queue overflow (%u transitions)", HOST_EDGES);
+  pthread_cond_signal(&changed);
+  pthread_mutex_unlock(&state);
+}
+
+JNIEXPORT jboolean NATIVE(pointerCurrent)(JNIEnv *env,jclass cls,jint sequence,jint kind) {
+  (void)env;(void)cls;
+  pthread_mutex_lock(&state);
+  bool valid=(unsigned)sequence==cursor_policy.sequence && kind==cursor_policy.requested &&
+      window && displayed_generation==surface_generation;
+  pthread_mutex_unlock(&state);
+  return valid;
+}
+
+JNIEXPORT void NATIVE(pointerReady)(JNIEnv *env,jclass cls,jint sequence,jint kind) {
+  (void)env;(void)cls;
+  pthread_mutex_lock(&state);
+  if(window && displayed_generation==surface_generation &&
+      host_cursor_ready(&cursor_policy,(unsigned)sequence,kind))cursor_dirty=true;
   pthread_cond_signal(&changed);
   pthread_mutex_unlock(&state);
 }
@@ -895,7 +1185,7 @@ JNIEXPORT void NATIVE(pad)(JNIEnv *env, jclass cls, jint port,
 // The mouse in 640x480 units (GameActivity), mapped to stage pixels;
 // `buttons` are input.h bits (left A, right B).
 JNIEXPORT void NATIVE(mouse)(JNIEnv *env, jclass cls, jint x, jint y,
-                             jint buttons, jboolean inside) {
+                             jint buttons, jboolean inside, jboolean physical) {
   (void)env;
   (void)cls;
   x = x * WIDTH / 640;
@@ -909,6 +1199,16 @@ JNIEXPORT void NATIVE(mouse)(JNIEnv *env, jclass cls, jint x, jint y,
                                                      : y,
                                   .buttons = (unsigned)buttons,
                                   .inside = inside};
+  bool activity = inside && (sample.x != mouse.current.x || sample.y != mouse.current.y ||
+      ((unsigned)buttons & ~mouse.current.buttons) || !mouse.current.inside);
+  physical_pointer = physical;
+  if(activity && !holds) {
+    if(input_from_pad) {
+      pad.masked=pad.buttons;
+      pad.count=pad.head=0;
+    }
+    input_from_pad=false;
+  }
   if (!host_pointer_update(&mouse, sample, holds != 0))
     snprintf(input_failure, sizeof(input_failure),
              "Pointer input queue overflow (%u transitions)", HOST_EDGES);
@@ -970,6 +1270,69 @@ JNIEXPORT void NATIVE(volume)(JNIEnv *env, jclass cls, jfloat level) {
   (void)cls;
   atomic_store(&volume, level);
   audio_volume(level);
+}
+
+static bool enqueue_user(user_message_t *message) {
+  pthread_mutex_lock(&state);
+  bool accepted = !quitting && message->id && message->id == user_id
+                  && message->kind == user_kind && !user_message.action;
+  if (accepted) {
+    user_message = *message;
+    memset(message, 0, sizeof(*message));
+    pthread_cond_broadcast(&changed);
+  }
+  pthread_mutex_unlock(&state);
+  return accepted;
+}
+
+JNIEXPORT jboolean NATIVE(fileReply)(JNIEnv *env, jclass cls, jint id, jint kind,
+    jbyteArray name, jbyteArray raw, jbyteArray rgba, jint width, jint height) {
+  (void)cls;
+  if (!name || (kind != 1 && kind != 2) || width < 0 || height < 0
+      || width > 4096 || height > 4096 || (!width != !height)) return JNI_FALSE;
+  jsize name_size = (*env)->GetArrayLength(env, name);
+  jsize raw_size = raw ? (*env)->GetArrayLength(env, raw) : 0;
+  jsize rgba_size = rgba ? (*env)->GetArrayLength(env, rgba) : 0;
+  uint64_t pixel_bytes = (uint64_t)(unsigned)width * (unsigned)height * 4u;
+  if (name_size <= 0 || name_size >= 128 || raw_size < 0
+      || (unsigned)raw_size > USER_RAW_LIMIT || pixel_bytes > USER_RGBA_LIMIT
+      || (uint64_t)rgba_size != pixel_bytes) return JNI_FALSE;
+  user_message_t message = {.action = USER_REPLY, .id = (unsigned)id,
+      .kind = (unsigned)kind, .size = (unsigned)raw_size,
+      .width = (unsigned)width, .height = (unsigned)height};
+  (*env)->GetByteArrayRegion(env, name, 0, name_size, (jbyte *)message.name);
+  for (jsize i = 0; i < name_size; i++)
+    if ((unsigned char)message.name[i] < 32 || message.name[i] == 127
+        || message.name[i] == ':' || message.name[i] == '/'
+        || message.name[i] == '\\') return JNI_FALSE;
+  if (raw_size) message.data = malloc((size_t)raw_size);
+  if (pixel_bytes) message.pixels = malloc((size_t)pixel_bytes);
+  if ((raw_size && !message.data) || (pixel_bytes && !message.pixels)) {
+    user_message_free(&message);
+    return JNI_FALSE;
+  }
+  if (raw_size) (*env)->GetByteArrayRegion(env, raw, 0, raw_size, (jbyte *)message.data);
+  if (rgba_size) (*env)->GetByteArrayRegion(env, rgba, 0, rgba_size, (jbyte *)message.pixels);
+  bool accepted = !(*env)->ExceptionCheck(env) && enqueue_user(&message);
+  if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+  user_message_free(&message);
+  return accepted ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean NATIVE(fileCancel)(JNIEnv *env, jclass cls, jint id, jint kind) {
+  (void)env; (void)cls;
+  if (kind != 1 && kind != 2) return JNI_FALSE;
+  user_message_t message = {.action = USER_CANCEL, .id = (unsigned)id, .kind = (unsigned)kind};
+  return enqueue_user(&message) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean NATIVE(fileComplete)(JNIEnv *env, jclass cls, jint id, jint kind,
+                                       jboolean success) {
+  (void)env; (void)cls;
+  if (kind != 3 && kind != 4) return JNI_FALSE;
+  user_message_t message = {.action = USER_COMPLETE, .id = (unsigned)id,
+      .kind = (unsigned)kind, .success = success};
+  return enqueue_user(&message) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jstring NATIVE(diagnostics)(JNIEnv *env, jclass cls) {

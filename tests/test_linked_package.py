@@ -148,6 +148,38 @@ def test_linked_movie_metadata_survives_packaging(tmp_path):
             "sounds": [{"id": 4, "asset": "click.wav64", "samples": 101, "rate": 22050}],
             "exports": [{"id": 2, "name": "ChildSymbol"}],
             "initializers": [{"clipId": 2, "frame": 1, "code": [7, 0]}]}})
+    model["movies"][0]["members"].append({
+        "cast": 1, "number": 7, "type": 1, "width": 20, "height": 12,
+        "xtra": {"symbol": "vectorShape"}, "vectorShape": {
+            "vertices": [[-7.5, -3], [9, -2], [1, 8]], "closed": True,
+            "filled": True, "strokeWidth": 2.5, "strokeColor": 0x123456,
+            "fillColor": 0xABCDEF}})
+    model["movies"][0]["members"].append({
+        "cast": 1, "number": 8, "type": 14, "name": "synthetic reveal",
+        "transition": {"time_raw": 0, "chunk_size": 12, "type": 37,
+                       "flags_raw": 2, "duration_ms": 1750}})
+    model["movies"][0]["members"].append({
+        "cast": 1, "number": 9, "type": 7, "text": "X😀Y", "filled": 7,
+        "textBox": {"type": 3, "margin": 2, "border": 1,
+                    "boxDropShadow": 2, "wordWrap": False, "background": 0x123456},
+        "textFormats": [
+            {"offset": offset, "fontId": 3, "size": 12, "face": 0, "align": 3,
+             "ascent": 9, "lineHeight": 14, "color": 0x123456,
+             "charSpacing": 2 if offset == 0 else -1}
+            for offset in (0, 4)]})
+    model["movies"][0]["members"].extend([
+        {"cast": 1, "number": 10, "type": 7, "width": 14, "height": 16,
+         "buttonType": 2, "hilite": True},
+        {"cast": 1, "number": 11, "type": 7, "width": 14, "height": 16,
+         "buttonType": 3, "hilite": False}])
+    model["movies"][1]["members"][0]["textFormats"] = [
+        {"offset": 0, "fontId": 3, "size": 12, "face": 1, "align": 0,
+         "ascent": 9, "lineHeight": 14, "color": 0x123456},
+        {"offset": 1, "fontId": 4, "size": 18, "face": 6, "align": 2,
+         "ascent": -2, "lineHeight": 21, "color": 0xABCDEF, "charSpacing": -1000}]
+    model["movies"][1]["members"][0]["textBox"] = {
+        "type": 4, "margin": 0, "border": 0, "boxDropShadow": 0,
+        "wordWrap": True, "background": 0xFFFFFF}
     # A dynamic cast has no authored sprite yet: packaging carries the
     # descriptor; runtime/capability tests separately qualify its playback.
     values = {
@@ -174,6 +206,101 @@ def test_linked_movie_metadata_survives_packaging(tmp_path):
     ], cwd=root, check=True, capture_output=True)
     subprocess.run([executable, package], check=True, capture_output=True)
     data = package.read_bytes()
+    button_id = (1 << 21) | (1 << 16) | 10
+    button_header = struct.pack("<IHHHHHhh", button_id, 10, 1, 7, 14, 16, 0, 0)
+    assert data.count(button_header) == 1
+    button_offset = data.index(button_header)
+    for name, offset, fmt, value in (("kind", 46, "H", 4), ("checked", 50, "B", 2)):
+        corrupt = bytearray(data)
+        struct.pack_into("<" + fmt, corrupt, button_offset + offset, value)
+        rejected = tmp_path / f"invalid-button-{name}.d64p"
+        rejected.write_bytes(corrupt)
+        subprocess.run([executable, rejected, "reject"], check=True, capture_output=True)
+    # Optional vector records are bounded and cannot bind a non-vector member,
+    # repeat an identity, carry NaNs or reference more vertices than present.
+    sections = struct.unpack_from("<H", data, 10)[0]
+    vector_offset = next(struct.unpack_from("<I", data, 32 + i * 12 + 4)[0]
+                         for i in range(sections) if data[32 + i * 12:36 + i * 12] == b"VECT")
+    for name, offset, fmt, value in (("member", 4, "I", 1), ("count", 8, "H", 1025),
+                                   ("flags", 10, "B", 4), ("width", 12, "d", float("nan")),
+                                   ("point", 28, "d", float("inf"))):
+        corrupt = bytearray(data)
+        struct.pack_into("<" + fmt, corrupt, vector_offset + offset, value)
+        rejected = tmp_path / f"invalid-vector-{name}.d64p"
+        rejected.write_bytes(corrupt)
+        subprocess.run([executable, rejected, "reject"], check=True, capture_output=True)
+    transition_offset = next(struct.unpack_from("<I", data, 32 + i * 12 + 4)[0]
+                             for i in range(sections)
+                             if data[32 + i * 12:36 + i * 12] == b"TRAN")
+    assert data[transition_offset:transition_offset + 16] == struct.pack(
+        "<IIHBBBBBB", 1, (1 << 21) | (1 << 16) | 8, 1750, 37, 12, 1, 0, 0, 0)
+    for name, offset, fmt, value in (("member", 4, "I", 1), ("type", 10, "B", 53),
+                                   ("area", 12, "B", 2), ("reserved", 13, "B", 1)):
+        corrupt = bytearray(data)
+        struct.pack_into("<" + fmt, corrupt, transition_offset + offset, value)
+        rejected = tmp_path / f"invalid-transition-{name}.d64p"
+        rejected.write_bytes(corrupt)
+        subprocess.run([executable, rejected, "reject"], check=True, capture_output=True)
+    rich_offset = next(struct.unpack_from("<I", data, 32 + i * 12 + 4)[0]
+                       for i in range(sections) if data[32 + i * 12:36 + i * 12] == b"RICH")
+    spacing_index = next(i for i in range(sections)
+                         if data[32 + i * 12:36 + i * 12] == b"RSPC")
+    spacing_offset = struct.unpack_from("<I", data, 32 + spacing_index * 12 + 4)[0]
+    spacing_id = (1 << 21) | (1 << 16) | 9
+    assert data[spacing_offset:spacing_offset + 40] == struct.pack(
+        "<IIIhHIIhHIIhH", 3, spacing_id, 0, 2, 0, spacing_id, 4, -1, 0,
+        (2 << 21) | (1 << 16) | 1, 1, -1000, 0)
+    for name, offset, fmt, value in (
+        ("member", 4, "I", 1), ("nontext", 4, "I", (1 << 21) | (1 << 16) | 7),
+        ("offset", 8, "I", 3), ("zero", 12, "h", 0), ("reserved", 14, "H", 1),
+        ("duplicate", 20, "I", 0), ("count", 0, "I", 4),
+    ):
+        corrupt = bytearray(data)
+        struct.pack_into("<" + fmt, corrupt, spacing_offset + offset, value)
+        rejected = tmp_path / f"invalid-spacing-{name}.d64p"
+        rejected.write_bytes(corrupt)
+        subprocess.run([executable, rejected, "reject"], check=True, capture_output=True)
+    corrupt = bytearray(data)
+    struct.pack_into("<I", corrupt, 32 + spacing_index * 12 + 8, 41)
+    rejected = tmp_path / "invalid-spacing-trailing.d64p"
+    rejected.write_bytes(corrupt)
+    subprocess.run([executable, rejected, "reject"], check=True, capture_output=True)
+    corrupt = bytearray(data)
+    rich_index = next(i for i in range(sections)
+                      if data[32 + i * 12:36 + i * 12] == b"RICH")
+    corrupt[32 + rich_index * 12:36 + rich_index * 12] = b"OLD_"
+    rejected = tmp_path / "invalid-spacing-without-rich.d64p"
+    rejected.write_bytes(corrupt)
+    subprocess.run([executable, rejected, "reject"], check=True, capture_output=True)
+    box_offset = next(struct.unpack_from("<I", data, 32 + i * 12 + 4)[0]
+                      for i in range(sections) if data[32 + i * 12:36 + i * 12] == b"TBOX")
+    assert data[box_offset:box_offset + 16] == struct.pack(
+        "<IIBBBBBBBB", 2, (1 << 21) | (1 << 16) | 9, 3, 2, 1, 2, 0, 0x12, 0x34, 0x56)
+    for name, offset, fmt, value in (
+        ("member", 4, "I", 1), ("type-zero", 8, "B", 0), ("type-range", 8, "B", 5),
+        ("wrap", 12, "B", 2),
+        ("duplicate", 16, "I", (1 << 21) | (1 << 16) | 9),
+        ("nontext", 4, "I", (1 << 21) | (1 << 16) | 7),
+    ):
+        corrupt = bytearray(data)
+        struct.pack_into("<" + fmt, corrupt, box_offset + offset, value)
+        rejected = tmp_path / f"invalid-text-box-{name}.d64p"
+        rejected.write_bytes(corrupt)
+        subprocess.run([executable, rejected, "reject"], check=True, capture_output=True)
+    assert data[rich_offset:rich_offset + 12] == struct.pack(
+        "<IIHH", 2, (1 << 21) | (1 << 16) | 9, 2, 0)
+    for name, offset, fmt, value in (
+        ("member", 4, "I", 1), ("count", 8, "H", 0), ("reserved", 10, "H", 1),
+        ("first-offset", 12, "I", 1),
+        ("face", 18, "B", 16), ("align", 19, "B", 4),
+        ("height", 22, "h", -1), ("color", 24, "I", 0x1000000),
+        ("order", 28, "I", 0), ("extent", 28, "I", 5),
+    ):
+        corrupt = bytearray(data)
+        struct.pack_into("<" + fmt, corrupt, rich_offset + offset, value)
+        rejected = tmp_path / f"invalid-rich-{name}.d64p"
+        rejected.write_bytes(corrupt)
+        subprocess.run([executable, rejected, "reject"], check=True, capture_output=True)
     initial = {"member": (2 << 21) | (1 << 16) | 1, "x": 11, "y": 7,
                "width": 40, "height": 20, "ink": 8, "blend": 80, "type": 1,
                "fore": 2, "back": 3, "thickness": 18, "stretch": 1, "loc_z": 1,

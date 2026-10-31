@@ -1,0 +1,38 @@
+-- Synthetic Director 8.5 tracking and whole-text replacement experiment.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\text-spacing-inheritance.txt")
+out.openFile("C:\text-spacing-inheritance.txt",2)
+w=window("director64-probe")
+w.fileName=the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+tell w
+ t=new(#text)
+ t.font="Arial"
+ t.fontSize=18
+ t.width=200
+ t.text="A B"
+ repeat with spacing in [0,2,-2]
+  t.charSpacing=spacing
+  out.writeString(string(["spaces",spacing,charPosToLoc(t,1),charPosToLoc(t,2),charPosToLoc(t,3),charPosToLoc(t,4)]) & RETURN)
+ end repeat
+ t.text="ABCD"
+ t.charSpacing=1
+ t.char[3..4].charSpacing=-2
+ out.writeString(string(["before",t.char[1].charSpacing,t.char[4].charSpacing]) & RETURN)
+ t.text="XY"
+ out.writeString(string(["replace",t.char[1].charSpacing,t.char[2].charSpacing,charPosToLoc(t,3)]) & RETURN)
+ t.text=""
+ t.text="ZZ"
+ out.writeString(string(["empty",t.char[1].charSpacing,t.char[2].charSpacing,charPosToLoc(t,3)]) & RETURN)
+ t=new(#text)
+ t.font="Arial"
+ t.fontSize=18
+ t.text="ABCD"
+ t.char[1..2].charSpacing=3
+ t.char[3..4].charSpacing=-2
+ out.writeString(string(["ranges",t.char[1].charSpacing,t.char[4].charSpacing]) & RETURN)
+ t.text="XY"
+ out.writeString(string(["rangeReplace",t.char[1].charSpacing,t.char[2].charSpacing]) & RETURN)
+end tell
+out.closeFile()

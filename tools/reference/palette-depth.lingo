@@ -1,0 +1,15 @@
+-- director64: fileio-functions
+-- Director6 source syntax predates object.property notation.
+global out
+openXLib(the pathName & "XTRAS\FILEIO.X32")
+set out = new(xtra("fileio"))
+createFile(out, "C:\palette-depth.txt")
+openFile(out, "C:\palette-depth.txt", 2)
+writeString(out, string(["colorDepth", the colorDepth, "pathName", the pathName]) & RETURN)
+set the fileName of window "director64-palette-probe" = the pathName & "DATA\ANFANG.DXR"
+open window "director64-palette-probe"
+tell window "director64-palette-probe"
+  writeString(out, string(["movie", the movieName, "frame", the frame, "casts", the number of castLibs]) & RETURN)
+end tell
+closeFile(out)
+close window "director64-palette-probe"

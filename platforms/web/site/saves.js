@@ -1,5 +1,5 @@
 // Durable saves in the origin-private file system. The runtime's save device
-// is a 128 KiB save image (runtime/storage/saves.c); every committed
+// has two per-game generations (runtime/storage/saves.c); every committed
 // generation is written here whole, and reported saved only once that write
 // has closed.
 // Saves live under their own namespace, apart from any converted-asset cache,
@@ -9,9 +9,9 @@ export const FLASH_BYTES = 131072;
 
 // A generation starts with its magic (runtime/storage/saves.c), or the slot
 // is erased.
-export function plausibleFlash(bytes) {
-  if (bytes.length !== FLASH_BYTES) return false;
-  const half = FLASH_BYTES / 2;
+export function plausibleFlash(bytes, capacity = FLASH_BYTES) {
+  if (bytes.length !== capacity && !(capacity > FLASH_BYTES && bytes.length === FLASH_BYTES)) return false;
+  const half = bytes.length / 2;
   for (const offset of [0, half]) {
     const slot = bytes.subarray(offset, offset + half);
     const magic = String.fromCharCode(...slot.subarray(0, 4));
@@ -21,8 +21,11 @@ export function plausibleFlash(bytes) {
 }
 
 export class SaveStore extends EventTarget {
-  constructor(namespace) {
+  constructor(namespace, capacity = FLASH_BYTES) {
     super();
+    if (!Number.isInteger(capacity) || capacity < FLASH_BYTES || capacity > 32 * 1024 * 1024 || capacity % 2)
+      throw new Error("invalid save device size");
+    this.capacity = capacity;
     this.parts = namespace.split("/").filter(Boolean);
     this.directory = null;
     this.pending = null;
@@ -47,8 +50,12 @@ export class SaveStore extends EventTarget {
     if (!this.directory) return null;
     try {
       const file = await (await this.directory.getFileHandle(name)).getFile();
+      if (file.size !== undefined && file.size !== this.capacity &&
+          !(this.capacity > FLASH_BYTES && file.size === FLASH_BYTES)) throw new Error("save device size mismatch");
       const bytes = new Uint8Array(await file.arrayBuffer());
-      return bytes.length === FLASH_BYTES ? bytes : null;
+      if (bytes.length !== this.capacity && !(this.capacity > FLASH_BYTES && bytes.length === FLASH_BYTES))
+        throw new Error("save device size mismatch");
+      return bytes;
     } catch (error) {
       if (error.name === "NotFoundError") return null;
       throw error;
@@ -74,11 +81,12 @@ export class SaveStore extends EventTarget {
   get busy() { return this.writing || this.pending !== null; }
   // A newer generation replaces one still waiting; writes never overlap.
   commit(bytes) {
+    if (bytes.length !== this.capacity) throw new Error("save device size mismatch");
     if (!this.directory) {
       this.report({kind: "unavailable", message: "this browser keeps no durable storage"});
       return;
     }
-    this.pending = bytes;
+    this.pending = bytes.slice();
     this.report({kind: "saving"});
     if (!this.writing) this.drain();
   }
@@ -99,6 +107,8 @@ export class SaveStore extends EventTarget {
   }
   // Import keeps the previous save beside the new one until it has booted.
   async replace(bytes) {
+    if (bytes.length !== this.capacity && !(this.capacity > FLASH_BYTES && bytes.length === FLASH_BYTES))
+      throw new Error("save device size mismatch");
     const current = await this.read();
     if (current) await this.write("flash.bak", current);
     await this.write("flash.bin", bytes);

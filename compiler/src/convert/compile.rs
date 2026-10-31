@@ -217,6 +217,7 @@ pub fn compile_merge(
         for movie in &mut movies { movie["fullEngine"] = json!(true); }
     }
     super::cursor::bind(fs, output, &mut movies)?;
+    super::executable_cursor::bind(fs, options.media, output, policy, &mut movies)?;
     super::patterns::bind(fs, options.media, output, policy, &mut movies)
         .map_err(|error| format!("{error}; member conversion failures: {}", json!(problems)))?;
     // Embedded fonts recover once per source hash, numbered in first-occurrence order.
@@ -380,6 +381,9 @@ fn trim_film_poses(
 fn referenced_images(movies: &[Value]) -> BTreeSet<String> {
     let mut shown = BTreeSet::new();
     for movie in movies.iter() {
+        for asset in movie["cursorAssets"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            shown.insert(asset.to_string());
+        }
         for cast in movie["casts"].as_array().into_iter().flatten() {
             for asset in cast["patternAssets"]
                 .as_array()
@@ -423,7 +427,7 @@ fn prune_images(fs: &mut dyn Files, output: &str, movies: &[Value]) -> R<()> {
     let directory = files::join(output, "images");
     for (name, other) in fs.list(&directory)? {
         if !other
-            && [".fdi", ".fda", ".fd2"]
+            && [".fdi", ".fda", ".fd2", ".dcur"]
                 .iter()
                 .any(|ext| name.ends_with(ext))
             && !used.contains(&name)

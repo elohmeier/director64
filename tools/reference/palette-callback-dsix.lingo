@@ -1,0 +1,83 @@
+-- Diagnostic experiment: no successful palette pixel comparison was obtained.
+-- director64: full-script
+-- director64: fileio-functions
+-- Synthetic event script in a private original D6 movie window. The movie's
+-- recovered bitmap provides the baseline; this probe supplies no game assets.
+on startup
+  global out, probeWindow, probeStart, probePhase, probeFrame
+  openXLib("XTRAS\FILEIO.X32")
+  set out = new(xtra("fileio"))
+  createFile(out, "C:\palette-callback-dsix.txt")
+  openFile(out, "C:\palette-callback-dsix.txt", 2)
+  set reader = new(xtra("fileio"))
+  openFile(reader, the pathName & "LINGO.INI", 1)
+  set code = readFile(reader)
+  closeFile(reader)
+  writeString(out, string(["sourceLength", length(code)]) & RETURN)
+  set probeWindow = window("director64-palette-callback")
+  set the fileName of probeWindow = "DATA\ANFANG.DXR"
+  open(probeWindow)
+  set the visible of probeWindow = 1
+  set the rect of probeWindow = rect(0,0,800,600)
+  tell probeWindow
+    set handlerMember = new(#script, castLib 1)
+    set the scriptType of handlerMember = #movie
+    set the scriptText of handlerMember = code
+    writeString(out, string(["installed", handlerMember, the scriptType of handlerMember, the colorDepth]) & RETURN)
+  end tell
+  set probePhase = 0
+  set probeFrame = 1
+  set probeStart = the ticks
+end
+
+on enterFrame
+  global out, probeWindow, probeStart, probePhase, probeFrame
+  tell probeWindow
+  set elapsed = the ticks - probeStart
+  if elapsed < 180 then
+    go(probeFrame)
+    exit
+  end if
+  if probePhase = 0 then
+    writeString(out, string(["windows", the windowList]) & RETURN)
+    if getOne(the windowList, probeWindow) = 0 then
+      add(the windowList, probeWindow)
+    end if
+    open(probeWindow)
+    moveToFront(probeWindow)
+    set the stageColor = 10
+    repeat with n = 1 to 24
+      puppetSprite(n, TRUE)
+      set the visible of sprite n = FALSE
+    end repeat
+    puppetSprite(1, TRUE)
+    set the castNum of sprite 1 = 15
+    set the rect of sprite 1 = rect(100,100,400,400)
+    set the visible of sprite 1 = TRUE
+    updateStage()
+    writeString(out, string(["baseline", the movieName, the frame, the colorDepth, the stageColor, the castNum of sprite 1]) & RETURN)
+    set probePhase = 1
+  else
+    if (probePhase = 1) and (elapsed >= 360) then
+      puppetPalette("Grayscale", 30)
+      updateStage()
+      writeString(out, string(["grayscale", elapsed]) & RETURN)
+      set probePhase = 2
+    else
+      if (probePhase = 2) and (elapsed >= 540) then
+        puppetPalette(0)
+        updateStage()
+        writeString(out, string(["restored", elapsed]) & RETURN)
+        set probePhase = 3
+      else
+        if (probePhase = 3) and (elapsed >= 720) then
+          closeFile(out)
+          set probePhase = 4
+          close(probeWindow)
+        end if
+      end if
+    end if
+  end if
+  go(probeFrame)
+  end tell
+end

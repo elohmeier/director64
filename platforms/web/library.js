@@ -10,21 +10,44 @@ addToLibrary({
     return bytes.length;
   },
   d64_host_text__deps: ['$UTF8ToString'],
-  d64_host_text: (text, width, height, font, size, align, ascent, lineHeight, coverage) => {
-    const style = size ? {font, size, align, ascent, lineHeight} : null;
+  d64_host_text: (text, width, height, font, size, align, ascent, lineHeight, face, coverage) => {
+    const style = size ? {font, size, align, ascent, lineHeight, face} : null;
     const plane = Module.director64Host.text?.(UTF8ToString(text), width, height, style);
     if (!plane || plane.length !== width * height) return 0;
     HEAPU8.set(plane, coverage);
     return 1;
   },
   d64_host_layout__deps: ['$UTF8ToString'],
-  d64_host_layout: (text, width, height, font, size, align, ascent, lineHeight, boxes, max) => {
-    const style = size ? {font, size, align, ascent, lineHeight} : null;
+  d64_host_layout: (text, width, height, font, size, align, ascent, lineHeight, face, boxes, max) => {
+    const style = size ? {font, size, align, ascent, lineHeight, face} : null;
     const placed = Module.director64Host.layout?.(UTF8ToString(text), width, height, style);
     if (!placed) return 0;
     const count = Math.min(max, placed.length >> 2);
     HEAP16.set(placed.subarray(0, count * 4), boxes >> 1);
     return count;
+  },
+  $d64_text_formats: (pointer, count) => {
+    const formats = [];
+    for (let i = 0; i < count; i++, pointer += 20) formats.push({
+      offset: HEAPU32[pointer >> 2], color: HEAPU32[(pointer + 4) >> 2],
+      font: HEAPU8[pointer + 8], size: HEAPU8[pointer + 9],
+      face: HEAPU8[pointer + 10], align: HEAPU8[pointer + 11],
+      ascent: HEAP16[(pointer + 12) >> 1], lineHeight: HEAP16[(pointer + 14) >> 1], charSpacing: HEAP16[(pointer + 16) >> 1],
+      layoutFlags: HEAPU16[(pointer + 18) >> 1],
+    });
+    return formats;
+  },
+  d64_host_rich_text__deps: ['$UTF8ToString', '$d64_text_formats'],
+  d64_host_rich_text: (text, width, height, formats, count, output) => {
+    const pixels = Module.director64Host.richText?.(UTF8ToString(text), width, height, d64_text_formats(formats, count));
+    if (!pixels || pixels.length !== width * height * 4) return 0;
+    HEAPU8.set(pixels, output); return 1;
+  },
+  d64_host_rich_layout__deps: ['$UTF8ToString', '$d64_text_formats'],
+  d64_host_rich_layout: (text, width, height, formats, count, boxes, max) => {
+    const placed = Module.director64Host.richLayout?.(UTF8ToString(text), width, height, d64_text_formats(formats, count));
+    if (!placed) return 0;
+    const n = Math.min(max, placed.length >> 2); HEAP16.set(placed.subarray(0, n * 4), boxes >> 1); return n;
   },
   d64_host_sound__deps: ['$UTF8ToString'],
   d64_host_sound: (channel, asset, looping, loopStart, loopEnd) => {

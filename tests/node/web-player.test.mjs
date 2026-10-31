@@ -162,3 +162,31 @@ test("without durable storage a commit says so rather than claiming success", ()
   saves.commit(new Uint8Array(FLASH_BYTES));
   assert.deepEqual(states, ["unavailable"]);
 });
+
+test("large save stores retain legacy preferences and backups in the existing namespace", async () => {
+  const dir = directory();
+  const legacy = new Uint8Array(FLASH_BYTES).fill(255);
+  legacy.set(Buffer.from("D64S"));
+  dir.files.set("flash.bin", legacy);
+  const capacity = 32 * 1024 * 1024;
+  const saves = new SaveStore("director64/painting", capacity);
+  saves.directory = dir;
+  assert.deepEqual(await saves.read(), legacy);
+  assert.ok(plausibleFlash(legacy, capacity));
+  const expanded = new Uint8Array(capacity).fill(255);
+  expanded.set(Buffer.from("D64S"));
+  assert.ok(plausibleFlash(expanded, capacity));
+  assert.ok(!plausibleFlash(expanded));
+  await saves.replace(expanded);
+  assert.deepEqual(await saves.read("flash.bak"), legacy);
+  assert.deepEqual(await saves.read(), expanded);
+  assert.ok(await saves.restoreBackup());
+  assert.deepEqual(await saves.read(), legacy);
+  saves.commit(expanded);
+  expanded[0] = 0; // the in-flight generation owns its bytes
+  await settled(saves);
+  assert.equal((await saves.read())[0], "D".charCodeAt(0));
+  assert.throws(() => saves.commit(legacy), /size mismatch/);
+  dir.files.set("flash.bin", new Uint8Array(100));
+  await assert.rejects(() => saves.read(), /size mismatch/);
+});

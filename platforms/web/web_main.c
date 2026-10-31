@@ -5,11 +5,16 @@
 
 extern uint32_t d64_host_asset(const char *name, uint8_t *out, uint32_t cap);
 extern int d64_host_text(const char *text, int width, int height, int font,
-                         int size, int align, int ascent, int line_height,
+                         int size, int align, int ascent, int line_height, int face,
                          uint8_t *coverage);
 extern int d64_host_layout(const char *text, int width, int height, int font,
-                           int size, int align, int ascent, int line_height,
+                           int size, int align, int ascent, int line_height, int face,
                            int16_t *boxes, int max_chars);
+#if DG_MODERN
+_Static_assert(sizeof(dg_text_format_t)==20 && offsetof(dg_text_format_t,char_spacing)==16,"rich text host ABI");
+extern int d64_host_rich_text(const char *,int,int,const dg_text_format_t *,unsigned,uint32_t *);
+extern int d64_host_rich_layout(const char *,int,int,const dg_text_format_t *,unsigned,int16_t *,int);
+#endif
 extern void d64_host_sound(unsigned channel, const char *asset, int looping,
                            uint32_t loop_start, uint32_t loop_end);
 extern void d64_host_sound_pause(unsigned channel, int paused);
@@ -49,16 +54,24 @@ static bool text(void *ctx, const char *utf8, int width, int height,
                        style ? (int)style->size : 0,
                        style ? (int)style->align : 0,
                        style ? style->ascent : 0,
-                       style ? style->line_height : 0, coverage) != 0;
+                       style ? style->line_height : 0, style ? (int)style->face : 0, coverage) != 0;
 }
 static int layout(void *ctx, const char *utf8, int width, int height,
                   const wc_text_style_t *style, int16_t *boxes, int max_chars) {
   (void)ctx;
   return d64_host_layout(utf8, width, height, style ? (int)style->font : 0,
                          style ? (int)style->size : 0, style ? (int)style->align : 0,
-                         style ? style->ascent : 0, style ? style->line_height : 0, boxes,
+                         style ? style->ascent : 0, style ? style->line_height : 0, style ? (int)style->face : 0, boxes,
                          max_chars);
 }
+#if DG_MODERN
+static bool rich_text(void *ctx,const char *text,int width,int height,const dg_text_format_t *formats,unsigned count,uint32_t *out) {
+  (void)ctx;return d64_host_rich_text(text,width,height,formats,count,out)!=0;
+}
+static int rich_layout(void *ctx,const char *text,int width,int height,const dg_text_format_t *formats,unsigned count,int16_t *boxes,int max) {
+  (void)ctx;return d64_host_rich_layout(text,width,height,formats,count,boxes,max);
+}
+#endif
 static void sound(void *ctx, unsigned channel, const char *name, bool looping,
                   uint32_t loop_start, uint32_t loop_end) {
   (void)ctx;
@@ -110,6 +123,9 @@ static unsigned video_revision(void *ctx) {
 
 int main(void) {
   web_runtime_host((web_host_t){.asset = asset, .text = text, .layout = layout,
+#if DG_MODERN
+                              .rich_text=rich_text,.rich_layout=rich_layout,
+#endif
                                 .sound = sound, .sound_pause = sound_pause,
                                 .sound_break_loop = sound_break_loop, .gain = gain,
                                 .save_commit = save_commit, .trace = trace,

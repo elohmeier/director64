@@ -1,24 +1,106 @@
 #!/usr/bin/env bash
-#MISE description="Build every local game web player with source freshness receipts"
+#MISE description="Build every local web port and verify final source and artifact receipts"
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-uv run --locked python - <<'PY'
-import concurrent.futures,json,subprocess,sys,time
+uv run --locked python - "$@" <<'PY'
+import argparse
+import concurrent.futures
+import json
+import subprocess
+import sys
+import time
+from datetime import UTC, datetime
 from pathlib import Path
+
+from director64 import convert, web
 from director64.project import GameSpec
-output=Path('build/validation/web-builds');output.mkdir(parents=True,exist_ok=True)
-names=[p.parent.name for p in sorted(Path('games').glob('*/game.toml'))
-       if GameSpec.load(p.parent.name).data['status']!='catalogued']
+
+parser = argparse.ArgumentParser(description='Build every local port without contacting hardware')
+parser.add_argument('--output', type=Path, default=Path('build/validation/web-builds') /
+                    datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ'))
+parser.add_argument('--workers', type=int, default=2)
+parser.add_argument('--first', action='append', default=[], help='prioritize a port for early testing')
+args = parser.parse_args()
+if not 1 <= args.workers <= 4:
+    parser.error('workers must be 1..4')
+output = args.output.resolve()
+if not output.is_relative_to(Path('build').resolve()):
+    parser.error('output must remain under ignored build/')
+output.mkdir(parents=True, exist_ok=False)
+names = [p.parent.name for p in sorted(Path('games').glob('*/game.toml'))
+         if GameSpec.load(p.parent.name).data['status'] != 'catalogued']
+if set(args.first) - set(names):
+    parser.error('first must name locally supported ports')
+names.sort(key=lambda name: (args.first.index(name) if name in args.first else len(args.first), name))
+
+def verify(name):
+    game = GameSpec.load(name)
+    site = web.site_path(game)
+    built = json.loads((site / 'build.json').read_text())
+    converted = json.loads((game.work / 'converted/manifest.json').read_text())
+    abi = web.abi_digest(game.root).hex()
+    if (converted['converter'] != convert.converter_revision(game.root) or
+            converted['abi'] != abi or converted['profile_sha256'] != convert.profile_sha256(game) or
+            converted['source_sha256'] != game.source['sha256']):
+        raise ValueError('conversion source, profile or ABI is stale')
+    if (built['runtime']['inputs_sha256'] != web.runtime_inputs(game) or
+            built['runtime']['abi'] != abi or built['conversion'] != converted['converter'] or
+            built['game']['slug'] != name or built['profile']['source'] != game.source['id']):
+        raise ValueError('web build source, profile or ABI is stale')
+    if (web.sha256(site / 'director64.wasm') != built['runtime']['wasm_sha256'] or
+            web.sha256(site / 'game.d64p') != built['package']['sha256'] or
+            built['package']['sha256'] != converted['sha256']['game.d64p']):
+        raise ValueError('runtime or package bytes differ from receipts')
+    for filename, digest in built['player_sha256'].items():
+        source = game.root / (web.FONT if filename == 'monogram.ttf' else
+                              'platforms/web/site/' + filename)
+        if web.sha256(site / filename) != digest or web.sha256(source) != digest:
+            raise ValueError(f'player source or bytes differ: {filename}')
+    packs = {}
+    for kind, pack in built['packs'].items():
+        data, index = site / pack['file'], site / pack['index']
+        if (data.stat().st_size != pack['bytes'] or
+                web.sha256(data) != converted['sha256'][kind + '.bin'] or
+                json.loads(index.read_text()) != json.loads(
+                    (game.work / 'converted' / (kind + '.json')).read_text())):
+            raise ValueError(f'asset pack differs: {kind}')
+        packs[kind] = {'sha256': web.sha256(data), 'index_sha256': web.sha256(index)}
+    return {'source_sha256': game.source['sha256'], 'abi': abi,
+            'runtime_inputs_sha256': built['runtime']['inputs_sha256'],
+            'wasm_sha256': built['runtime']['wasm_sha256'],
+            'package_sha256': built['package']['sha256'], 'packs': packs}
+
 def build(name):
-    start=time.monotonic()
-    with (output/(name+'.log')).open('w') as log:
-        result=subprocess.run([sys.executable,'-m','director64','web','--game',name],
-                              stdout=log,stderr=log,check=False)
-    report={'game':name,'exit':result.returncode,'seconds':round(time.monotonic()-start,2)}
-    print(json.dumps(report),flush=True)
-    return report
-with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-    results=list(pool.map(build,names))
-(output/'summary.json').write_text(json.dumps(results,indent=2)+'\n')
-raise SystemExit(any(r['exit'] for r in results))
+    start = time.monotonic()
+    result = {'game': name, 'status': 'failed'}
+    try:
+        with (output / (name + '.log')).open('w') as log:
+            process = subprocess.run([sys.executable, '-m', 'director64', 'web', '--game', name],
+                                     stdout=log, stderr=log, check=False, timeout=5400)
+        result['exit'] = process.returncode
+        if process.returncode:
+            raise ValueError('web build failed; inspect this game log')
+        result.update(verify(name))
+        result['status'] = 'passed'
+    except Exception as error:
+        result['error'] = str(error)
+    result['seconds'] = round(time.monotonic() - start, 2)
+    (output / (name + '.json')).write_text(json.dumps(result, indent=2) + '\n')
+    print(json.dumps(result), flush=True)
+    return result
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
+    results = list(pool.map(build, names))
+for result in results:
+    if result['status'] == 'passed':
+        try:
+            result.update(verify(result['game']))
+        except Exception as error:
+            result.update(status='failed', error='final source freshness: ' + str(error))
+summary = {'kind': 'web-static-builds', 'status': 'passed' if all(
+    row['status'] == 'passed' for row in results) else 'failed',
+    'physical_device_evidence': False, 'results': results}
+(output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+print(output / 'summary.json', flush=True)
+raise SystemExit(summary['status'] != 'passed')
 PY

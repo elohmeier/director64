@@ -37,6 +37,33 @@ impl Profile {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct VectorShape {
+    pub vertices: Vec<(f64, f64)>,
+    pub stroke_width: f64,
+    pub stroke: u32,
+    pub fill: u32,
+    pub filled: bool,
+    pub closed: bool,
+}
+
+fn vector_shape(value: &Value) -> Result<Option<VectorShape>, String> {
+    if value.is_null() { return Ok(None); }
+    let vertices = value["vertices"].as_array().ok_or("invalid vector vertex list")?;
+    if !(2..=1024).contains(&vertices.len()) { return Err("invalid vector vertex count".into()); }
+    let vertices = vertices.iter().map(|v| {
+        let pair = v.as_array().filter(|v| v.len() == 2).ok_or("invalid vector vertex")?;
+        let x = pair[0].as_f64().filter(|v| v.is_finite() && v.abs() <= 65535.0).ok_or("invalid vector x")?;
+        let y = pair[1].as_f64().filter(|v| v.is_finite() && v.abs() <= 65535.0).ok_or("invalid vector y")?;
+        Ok((x, y))
+    }).collect::<Result<Vec<_>, String>>()?;
+    let width = value["strokeWidth"].as_f64().filter(|v| v.is_finite() && (0.0..=255.0).contains(v)).ok_or("invalid vector stroke width")?;
+    let color = |name: &str| value[name].as_u64().filter(|v| *v <= 0xffffff).map(|v| v as u32).ok_or("invalid vector color");
+    Ok(Some(VectorShape { vertices, stroke_width: width, stroke: color("strokeColor")?,
+        fill: color("fillColor")?, filled: value["filled"].as_bool().ok_or("invalid vector fill")?,
+        closed: value["closed"].as_bool().ok_or("invalid vector closed flag")? }))
+}
+
 pub struct Cast {
     pub name: String,
     pub file: u16,
@@ -88,8 +115,16 @@ pub struct FlashField {
     pub embed_fonts: bool,
 }
 
+#[path = "scene_rich.rs"]
+pub mod rich;
+#[path = "scene_text_box.rs"]
+pub mod text_box;
+
 pub struct Member {
     pub palette: Vec<u32>,
+    pub transition: Option<Transition>,
+    pub text_formats: Vec<rich::TextFormat>,
+    pub text_box: Option<text_box::TextBox>,
     pub id: u32,
     pub number: u16,
     pub cast: u16,
@@ -129,6 +164,7 @@ pub struct Member {
     pub film_sounds: Vec<u32>,
     // DG_D10
     pub source_xtra: u8,
+    pub vector_shape: Option<VectorShape>,
     pub flash_labels: Vec<(String, u16)>,
     pub flash_fields: Vec<FlashField>,
     pub flash_fonts: Vec<u16>,
@@ -156,6 +192,26 @@ pub struct Member {
     pub flash_direct_to_stage: u8,
     pub flash_version: u8,
     pub flash_runtime: flash::Runtime,
+}
+
+#[derive(Clone, Debug)]
+pub struct Transition {
+    pub duration_ms: u16,
+    pub kind: u8,
+    pub chunk: u8,
+    pub area: u8,
+}
+
+fn transition(value: &Value) -> Result<Option<Transition>, String> {
+    if value.is_null() { return Ok(None); }
+    let field = |name: &str, maximum| value[name].as_u64()
+        .filter(|n| *n <= maximum).ok_or_else(|| format!("invalid transition {name}"));
+    Ok(Some(Transition {
+        duration_ms: field("duration_ms", 65535)? as u16,
+        kind: field("type", 52)? as u8,
+        chunk: field("chunk_size", 255)? as u8,
+        area: u8::from(field("flags_raw", 255)? & 1 == 0),
+    }))
 }
 
 pub struct FlashHelper {
@@ -1057,6 +1113,10 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 flash::validate_layer(layer, &flash_runtime, &flash_fields)?;
             }
             members.push(Member {
+                transition: transition(&m["transition"])?,
+                text_formats: rich::read(&m["textFormats"], &text(m.get("text")), profile.modern() && !profile.d5(), narrow(int(m.get("type")), "member type")?)?,
+                text_box: text_box::read(&m["textBox"],profile.extended || profile.version>=700,
+                    narrow(int(m.get("type")),"member type")?)?,
                 palette: match m
                     .get("palette")
                     .filter(|v| !v.is_null() && int(m.get("type")) == 4)
@@ -1095,9 +1155,14 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 rate: narrow(int(m.get("rate")), &what("rate"))?,
                 loop_start: narrow(int(m.get("loopStart")), &what("loopStart"))?,
                 loop_end: narrow(int(m.get("loopEnd")), &what("loopEnd"))?,
-                shape: narrow(int(m.get("shape")), &what("shape"))?,
+                shape: if int(m.get("type"))==7 && m.get("buttonType").is_some() {
+                    m["buttonType"].as_u64().filter(|v|(1..=3).contains(v))
+                        .ok_or_else(||what("invalid native buttonType"))? as u16
+                } else { narrow(int(m.get("shape")), &what("shape"))? },
                 pattern: narrow(int(m.get("pattern")), &what("pattern"))?,
-                filled: narrow(int(m.get("filled")), &what("filled"))?,
+                filled: if int(m.get("type"))==7 && m.get("buttonType").is_some() {
+                    u8::from(m["hilite"].as_bool().ok_or_else(||what("invalid native button hilite"))?)
+                } else { narrow(int(m.get("filled")), &what("filled"))? },
                 line_width: narrow(int(m.get("lineWidth")), &what("lineWidth"))?,
                 looping: narrow(int(m.get("looping")), &what("looping"))?,
                 film_loop: narrow(int(m.get("filmLoop")), &what("filmLoop"))?,
@@ -1129,6 +1194,7 @@ pub fn scenes(model: &Value, profile: Profile) -> Result<Vec<Scene>, String> {
                 },
                 film_sounds,
                 source_xtra: if profile.d10() { source_xtra } else { 0 },
+                vector_shape: if profile.d10() { vector_shape(&m["vectorShape"])? } else { None },
                 flash_labels,
                 flash_fields,
                 flash_fonts: m["flashFontUses"]

@@ -52,9 +52,11 @@ a click or button press so audio can start.
 
 - **Mouse and keyboard.** The right button is the second button. From
   Director 7 on, keys reach the scripts as on a desktop projector. Clicking
-  an editable field opens a text box; the game waits until Enter.
-- **Controllers.** Each standard-mapping gamepad becomes one of four players
-  with its own cursor (`site/gamepad.js`), mapped as on Android TV. On an
+  an editable field opens a text box; the game waits until Enter. Standard cursor
+  roles use the OS pointer; authored bitmap and invert cursors stay on the canvas.
+- **Controllers.** One standard-mapping gamepad controls the shared pointer
+  (`site/gamepad.js`), mapped as on Android TV. Additional controllers are
+  ignored while that device remains connected. Games run in single-player mode. On an
   editable field ✕ opens an on-screen keyboard.
 - **Display.** 640×480, or 800×600 for games authored at that size. "Sharp"
   scaling (default) uses whole factors; "Smooth" filters.
@@ -66,7 +68,7 @@ a click or button press so audio can start.
 
 ## Saves
 
-After each commit the page writes the 128 KiB save image
+After each commit the page writes the game's save image
 ([architecture.md](architecture.md#saves-and-files)) to the origin-private
 file system under `director64/<slug>/saves/`, and shows *Saved* once the
 write has closed. The menu exports and imports the image; the current save

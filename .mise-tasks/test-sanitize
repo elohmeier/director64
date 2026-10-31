@@ -11,9 +11,27 @@ flags=(-std=c17 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined
        -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1
        -Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage
        -Iruntime/package -Iplatforms/web)
-for name in web_metamorphic web_render_cache web_flash_cache web_flash_text_hit web_film_backdrop web_lifecycle; do
+"$cc" "${flags[@]}" tests/native/test_lingo_encoding.c runtime/lingo/lingo_runtime.c \
+    -lm -o build/sanitize/lingo_encoding
+build/sanitize/lingo_encoding
+for name in web_metamorphic web_render_cache web_flash_cache web_flash_text_hit web_film_backdrop web_lifecycle windows; do
     "$cc" "${flags[@]}" "tests/native/test_$name.c" platforms/web/compositor.c \
         runtime/director/director.c runtime/director/shape.c runtime/lingo/lingo_runtime.c \
         runtime/package/package.c -lm -o "build/sanitize/$name"
+    "build/sanitize/$name"
+done
+for name in user_files user_images text_limit buttons; do
+    "$cc" "${flags[@]}" "tests/native/test_$name.c" runtime/director/director.c \
+        runtime/lingo/lingo_runtime.c -lm -o "build/sanitize/$name"
+    "build/sanitize/$name"
+done
+"$cc" "${flags[@]}" -DDIRECTOR64_SAVE_SLOT_BYTES=16777216 \
+    tests/native/test_cast_images.c runtime/director/director.c \
+    runtime/lingo/lingo_runtime.c -lm -o build/sanitize/cast_images
+build/sanitize/cast_images
+for name in formatted_text text_ranges text_chrome classic_text text_selection button_render vector_style; do
+    "$cc" "${flags[@]}" "tests/native/test_$name.c" platforms/web/compositor.c \
+        runtime/director/director.c runtime/director/shape.c runtime/lingo/lingo_runtime.c \
+        -lm -o "build/sanitize/$name"
     "build/sanitize/$name"
 done

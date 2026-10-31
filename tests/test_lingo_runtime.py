@@ -59,6 +59,128 @@ def run_d8(tmp_path, source, assertions):
     run_lingo(tmp_path, source, D8_HARNESS + assertions + "\n}\n", version=800)
 
 
+@pytest.mark.parametrize("version", [800, 850])
+def test_negated_direction_keeps_point_identity_and_source_value(tmp_path, version):
+    source = """-- cast: Internal; member: 1; type: MovieScript; name: fixture
+global direction, reverse, vertical
+on start
+  direction = point(3, -4.5)
+  reverse = -geRiktning()
+  vertical = reverse.locV
+  reverse.locH = 9
+end
+on geRiktning
+  return direction
+end
+"""
+    run_lingo(tmp_path, source, D8_HARNESS + r"""
+    lv_t original=global("direction"), reversed=global("reverse");
+    assert(runtime.objects[lv_id(reversed)].geometry==2);
+    assert(lv_numeric(lv_at(&runtime,original,1))==3);
+    assert(lv_numeric(lv_at(&runtime,original,2))==-4.5);
+    assert(lv_numeric(lv_at(&runtime,reversed,1))==9);
+    assert(lv_numeric(global("vertical"))==4.5);
+}
+""", version=version)
+
+
+@pytest.mark.parametrize("version", [600, 850])
+def test_bound_local_call_still_dispatches_explicit_xtra_receiver(tmp_path, version):
+    source = """-- cast: Internal; member: 1; type: MovieScript; name: fixture
+on start
+  global shadowCalls
+  shadowCalls = 0
+  doc = xtra("Synthetic printer")
+  print(doc)
+end
+on print doc
+  global shadowCalls
+  shadowCalls = shadowCalls + 1
+end
+"""
+    run_lingo(tmp_path, source, r"""
+static lv_runtime_t runtime;
+static unsigned prints;
+static bool service(lv_runtime_t *r,const char *name,unsigned argc,const lv_t *args,
+                    lv_t *out,bool *yield) {
+    (void)r;(void)yield;
+    if(!strcmp(name,"xtra")){*out=lv_make(LV_XTRA,6);return true;}
+    if(!strcmp(name,"print")&&argc==1&&lv_type(args[0])==LV_XTRA){prints++;return true;}
+    return false;
+}
+int main(int argc,char **argv){
+    (void)argc;load_fixture(argv[1]);
+    lv_init(&runtime,(lv_services_t){.call=service},NULL,global_names,global_count,1);
+    runtime.current=fixture;
+    assert(lv_start(&runtime,fixture,"start",1,0,NULL));
+    for(unsigned i=0;runtime.depth&&i<1000;i++)assert(lv_run(&runtime,64));
+    assert(!runtime.depth&&!runtime.failed&&prints==1);
+    assert(lv_integer(&runtime,runtime.globals[lv_global_id(&runtime,"shadowcalls")])==0);
+}
+""", version=version, extended=True)
+
+
+@pytest.mark.parametrize("version", [600, 850])
+def test_format_chunk_owners_preserve_member_identity_and_nested_ranges(tmp_path, version):
+    source = """-- cast: Internal; member: 1; type: MovieScript; name: fixture
+on start
+  global spacing, plain
+  member1 = member(7)
+  member1.char[2..3].charSpacing = 4
+  member1.word[2].font = "Arial"
+  member1.word[1].char[2].color = 1
+  spacing = member1.char[2].charSpacing
+  plain = "abcd".char[2..3]
+end
+"""
+    run_lingo(tmp_path, source, r"""
+static lv_runtime_t runtime;
+static unsigned writes,reads;
+static lv_t reference(lv_runtime_t *r,const char *kind,lv_t value,lv_t library){
+  (void)library;assert(!strcmp(kind,"member")&&lv_integer(r,value)==7);
+  return lv_make(LV_MEMBER,7);
+}
+static lv_t target(lv_runtime_t *r,lv_t owner){
+  assert(lv_type(owner)==LV_PROPLIST&&lv_count(r,owner)==4);
+  assert(!strcmp(lv_cstr(r,lv_at(r,owner,1)),"_textRange"));
+  return lv_at(r,owner,2);
+}
+static bool set_property(lv_runtime_t *r,lv_t owner,const char *name,lv_t value){
+  lv_t base=target(r,owner);writes++;
+  if(writes==1){
+    assert(!strcmp(name,"charspacing")&&lv_integer(r,value)==4);
+    assert(lv_integer(r,lv_at(r,owner,6))==2&&lv_integer(r,lv_at(r,owner,8))==3);
+  }else if(writes==2){
+    assert(!strcmp(name,"font")&&!strcmp(lv_cstr(r,value),"Arial"));
+    assert(!strcmp(lv_cstr(r,lv_at(r,owner,4)),"word"));
+  }else{
+    assert(writes==3&&!strcmp(name,"color"));
+    assert(!strcmp(lv_cstr(r,lv_at(r,owner,4)),"char"));
+    assert(!strcmp(lv_cstr(r,lv_at(r,base,4)),"word"));
+    base=target(r,base);
+  }
+  assert(lv_type(base)==LV_MEMBER&&lv_id(base)==7);return true;
+}
+static bool get_property(lv_runtime_t *r,lv_t owner,const char *name,lv_t *value){
+  lv_t base=target(r,owner);assert(lv_type(base)==LV_MEMBER&&lv_id(base)==7);
+  assert(!strcmp(name,"charspacing"));reads++;*value=lv_num(4);return true;
+}
+int main(int argc,char **argv){
+  (void)argc;load_fixture(argv[1]);
+  lv_init(&runtime,(lv_services_t){.reference=reference,.property_get=get_property,
+      .property_set=set_property},NULL,global_names,global_count,1);
+  runtime.current=fixture;assert(lv_start(&runtime,fixture,"start",1,0,NULL));
+  for(unsigned i=0;runtime.depth&&i<1000;i++){
+    if(!lv_run(&runtime,2)){fprintf(stderr,"%s\n",runtime.error);return 1;}
+    lv_collect(&runtime);
+  }
+  assert(!runtime.depth&&!runtime.failed&&writes==3&&reads==1);
+  assert(lv_integer(&runtime,runtime.globals[lv_global_id(&runtime,"spacing")])==4);
+  assert(!strcmp(lv_cstr(&runtime,runtime.globals[lv_global_id(&runtime,"plain")]),"bc"));
+}
+""", version=version, extended=True)
+
+
 @pytest.mark.parametrize("version, expected", [(600, 0), (850, 1), (1000, 0)])
 def test_versioned_list_guard_allocates_a_channel(tmp_path, version, expected):
     # Source-free reproduction of a channel allocator guarded by list > 0.

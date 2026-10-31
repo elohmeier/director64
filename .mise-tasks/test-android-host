@@ -11,8 +11,16 @@ done
 out=build/tests/android-java
 mkdir -p "$out/keys" "$out/abi" "$out/jni"
 mapfile -t stubs < <(rg --files tests/android/stubs -g '*.java')
-javac --release 11 -d "$out/keys" "${stubs[@]}" platforms/android/java/org/director64/tv/Keys.java
+javac --release 11 -d "$out/keys" "${stubs[@]}" platforms/android/java/org/director64/tv/Keys.java \
+    platforms/android/java/org/director64/tv/Pads.java \
+    platforms/android/java/org/director64/tv/CursorSurface.java \
+    platforms/android/java/org/director64/tv/FileData.java \
+    platforms/android/java/org/director64/tv/RichText.java
 java -cp "$out/keys" org.director64.tv.KeyTest
+java -cp "$out/keys" org.director64.tv.PadsTest
+java -cp "$out/keys" org.director64.tv/CursorSurfaceTest
+java -cp "$out/keys" org.director64.tv.FileDataTest
+java -cp "$out/keys" org.director64.tv.RichTextTest
 mapfile -t stubs < <(rg --files tests/android/abi -g '*.java')
 javac --release 11 -h "$out/jni" -d "$out/abi" "${stubs[@]}" platforms/android/java/org/director64/tv/Native.java
 jdk=$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")
@@ -27,3 +35,6 @@ jdk=$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")
     -ffunction-sections -fdata-sections -Wl,--gc-sections -pthread \
     tests/native/test_android_main.c -o "$out/main"
 "$out/main"
+"${CC:-cc}" -std=c17 -Wall -Wextra -Werror -pedantic \
+    tests/native/test_android_cursor_policy.c -o "$out/cursor-policy"
+"$out/cursor-policy"

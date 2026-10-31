@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "name": "hen-house-floor",
+  "description": "Register a player, visit the yard, enter the hen house, then start the authored game that snapshots its floor.",
+  "covers": [
+    "startup",
+    "profiles",
+    "text-entry",
+    "save",
+    "navigation",
+    "sustained-playback",
+    "stage-image",
+    "image-crop"
+  ],
+  "steps": [
+    {
+      "idle": 600,
+      "expect": {
+        "movie": "VORSPANN.DXR"
+      }
+    },
+    {
+      "sprite": 149,
+      "settle": 600,
+      "wait": {
+        "movie": "LOGIN.DXR",
+        "frame": 75
+      },
+      "label": "player-selection"
+    },
+    {
+      "sprite": 54,
+      "settle": 600,
+      "expect": {
+        "movie": "LOGIN.DXR",
+        "frame": 422
+      },
+      "label": "name-entry"
+    },
+    {
+      "command": "text 60 ANNA"
+    },
+    {
+      "sprite": 61,
+      "settle": 1200,
+      "expect": {
+        "save_generation": {
+          "gte": 1
+        }
+      },
+      "label": "player-saved",
+      "wait": {
+        "save_generation": {
+          "gte": 1
+        }
+      },
+      "ticks": 6000
+    },
+    {
+      "click": [
+        400,
+        300
+      ],
+      "settle": 600
+    },
+    {
+      "wait": {
+        "movie": "HOF.DXR"
+      },
+      "ticks": 12000,
+      "label": "yard"
+    },
+    {
+      "idle": 3600,
+      "expect": {
+        "movie": "HOF.DXR"
+      },
+      "label": "yard-playback",
+      "observe": {
+        "label": "yard-animation-window",
+        "sequence": {
+          "frames": 13,
+          "stride_ticks": 5,
+          "max_blank_frames": 0
+        },
+        "audio": {
+          "seconds": 0.8,
+          "comparison": "exploratory",
+          "comparison_note": "This ambient window has no anchored cue phase after accelerated route traversal. Retain mixed PCM for inspection; content-sensitive audio fidelity remains unbaselined."
+        }
+      }
+    },
+    {
+      "click": [
+        669,
+        327
+      ],
+      "settle": 2400,
+      "expect": {
+        "movie": "HOF.DXR"
+      }
+    },
+    {
+      "click": [
+        669,
+        327
+      ],
+      "settle": 2400,
+      "wait": {
+        "movie": "HUEHNER.DXR",
+        "frame": 10
+      },
+      "ticks": 18000,
+      "label": "hen-house-ready"
+    },
+    {
+      "sprite": 151,
+      "settle": 3600,
+      "expect": {
+        "movie": "HUEHNER.DXR"
+      },
+      "label": "hen-house-floor"
+    }
+  ],
+  "based_on": {
+    "journey_file": "journeys.json",
+    "sha256": "ed7232e6702989f0965ec9347762e7ad7fdea47dc3e8d273cbce80e30acf3330"
+  },
+  "scope_note": "Input-only route starts the hen-house game. Its source creates the floor sprite with (the stage).image.crop(rect(0,450,800,600)); inspect the captured lower stage for the recovered floor rather than a blank rectangle. No original-projector pixel match is inferred.",
+  "observations": {
+    "hen-house-floor": {
+      "sequence": {
+        "frames": 13,
+        "stride_ticks": 5,
+        "max_blank_frames": 0
+      }
+    }
+  }
+}

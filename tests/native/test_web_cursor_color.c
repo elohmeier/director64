@@ -18,9 +18,9 @@ int main(void) {
   dg_cursor_bitmap_t cursor;
   assert(wc_cursor_bitmap(&compositor,&values,&member,NULL,&cursor));
   assert(cursor.color&&cursor.hot_x==7&&cursor.hot_y==0);
-  uint16_t pixels[256];dg_cursor_pixels_ink(&cursor,pixels,dg_cursor_ink(0,0,255));
-  assert(pixels[0]==dg_cursor_ink(0,255,0));
-  assert(pixels[1]==1&&!(pixels[2]&1)&&pixels[3]==dg_cursor_ink(255,0,0));
+  uint16_t pixels[256];dg_cursor_pixels(&cursor, pixels);
+  assert(pixels[0]==dg_cursor_color_pixel(0,255,0));
+  assert(pixels[1]==1&&!(pixels[2]&1)&&pixels[3]==dg_cursor_color_pixel(255,0,0));
   assert(!values.failed);wc_release(&compositor);
   puts("web color cursor: authored colors, alpha and registration survive asset loading");
 }

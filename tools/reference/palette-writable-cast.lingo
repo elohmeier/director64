@@ -1,0 +1,21 @@
+-- Diagnostic experiment: no successful palette pixel comparison was obtained.
+-- director64: fileio-functions
+-- Test a writable cast from the selected disc without editing retail files.
+global out
+openXLib("XTRAS\FILEIO.X32")
+set out = new(xtra("fileio"))
+createFile(out, "C:\palette-writable-cast.txt")
+openFile(out, "C:\palette-writable-cast.txt", 2)
+set w = window("director64-palette-probe")
+set the fileName of w = "DATA\ANFANG.DXR"
+open(w)
+tell w
+  writeString(out, string(["context", the movieName, the frame, the number of castLibs]) & RETURN)
+  writeString(out, string(["castFileBefore", the fileName of castLib 1]) & RETURN)
+  set the fileName of castLib 1 = "DATA\BILDER.CST"
+  writeString(out, string(["castFileAfter", the fileName of castLib 1]) & RETURN)
+  set newScript = new(#script, castLib 1)
+  writeString(out, string(["newScript", newScript]) & RETURN)
+end tell
+closeFile(out)
+close(w)

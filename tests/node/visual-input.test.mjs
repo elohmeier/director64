@@ -3,6 +3,12 @@ import test from "node:test";
 import {inputCommand, stateReply} from "../../platforms/web/site/validation.js";
 import {expectation} from "../../tools/validation/browser.mjs";
 
+test("recorded controller input has one logical sample and rejects player indices", () => {
+  assert.equal(inputCommand("pad 60 80 0 1", 640, 480).single, "pad 1 80 0 1");
+  for (let player = 0; player < 4; player++)
+    assert.throws(() => inputCommand(`pad ${player} 60 80 0 1`, 640, 480));
+});
+
 test("browser validation accepts only bounded real player input", () => {
   assert.equal(inputCommand("step 60 799 599 1", 800, 600).single, "step 1 799 599 1");
   assert.equal(inputCommand("text 127 ANNA", 800, 600).command, "text 127 ANNA");

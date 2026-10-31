@@ -1,6 +1,6 @@
 # Autos bauen mit Willy Werkel
 
-Experimental extended Director 6 port of the German edition pinned in
+Experimental Director 6 port using the shared media engine and extended tables, of the German edition pinned in
 `game.toml` (a ZIP of the disc). The embedded launcher in `Willy32.exe`
 converts as `START.DXR`.
 
@@ -15,10 +15,13 @@ notices are dismissed with A, B or Start (`runtime/willy_input.c`, switch
 `WILLY`). Names are typed through the TV keyboard or the web app's text box.
 The player and car database saves as `data.cxt`.
 
-`game.toml` `[convert]`: the external file chooser becomes a recoverable
-alert, the certificate's print button shows a notice, a substitute font is
-measured for name-width checks, and three text members lose stray trailing
-characters so their literals parse.
+The external car chooser uses the player's browser file dialog or Android
+document picker. Imported cars pass the original ownership checks; exports
+contain the original serialized car data. The certificate's original
+PrintOMatic handler composes the car, names, signature and earned medals for
+the platform print service. Documents use an A4 page with the authored margins.
+Native transitions suspend the score during their reveal.
 
-Known gaps: importing or exporting car files, printing, and the original's
-score pause during transitions (the score keeps playing during reveals).
+A substitute font supplies the name-width checks, and three text members lose
+stray trailing characters so their literals parse. Full activity completion
+and physical Android TV display qualification remain separate checks.

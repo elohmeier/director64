@@ -12,6 +12,7 @@ pub mod compile;
 pub mod cursor;
 pub mod d5media;
 pub mod dump;
+pub mod executable_cursor;
 pub mod fdi;
 pub mod files;
 pub mod film;
@@ -40,7 +41,9 @@ pub mod swa;
 pub mod swf;
 pub mod system_font;
 pub mod text;
+pub mod text_box;
 mod texture_palette;
+pub mod vector;
 pub mod xtra;
 
 pub mod vp6;

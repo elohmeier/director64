@@ -50,6 +50,9 @@
 // zero's behavior root served as that scratch until the script channel
 // claimed it for its own frame behaviors.
 #define DG_SCRATCH_ROOT 1
+// Keep the previous field value alive while a host measures proposed typed
+// text. This independent root survives host-triggered GC and is cleared after.
+#define DG_TEXT_PROBE_ROOT (LV_ROOTS - 1)
 #define DG_FIELD_TEXT_ROOT 2
 #define DG_FIELD_COLOR_ROOT (DG_FIELD_TEXT_ROOT + DG_FIELDS)
 #define DG_TRAILS 256
@@ -116,6 +119,7 @@ _Static_assert(DG_AMP_ROOT < LV_ROOTS, "the amplitude root must fit in the Lingo
 // fan-out that runs before it resumes.
 #define DG_HELD_RESULT_ROOT (DG_AMP_ROOT + 1)
 _Static_assert(DG_HELD_RESULT_ROOT < LV_ROOTS, "the held result root must fit in the Lingo root table");
+_Static_assert(DG_HELD_RESULT_ROOT < DG_TEXT_PROBE_ROOT, "text measurement root must be independent");
 #endif
 // Every sprite's behavior root plus the actor-list slot must stay inside
 // the Lingo root table; the D10 bring-up overran this silently on host.
@@ -123,6 +127,8 @@ _Static_assert(DG_HELD_RESULT_ROOT < LV_ROOTS, "the held result root must fit in
 #if DG_MODERN
 _Static_assert(DG_BEHAVIOR_ROOT + DG_SPRITES < LV_ROOTS,
                "behavior roots exceed the Lingo root table");
+_Static_assert(DG_BEHAVIOR_ROOT + DG_SPRITES < DG_TEXT_PROBE_ROOT,
+               "text measurement root must not overlap behavior roots");
 #endif
 #define DG_HAS_BLEND 16u
 
@@ -199,6 +205,26 @@ typedef struct {
   const char *name;
 } dg_cue_t;
 #endif
+#if DG_MODERN
+// Initial character formatting. Offsets are UTF16 units in the authored text.
+typedef struct {
+  uint32_t offset, rgb;
+  uint8_t font, size, face, align;
+  int16_t ascent, line_height, char_spacing;
+  uint16_t layout_flags; // Host layout hints; not stored in RICH records.
+} dg_text_format_t;
+enum { DG_TEXT_NO_WRAP = 1, DG_TEXT_CLASSIC_FIELD = 2 };
+#endif
+#if DG_D10
+// Retained source vector polygon, before runtime vertexList changes.
+typedef struct {
+  uint16_t vertex_count;
+  const double *vertices; // Alternating horizontal, vertical coordinates.
+  double stroke_width;
+  uint32_t stroke, fill; // 0xRRGGBB.
+  bool filled, closed;
+} dg_vector_shape_t;
+#endif
 typedef struct {
   uint32_t id;
   uint16_t number, cast, type, width, height;
@@ -218,6 +244,9 @@ typedef struct {
   const dg_cue_t *cues;
 #endif
 #if DG_MODERN
+  bool text_box_present, text_word_wrap;
+  uint8_t text_box_type, text_margin, text_border, text_box_shadow;
+  uint32_t text_box_bg;
   const dg_text_style_t *text_style, *text_insert_style;
 #endif
 #if DG_D5 || DG_D10
@@ -234,6 +263,7 @@ typedef struct {
 #endif
 #if DG_D10
   uint8_t source_xtra; // 0 native, 1 Flash, 2 vectorShape, 3 DirectMedia, 4 QuickTime video, 5 color cursor.
+  const dg_vector_shape_t *vector_shape;
   // The recorded dynamic Flash surface: authored frame labels over the
   // flattened film timeline, and the named edit-text fields whose prompts
   // render as text overlays.
@@ -276,6 +306,14 @@ typedef struct {
 #endif
   uint16_t palette_count; // Exact authored CLUT size, 0 when absent.
   const uint32_t *palette;
+  // Original transition cast data (optional TRAN package section).
+  uint16_t transition_ms;
+  uint8_t transition_type, transition_chunk, transition_area;
+  bool transition_present;
+#if DG_MODERN
+  const dg_text_format_t *text_formats;
+  uint16_t text_format_count;
+#endif
 } dg_member_t;
 typedef struct {
   const char *name;
@@ -318,6 +356,7 @@ struct dg_film_track {
 // Keep the owning member so reusing a stage channel cannot leak old edits.
 #define DG_FILM_CHILDREN 256
 #define DG_CHILD_SPRITE 0x40000000u
+#define DG_WINDOW_SPRITE 0x20000000u
 #define DG_CHILD_SHIFT 10
 #define DG_CHILD_CHANNEL_MASK 1023u
 #define DG_CHILD_VISIBLE 0x10000u
@@ -467,7 +506,7 @@ typedef struct {
 typedef struct {
   bool used, write, append;
 #if DG_MODERN
-  bool opened, dirty;
+  bool opened, dirty, external;
   int status;
 #endif
   unsigned file, position, length;
@@ -479,11 +518,14 @@ typedef struct {
 #endif
 } dg_file_t;
 struct dg_runtime;
+bool dg_text_format_property_get(lv_runtime_t *,lv_t,const char *,lv_t *);
+bool dg_text_format_property_set(lv_runtime_t *,lv_t,const char *,lv_t);
 struct dg_flash_instance;
 typedef struct {
   // Read/write an explicitly named virtual save file; never a host path.
   bool (*read_file)(void *, const char *, char *, unsigned, unsigned *);
   bool (*write_file)(void *, const char *, const char *, unsigned);
+  bool (*file_exists)(void *, const char *);
   const char *(*nth_file)(void *, const char *, int);
   bool (*directory)(void *, const char *, bool create);
   bool file_paths;
@@ -510,6 +552,9 @@ typedef struct {
   // rather than a frame count, so a frame that holds for a line of speech
   // ends when the speech does. NULL leaves cue points undelivered.
   unsigned (*sound_position)(void *, unsigned);
+  // One-based character position (cell left, bottom row) in field coordinates,
+  // using the same line placement/alignment as the host's rendered glyphs.
+  bool (*text_position)(void *, uint32_t member, int position, int *x, int *y);
 #endif
 #if DG_D10
   // Stream a converted external audio file on a sound channel; the name is
@@ -524,23 +569,34 @@ typedef struct {
   // (the exercise task databases). Never a host path, and never writable:
   // mutable records live in the save archive behind read_file.
   bool (*read_data)(void *, const char *, char *, unsigned, unsigned *);
+  bool (*remove_file)(void *, const char *);
+  bool (*rename_file)(void *, const char *, const char *);
   // Keep what the stage shows now as the member's image (`member.image =
   // (the stage).image`); NULL leaves such members showing their own image.
   void (*capture_stage)(void *, uint32_t member);
   // Copy an authored member (including text), or the stage for member 0,
   // into independently owned pixels. Failure is a script error.
   bool (*read_image)(void *, uint32_t member, dg_pixel_image_t *);
+  // Query decoded media residency without loading; load=true requests a
+  // bounded cache preload. Native film/text/script data is package-resident.
+  bool (*member_resident)(void *, uint32_t member, bool load);
   // Embedded Flash text used as a geometric mask: sample glyph coverage
   // in field-local authored coordinates, independent of object opacity.
   bool (*flash_field_hit)(void *, struct dg_runtime *,
                           struct dg_flash_instance *, float x, float y);
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+#endif
+#if DG_CAP_TEXT_BOX
   // Which character of a text member's box lies at (x, y) in that box, as
   // the host set it: 0-based in Unicode characters, -1 for none. `sprite`
   // names the channel showing it (its rectangle is the box), 0 for the
   // member's own size. NULL where no host lays text out.
   int (*text_char_at)(void *, uint32_t member, unsigned sprite, int x, int y);
 #endif
+#if DG_CAP_TEXT_BOX
+  // Intrinsic wrapped line-box height at this authored width, or -1 on failure.
+  // Width zero privately requests the first natural/fixed row pitch only;
+  // this must not reenter dg_text_dimensions.
+  int (*text_height)(void *, uint32_t member, unsigned width);
 #endif
 } dg_platform_t;
 typedef struct dg_runtime {
@@ -598,15 +654,21 @@ typedef struct dg_runtime {
   unsigned mouse_hit_result;
 #endif
 #if DG_D10
-  // The one authored controller window: resident code, unticked score. The
-  // requested movie stem awaits the platform's overlay load; attachment
-  // completes through dg_window_attach. The first attachment is the home
-  // controller whose code stays resident beside the focused window movie,
-  // and a navigation issued while a load is pending queues behind it.
+  // The one authored controller window owns a playhead/interpreter context;
+  // globals and heap objects are shared with the stage. Hidden windows tick.
   const dg_movie_t *window_movie, *window_home;
   char window_movie_name[40], window_movie_queue[40];
   bool tell_window, window_open, window_visible;
   int window_rect[4];
+  struct dg_runtime *window_runtime, *window_parent;
+  struct dg_runtime *tell_targets[16];
+  unsigned tell_levels[16];
+  unsigned tell_depth;
+  bool window_pointer, window_focus, window_forget;
+  int window_pointer_x, window_pointer_y;
+  bool window_pointer_down;
+  bool window_native;
+  unsigned window_revision;
   // Channel-0 frame behaviors receive beginSprite when their span begins.
   // The span is identified by its parameter block, not by the script member:
   // consecutive spans routinely re-use one behavior with different authored
@@ -702,10 +764,11 @@ typedef struct dg_runtime {
   } cue_state[DG_SOUND_CHANNELS];
 #endif
   unsigned transition_type, transition_serial;
-  // Requested visual parameters: duration in ticks (quarter-second minimum,
-  // as the original), chunk size in pixels. The platform renderer decides
-  // whether it can animate the type; the score itself never blocks.
-  unsigned transition_duration, transition_chunk;
+  // A queued effect is consumed at the next stage presentation. Wall-clock
+  // ticks and audio continue while its destination frame's Lingo waits.
+  unsigned transition_duration, transition_chunk, transition_area;
+  uint32_t transition_start;
+  bool transition_pending, transition_active;
 #if DG_EXTENDED
   uint16_t behavior_channel, behavior_cursor;
   char behavior_event[32];
@@ -724,6 +787,8 @@ typedef struct dg_runtime {
 #endif
 #if DG_MODERN
   char next_movie_label[80];
+  uint32_t hilite_member;
+  unsigned hilite_start, hilite_end; // UTF16 boundaries, zero-based/end-exclusive.
 #endif
 #if DG_D10
   // The room engine drives its characters through actorList stepFrame.
@@ -767,9 +832,25 @@ typedef struct dg_runtime {
   bool loop_values[64];
   unsigned loop_count;
   char field_fonts[DG_FIELDS][64];
-  bool field_text_changed[DG_FIELDS], field_font_changed[DG_FIELDS];
+  bool field_text_changed[DG_FIELDS], field_font_changed[DG_FIELDS], field_face_changed[DG_FIELDS], field_size_changed[DG_FIELDS];
   int field_scroll[DG_FIELDS];
-  uint8_t field_sizes[DG_FIELDS], field_align[DG_FIELDS];
+  uint8_t field_sizes[DG_FIELDS], field_align[DG_FIELDS], field_faces[DG_FIELDS];
+  int16_t field_line_space[DG_FIELDS],field_char_spacing[DG_FIELDS];
+  bool field_spacing_changed[DG_FIELDS];
+  // Mutable character formatting; a bounded pool, grouped by member.
+  uint16_t text_format_count;
+  uint32_t text_format_members[1024];
+  dg_text_format_t text_format_runs[1024];
+#if DG_CAP_TEXT_BOX
+  bool field_box_live[DG_FIELDS];
+  uint8_t field_box_types[DG_FIELDS]; // 1 adjust, 2 fixed, 3 scroll.
+  uint8_t field_margins[DG_FIELDS],field_borders[DG_FIELDS],field_box_shadows[DG_FIELDS];
+  uint32_t field_box_bg[DG_FIELDS];
+  bool field_box_paint[DG_FIELDS];
+  bool field_word_wrap[DG_FIELDS];
+  uint16_t field_widths[DG_FIELDS], field_heights[DG_FIELDS], field_content_heights[DG_FIELDS];
+  uint32_t field_measure_revision[DG_FIELDS];
+#endif
   bool begin_pending[DG_SPRITES];
 #endif
 #if DG_D10
@@ -808,8 +889,6 @@ typedef struct dg_runtime {
   uint8_t field_patterns[DG_FIELDS];
   uint32_t active_palette[256];
   bool palette_active, palette_puppet;
-  uint32_t palette_fade_serial, palette_fade_start;
-  uint8_t palette_fade_kind, palette_fade_half;
   dg_cursor_t cursor;
   int sound_level, color_depth, float_precision;
   int click_x, click_y;
@@ -889,6 +968,10 @@ static inline unsigned dg_video_player_id(const dg_runtime_t *d, unsigned channe
 #endif
 }
 
+#if DG_MODERN
+const dg_text_format_t *dg_text_formats(dg_runtime_t *,uint32_t,unsigned *);
+bool dg_text_format_splice(dg_runtime_t *,uint32_t,const char *,lv_t,lv_t,lv_t,lv_t);
+#endif
 void dg_init(dg_runtime_t *, lv_runtime_t *, dg_platform_t, void *,
              const char *const *, unsigned, uint32_t);
 bool dg_enter(dg_runtime_t *, const dg_movie_t *, unsigned,
@@ -897,6 +980,12 @@ dg_cursor_t dg_cursor_at(dg_runtime_t *, int, int);
 dg_cursor_t dg_cursor_current(dg_runtime_t *);
 // Also called before a platform unloads old audio resources; idempotent.
 void dg_stop_sounds(dg_runtime_t *);
+#if DG_CAP_TEXT_BOX
+typedef struct { unsigned margin,border,shadow; uint32_t bg_rgb; bool wrap,present; } dg_text_box_settings_t;
+bool dg_text_box_settings(dg_runtime_t *,uint32_t member,dg_text_box_settings_t *);
+bool dg_text_dimensions(dg_runtime_t *, uint32_t member, bool content,
+                         unsigned *width, unsigned *height);
+#endif
 unsigned dg_opacity(const dg_sprite_t *);
 unsigned dg_film_pose(const dg_member_t *, const dg_sprite_t *);
 unsigned dg_film_storage_pose(const dg_member_t *, const dg_sprite_t *);
@@ -1008,11 +1097,13 @@ const dg_flash_field_t *dg_flash_field_find(const dg_member_t *, const char *);
 // in the same pixels.
 unsigned dg_flash_field_wrap(const dg_flash_field_t *, unsigned, const char *,
                              int, char *, unsigned);
-// Complete a requested controller-window movie attachment once its overlay
-// is resident; the window's code then survives every stage movie change.
+// Attach a controller movie in its independent, shared-global context.
 void dg_window_attach(dg_runtime_t *, const dg_movie_t *);
-// Attach the pending window movie when the current movie satisfies it; the
-// focused-window boot enters window movies in the single context.
 void dg_window_loaded(dg_runtime_t *);
+// Enter/leave the named controller context for composition.
+dg_runtime_t *dg_window_begin(dg_runtime_t *);
+void dg_window_end(dg_runtime_t *);
+// Canonical mutable member owner, for callbacks using the active member roots.
+dg_runtime_t *dg_member_context(dg_runtime_t *, uint32_t member);
 #endif
 #endif

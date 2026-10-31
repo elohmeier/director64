@@ -1,0 +1,24 @@
+-- Observe actual Director10.1 classic field CASt types in Deutsch TEST2CB1.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\text-field-source-types.txt")
+out.openFile("C:\text-field-source-types.txt",2)
+out.writeString(string([#version,the productVersion]) & RETURN)
+out.writeString(string([#applicationPath,the applicationPath]) & RETURN)
+w=window().new("director64-field-types")
+out.writeString(string([#window,w]) & RETURN)
+w.fileName=the applicationPath & "data\TEST2CB1.DXR"
+out.writeString(string([#filename,w.fileName]) & RETURN)
+w.open()
+tell w
+ repeat with n in [49,50,56,73,74,75]
+  t=member(n,1)
+  out.writeString(string([#source,n,t.name,t.type,t.boxType,t.rect,t.wordWrap,t.margin,t.border,t.boxDropShadow]) & RETURN)
+ end repeat
+ t=member(49,1)
+ repeat with kind in [#adjust,#fixed,#scroll]
+  t.boxType=kind
+  out.writeString(string([#assigned,kind,t.boxType,t.rect]) & RETURN)
+ end repeat
+end tell
+out.closeFile()

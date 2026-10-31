@@ -10,7 +10,7 @@ final class Native {
 
   private Native() {}
 
-  /** Starts the game thread on the APK's assets; the save is the 128 KiB save image. */
+  /** Starts the game thread on the APK's assets and this game's save image. */
   static native void start(GameActivity activity, AssetManager assets, String savePath, float volume);
 
   static native void stop();
@@ -19,18 +19,31 @@ final class Native {
 
   static native void hold(int reason, boolean on);
 
-  /** One controller port as a controller sample (runtime/interaction/input.h). */
-  static native void pad(int port, boolean connected, int buttons, int stickX, int stickY);
+  /** The single controller sample (runtime/interaction/input.h). */
+  static native void pad(boolean connected, int buttons, int stickX, int stickY);
 
   /** The mouse in stage pixels; buttons as input.h bits (left A, right B). */
-  static native void mouse(int x, int y, int buttons, boolean inside);
+  static native void mouse(int x, int y, int buttons, boolean inside, boolean physical);
+
+  /** UI acknowledgement after applying a pointer icon; stale replies are ignored. */
+  static native boolean pointerCurrent(int sequence, int kind);
+
+  static native void pointerReady(int sequence, int kind);
 
   /** A key as a desktop projector receives it: Macintosh key code and character. */
   static native void key(int code, int character, boolean down);
 
-  static native boolean commitText(int request, byte[] windows1252);
+  static native boolean commitText(int request, byte[] utf8);
 
   static native void cancelText(int request);
+
+  /** Queued, capability-bound document replies; the game worker owns the engine. */
+  static native boolean fileReply(int id, int kind, byte[] name, byte[] raw,
+      byte[] rgba, int width, int height);
+
+  static native boolean fileCancel(int id, int kind);
+
+  static native boolean fileComplete(int id, int kind, boolean success);
 
   /** A character typed into a key field (Mucklas' name) as the game's key presses; 8 deletes. */
   static native void typeKey(int request, int character);

@@ -12,10 +12,6 @@
 #define SCREEN_W 640
 #define SCREEN_H 480
 #endif
-/* Up to four players, one per connected controller. A player's index is its
- * controller slot. */
-#define INPUT_PLAYERS 4
-
 enum {
     INPUT_A = 1u << 0, INPUT_B = 1u << 1,
     INPUT_LEFT = 1u << 2, INPUT_RIGHT = 1u << 3,
@@ -25,21 +21,14 @@ enum {
     INPUT_C_UP = 1u << 9, INPUT_C_DOWN = 1u << 10,
 };
 
-typedef struct {
-    bool connected;
-    uint16_t buttons;
-    int8_t stick_x, stick_y;
-} input_pad_t;
-
-/* Port one stays in the leading fields, so recorded journeys, host probes and
- * the services that read a sample directly keep their existing shape. */
+/* One logical controller and optional absolute pointer. Recorded single-player
+ * journeys use these same leading controller fields. */
 typedef struct {
     bool connected;
     uint16_t buttons;
     int8_t stick_x, stick_y;
     bool pointer_absolute;
     int32_t pointer_x, pointer_y;
-    input_pad_t pads[INPUT_PLAYERS - 1]; /* Ports two through four. */
 } input_sample_t;
 
 typedef struct {
@@ -48,14 +37,8 @@ typedef struct {
     bool connected;
 } input_state_t;
 
-input_pad_t input_sample_pad(const input_sample_t *sample, unsigned player);
-/* One player's controls as a whole sample, for the modal services that own the
- * screen: whoever holds the pointer drives them, and nobody else interferes. */
-input_sample_t input_sample_for(const input_sample_t *sample, unsigned player);
-
 void input_init(input_state_t *state);
 void input_center(input_state_t *state);
 void input_update(input_state_t *state, const input_sample_t *sample);
-void input_update_pad(input_state_t *state, const input_pad_t *pad);
 
 #endif

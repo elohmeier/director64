@@ -28,11 +28,11 @@ export function stateReply(reply) {
   return state;
 }
 
-export function attachValidation({module, audio, videos, present, width, height, seed}) {
+export function attachValidation({module, audio, videos, present, width, height, seed,serviceRequests=()=>false}) {
   module._d64_probe_render(1);
   let busy = false, audioBlocks = [], audioSamples = 0, realtimeDeadline = null;
   const timing = {realtime_ticks: 0, accelerated_ticks: 0, max_lateness_ms: 0};
-  // Capture the actual mixed PCM after authored gains and the master volume.
+  // Capture final PCM after authored gains, master volume and output clamp.
   // The tap's output is silent; the original connection still plays normally.
   const tap = audio.context.createScriptProcessor(2048, 2, 2);
   let recording = false;
@@ -51,10 +51,11 @@ export function attachValidation({module, audio, videos, present, width, height,
     audioSamples += block.length;
     audioBlocks.push(block);
   };
-  audio.master.connect(tap);
+  (audio.output ?? audio.master).connect(tap);
   tap.connect(audio.context.destination);
   const rpc = command => {
     const state = stateReply(module.ccall("d64_rpc", "string", ["string"], [command]));
+    serviceRequests();
     const failure = audio.errors[0] || videos.errors[0];
     if (failure) throw new Error(failure);
     return state;

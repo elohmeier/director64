@@ -7,12 +7,14 @@
 #include "image_plan.h"
 #include "flash_render.h"
 #include "shape.h"
+#include <ctype.h>
 #include <stdio.h>
 #ifdef DIRECTOR64_DEV_LENIENT
 #define dev_print(...) fprintf(stderr, __VA_ARGS__)
 #endif
 #include <stdlib.h>
 #include <string.h>
+#include "buttons.h"
 #include "compositor_cache.h"
 #include "compositor_film.h"
 #include "compositor_prefix.h"
@@ -119,8 +121,8 @@ static void evict(wc_t *c, wc_image_t *image) {
   c->evictions++;
 }
 void wc_release(wc_t *c) {
-  free(c->palette_previous);
-  c->palette_previous = NULL;
+  free(c->transition_previous); free(c->transition_next);
+  c->transition_previous = c->transition_next = NULL;
 #if DG_D10
   for (unsigned i=0;i<8;i++) { free(c->film_scratch[i]); c->film_scratch[i]=NULL; }
   c->target=NULL; c->film_depth=0;
@@ -137,6 +139,7 @@ void wc_release(wc_t *c) {
   for (unsigned i = 0; i < WC_TEXT_SLOTS; i++) {
     free(c->texts[i].coverage);
     free(c->texts[i].runs);
+    free(c->texts[i].rgba);
   }
   memset(c->texts, 0, sizeof(c->texts));
 }
@@ -759,27 +762,27 @@ static uint32_t text_key(const char *text, int width, int height,
     hash = (hash ^ style->align) * 16777619u;
     hash = (hash ^ (uint32_t)style->ascent) * 16777619u;
     hash = (hash ^ (uint32_t)style->line_height) * 16777619u;
+    hash = (hash ^ style->face) * 16777619u;
   }
   return hash;
 }
-// Recovered text is UTF-8; anything else is taken as Latin-1 rather than
-// handed to the host as malformed UTF-8.
+// Recovered text is UTF-8; legacy FileIO/key strings use Windows1252.
+// Preserve its Euro/punctuation mappings rather than treating bytes80..9f as
+// Latin1 controls when a selected CAR file contains those characters.
 static const char *utf8_text(const char *text) {
   static char converted[8192];
-  if (text_is_utf8(text))
-    return text;
-  size_t at = 0;
-  for (const unsigned char *p = (const unsigned char *)text;
-       *p && at + 3 < sizeof(converted); p++) {
-    if (*p < 0x80)
-      converted[at++] = (char)*p;
-    else {
-      converted[at++] = (char)(0xc0 | *p >> 6);
-      converted[at++] = (char)(0x80 | (*p & 0x3f));
-    }
+  static const uint16_t western[32]={0x20ac,0x81,0x201a,0x192,0x201e,0x2026,0x2020,0x2021,
+    0x2c6,0x2030,0x160,0x2039,0x152,0x8d,0x17d,0x8f,0x90,0x2018,0x2019,0x201c,
+    0x201d,0x2022,0x2013,0x2014,0x2dc,0x2122,0x161,0x203a,0x153,0x9d,0x17e,0x178};
+  if (text_is_utf8(text))return text;
+  size_t at=0;
+  for(const unsigned char *p=(const unsigned char *)text;*p && at+3<sizeof(converted);p++) {
+    unsigned cp=*p>=0x80 && *p<0xa0?western[*p-0x80]:*p;
+    if(cp<0x80)converted[at++]=(char)cp;
+    else if(cp<0x800){converted[at++]=(char)(0xc0|cp>>6);converted[at++]=(char)(0x80|(cp&0x3f));}
+    else {converted[at++]=(char)(0xe0|cp>>12);converted[at++]=(char)(0x80|(cp>>6&0x3f));converted[at++]=(char)(0x80|(cp&0x3f));}
   }
-  converted[at] = 0;
-  return converted;
+  converted[at]=0;return converted;
 }
 // Where the host set each character of a box (x, y, w, h per character).
 enum { WC_LAYOUT_CHARS = 4096 };
@@ -820,6 +823,7 @@ static bool draw_text(wc_t *c, const char *text, const wc_text_style_t *style,
     slot = oldest;
     free(slot->coverage);
     free(slot->runs);
+    free(slot->rgba);slot->rgba=NULL;
     slot->runs = NULL;
     slot->coverage = calloc((size_t)width * height, 1);
     if (!slot->coverage || !c->host.text(c->host.ctx, text, width, height,
@@ -882,6 +886,33 @@ static bool draw_text(wc_t *c, const char *text, const wc_text_style_t *style,
   return true;
 }
 
+#if DG_MODERN
+static bool text_font_name(const char *a,const char *b) {
+  size_t an=strlen(a),bn=strlen(b);
+  while(an && (a[an-1]==' ' || a[an-1]=='*'))an--;
+  while(bn && (b[bn-1]==' ' || b[bn-1]=='*'))bn--;
+  if(an!=bn)return false;
+  for(size_t i=0;i<an;i++)if(tolower((unsigned char)a[i])!=tolower((unsigned char)b[i]))return false;
+  return true;
+}
+static const dg_text_style_t *text_font_style(dg_runtime_t *d,const char *name,unsigned size) {
+  const dg_text_style_t *match=NULL;
+  unsigned distance=UINT32_MAX;
+  for(unsigned file=0;d && file<d->loaded_count;file++) {
+    const dg_movie_t *movie=d->loaded[file];
+    for(unsigned i=0;movie && i<movie->member_count;i++) {
+      const dg_member_t *candidate=&movie->members[i];
+      const dg_text_style_t *styles[]={candidate->text_style,candidate->text_insert_style};
+      for(unsigned k=0;k<2;k++)if(styles[k] && styles[k]->font_id && styles[k]->font_name &&
+          text_font_name(styles[k]->font_name,name)) {
+        unsigned delta=styles[k]->size>size?styles[k]->size-size:size-styles[k]->size;
+        if(delta<distance){match=styles[k];distance=delta;}
+      }
+    }
+  }
+  return match;
+}
+#endif
 // The style a text member sets in: its authored one, or NULL for the
 // builtin monospace font.
 static const wc_text_style_t *member_text_style(dg_runtime_t *d, const dg_member_t *m,
@@ -890,20 +921,22 @@ static const wc_text_style_t *member_text_style(dg_runtime_t *d, const dg_member
 #if DG_MODERN
   const dg_text_style_t *st = m->text_style;
   const char *font = NULL;
-  unsigned size = 0, align = 0;
+  unsigned size = 0, align = 0, face = m->text_format_count ? m->text_formats[0].face : 0;
   for (unsigned j = 0; d && j < d->field_count; j++)
     if (d->field_members[j] == m->id) {
       *scroll = d->field_scroll[j];
       font = d->field_font_changed[j] ? d->field_fonts[j] : NULL;
-      size = d->field_sizes[j];
+      size = d->field_size_changed[j]?(d->field_sizes[j]?d->field_sizes[j]:12):0;
       align = d->field_align[j];
+      if(d->field_face_changed[j])face=d->field_faces[j];
+      else if(d->field_text_changed[j] && m->text_format_count)face=m->text_formats[m->text_format_count-1].face;
       if (d->field_text_changed[j] && m->text_insert_style)
         st = m->text_insert_style;
       break;
     }
-  if (st || font || size || align) {
-    *authored = st ? (wc_text_style_t){st->font_id, st->size, st->align, st->ascent, st->line_height}
-                   : (wc_text_style_t){0, 12, 0, 12, 15};
+  if (st || font || size || align || face) {
+    *authored = st ? (wc_text_style_t){st->font_id, st->size, st->align, st->ascent, st->line_height, face}
+                   : (wc_text_style_t){0, 12, 0, 12, 15, face};
     if (size) {
       unsigned old = authored->size ? authored->size : 12;
       authored->ascent = (authored->ascent * size + old / 2) / old;
@@ -911,17 +944,32 @@ static const wc_text_style_t *member_text_style(dg_runtime_t *d, const dg_member
       authored->size = size;
     }
     if (align) authored->align = align - 1;
-    if (font && *font)
-      for (unsigned file = 0; file < d->loaded_count; file++) {
-        const dg_movie_t *movie = d->loaded[file];
-        for (unsigned i = 0; movie && i < movie->member_count; i++) {
-          const dg_member_t *candidate = &movie->members[i];
-          const dg_text_style_t *styles[] = {candidate->text_style, candidate->text_insert_style};
-          for (unsigned k = 0; k < 2; k++)
-            if (styles[k] && styles[k]->font_name && !strcmp(styles[k]->font_name, font))
-              authored->font = styles[k]->font_id;
+    for(unsigned j=0;d&&j<d->field_count;j++)if(d->field_members[j]==m->id&&d->field_line_space[j]>0)
+      authored->line_height=d->field_line_space[j];
+    if (font && *font) {
+      const dg_text_style_t *match=text_font_style(d,font,authored->size);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      // Original8.5 retains an unavailable requested .font while rendering its
+      // Windows Arial fallback. Use that recovered face, never an unrelated
+      // member's previous font or the host browser's implicit fallback.
+      if(!match) {
+        match=text_font_style(d,"Arial",authored->size);
+        if(match && d->platform.trace) {
+          char note[160];snprintf(note,sizeof(note),"TEXT_FONT_FALLBACK requested=%s rendered=Arial",font);
+          d->platform.trace(d->context,note);
         }
       }
+#endif
+      if (!match || !match->font_id) {
+        char message[160];snprintf(message,sizeof(message),"requested text font is absent from the recovered font inventory: %s",font);
+        lv_fail(d->values,message);authored->font=0;
+      } else {
+        unsigned base=match->size?match->size:12;
+        authored->font=match->font_id;
+        authored->ascent=(match->ascent*(int)authored->size+(int)base/2)/(int)base;
+        authored->line_height=(match->line_height*(int)authored->size+(int)base/2)/(int)base;
+      }
+    }
     return authored;
   }
 #else
@@ -931,6 +979,317 @@ static const wc_text_style_t *member_text_style(dg_runtime_t *d, const dg_member
 #endif
   return NULL;
 }
+#if DG_MODERN
+// Whole-field style mutations retain the other initial character styles.
+// Replacing the text adopts its insertion style and no longer uses the old
+// character ranges. Hosts receive the same normalized styles for images,
+// stage rendering and character geometry.
+static const dg_text_format_t *member_text_formats_base(dg_runtime_t *d,const dg_member_t *m,
+                          const char *text,const wc_text_style_t *base,unsigned *count) {
+  const dg_text_format_t *live=dg_text_formats(d,m->id,count);if(live)return live;
+  *count=m->text_format_count;
+  static dg_text_format_t changed[4096];
+  if(!m->text_formats || !m->text_format_count || m->text_format_count>4096 ||
+      !m->text || !text || strcmp(m->text,text))return NULL;
+  for(unsigned j=0;j<d->field_count;j++)if(d->field_members[j]==m->id) {
+    if(d->field_text_changed[j])return NULL;
+    lv_t color=d->values->roots[DG_FIELD_COLOR_ROOT+j];
+    if(!d->field_font_changed[j] && !d->field_size_changed[j] && !d->field_align[j] &&
+        !d->field_face_changed[j] && lv_type(color)==LV_VOID)return m->text_formats;
+    memcpy(changed,m->text_formats,m->text_format_count*sizeof(*changed));
+    for(unsigned i=0;i<m->text_format_count;i++) {
+      dg_text_format_t *f=&changed[i];unsigned old=f->size?f->size:12;
+      if(d->field_size_changed[j]) {
+        f->size=d->field_sizes[j];unsigned effective=f->size?f->size:12;
+        f->ascent=(int16_t)((f->ascent*(int)effective+(int)old/2)/(int)old);
+        f->line_height=(int16_t)((f->line_height*(int)effective+(int)old/2)/(int)old);
+      }
+      if(d->field_font_changed[j] && base) {
+        unsigned n=base->size?base->size:12;f->font=(uint8_t)base->font;
+        unsigned effective=f->size?f->size:12;
+        f->ascent=(int16_t)((base->ascent*(int)effective+(int)n/2)/(int)n);
+        f->line_height=(int16_t)((base->line_height*(int)effective+(int)n/2)/(int)n);
+      }
+      if(d->field_align[j])f->align=d->field_align[j]-1;
+      if(d->field_face_changed[j])f->face=d->field_faces[j];
+      if(lv_type(color)!=LV_VOID) {
+        unsigned n=(unsigned)lv_integer(d->values,color);
+        f->rgb=lv_type(color)==LV_COLOR || n>255?n:dg_stage_palette(d)[n];
+      }
+    }
+    return changed;
+  }
+  return m->text_formats;
+}
+static const dg_text_format_t *member_text_formats(dg_runtime_t *d,const dg_member_t *m,
+                          const char *text,const wc_text_style_t *base,unsigned *count) {
+  const dg_text_format_t *formats=member_text_formats_base(d,m,text,base,count);
+#if DG_CAP_TEXT_BOX
+  dg_text_box_settings_t box;
+  unsigned flags=m->text_box_present?DG_TEXT_CLASSIC_FIELD:0;
+  if(dg_text_box_settings(d,m->id,&box) && !box.wrap)flags|=DG_TEXT_NO_WRAP;
+  if(flags && !formats && base && base->font) {
+    static dg_text_format_t single;
+    const dg_text_style_t *source=m->text_insert_style?m->text_insert_style:m->text_style;
+    uint32_t rgb=source?source->color:0;
+    for(unsigned i=0;i<d->field_count;i++)if(d->field_members[i]==m->id) {
+      lv_t color=d->values->roots[DG_FIELD_COLOR_ROOT+i];
+      if(lv_type(color)!=LV_VOID) {
+        unsigned n=(unsigned)lv_integer(d->values,color);const uint32_t *palette=dg_stage_palette(d);
+        rgb=lv_type(color)==LV_COLOR||n>255||!palette?n:palette[n];
+      }
+      break;
+    }
+    single=(dg_text_format_t){.font=(uint8_t)base->font,.size=(uint8_t)base->size,
+      .align=(uint8_t)base->align,.face=(uint8_t)base->face,.ascent=(int16_t)base->ascent,
+      .line_height=(int16_t)base->line_height,.rgb=rgb};
+    formats=&single;*count=1;
+  }
+  if(flags && formats && *count<=4096) {
+    static dg_text_format_t adjusted[4096];memcpy(adjusted,formats,*count*sizeof(*adjusted));
+    for(unsigned i=0;i<*count;i++)adjusted[i].layout_flags|=(uint16_t)flags;
+    return adjusted;
+  }
+#endif
+  return formats;
+}
+static int member_layout(wc_t *c,dg_runtime_t *d,const dg_member_t *m,const char *text,
+                         int width,int height,const wc_text_style_t *style) {
+  unsigned format_count=0;const dg_text_format_t *formats=member_text_formats(d,m,text,style,&format_count);
+  if(!formats)return text_layout(c,utf8_text(text),width,height,style);
+  if(!c->host.rich_layout){lv_fail(d->values,"formatted text layout service unavailable");return 0;}
+  int n=c->host.rich_layout(c->host.ctx,utf8_text(text),width,height,formats,format_count,
+                           layout_boxes,WC_LAYOUT_CHARS);
+  return n<0?0:n>WC_LAYOUT_CHARS?WC_LAYOUT_CHARS:n;
+}
+#if DG_CAP_TEXT_BOX
+static void text_box_plane(wc_t *c, int l, int t, int r, int b, uint32_t rgb,
+                           unsigned alpha) {
+  int cl = l, ct = t, cr = r, cb = b;
+#if DG_D10
+  film_destination_bounds(c, &cl, &ct, &cr, &cb);
+#else
+  if (cl < 0)
+    cl = 0;
+  if (ct < 0)
+    ct = 0;
+  if (cr > WC_WIDTH)
+    cr = WC_WIDTH;
+  if (cb > WC_HEIGHT)
+    cb = WC_HEIGHT;
+#endif
+  for (int y = ct; y < cb; y++)
+    for (int x = cl; x < cr; x++) {
+      float px = x + 0.5f, py = y + 0.5f;
+#if DG_D10
+      if (c->film_transform_count &&
+          !dg_film_transform_point(c->film_transform, c->film_transform_count,
+                                   px, py, &px, &py))
+        continue;
+#endif
+      if (px >= l && px < r && py >= t && py < b)
+        blend(&target(c)[(size_t)y * WC_WIDTH + x], rgb, alpha);
+    }
+}
+static void draw_text_box(wc_t *c, dg_runtime_t *d, const dg_member_t *m,
+                          unsigned ink, unsigned alpha, int l, int t, int r,
+                          int b) {
+  dg_text_box_settings_t box;
+  if (!dg_text_box_settings(d, m->id, &box) || !box.present)
+    return;
+  // The original field's rect/pageHeight measure its text area, independent
+  // of chrome. Horizontal gutters surround it; vertical gutter is shared
+  // above/below. The border and positive shadow lie outside that area.
+  int gl = (int)box.margin, gt = (int)box.margin / 2, gb = (int)box.margin - gt,
+      n = (int)box.border, s = (int)box.shadow;
+  int left = l - gl - n, top = t - gt - n, right = r + gl + n,
+      bottom = b + gb + n;
+  if (s)
+    text_box_plane(c, left + s, top + s, right + s, bottom + s, 0, alpha);
+  if (ink == 0 || ink == 32 || box.bg_rgb != 0xffffff)
+    text_box_plane(c, left, top, right, bottom,
+                   opaque_rgb(box.bg_rgb) & 0xffffff, alpha);
+  if (n) {
+    text_box_plane(c, left, top, right, top + n, 0, alpha);
+    text_box_plane(c, left, bottom - n, right, bottom, 0, alpha);
+    text_box_plane(c, left, top + n, left + n, bottom - n, 0, alpha);
+    text_box_plane(c, right - n, top + n, right, bottom - n, 0, alpha);
+  }
+}
+#endif
+static bool draw_formatted_text(wc_t *c, const char *text,
+                                const dg_text_format_t *formats, unsigned count,
+                                unsigned alpha, int l, int t, int r, int b,
+                                int scroll) {
+  int width=r-l,visible=b-t;if(scroll<0)scroll=0;
+  if(!text || !*text || width<=0 || visible<=0)return true;
+  if(!c->host.rich_text || width>4096 || visible>4096-scroll)return false;
+  int height=visible+scroll;const char *utf8=utf8_text(text);
+  uint32_t key=text_key(utf8,width,height,NULL)^0x52494348u;
+  for(unsigned i=0;i<count;i++) {
+    const dg_text_format_t *f=&formats[i];
+    const uint32_t parts[]={f->offset,f->rgb,f->font,f->size,f->face,f->align,(uint16_t)f->ascent,(uint16_t)f->line_height,(uint16_t)f->char_spacing,f->layout_flags};
+    for(unsigned k=0;k<10;k++)key=(key^parts[k])*16777619u;
+  }
+  wc_text_t *slot=NULL,*oldest=&c->texts[0];
+  for(unsigned i=0;i<WC_TEXT_SLOTS;i++) {
+    wc_text_t *e=&c->texts[i];if(e->rgba && e->key==key && e->width==width && e->height==height){slot=e;break;}
+    if((!e->coverage&&!e->rgba) || e->last<oldest->last)oldest=e;
+  }
+  if(!slot) {
+    slot=oldest;free(slot->coverage);free(slot->runs);free(slot->rgba);
+    slot->coverage=NULL;slot->runs=NULL;slot->rgba=calloc((size_t)width*height,sizeof(*slot->rgba));
+    if(!slot->rgba || !c->host.rich_text(c->host.ctx,utf8,width,height,formats,count,slot->rgba)) {
+      free(slot->rgba);slot->rgba=NULL;return false;
+    }
+    slot->key=key;slot->width=width;slot->height=height;
+  }
+  slot->last=c->serial;
+  int cl=l<0?0:l,ct=t<0?0:t,cr=r>WC_WIDTH?WC_WIDTH:r,cb=b>WC_HEIGHT?WC_HEIGHT:b;
+#if DG_D10
+  if(c->film_transform_count)film_destination_bounds(c,&cl,&ct,&cr,&cb);
+#endif
+  for(int y=ct;y<cb;y++)for(int x=cl;x<cr;x++) {
+    float px=x+0.5f,py=y+0.5f;
+#if DG_D10
+    if(c->film_transform_count && !dg_film_transform_point(c->film_transform,c->film_transform_count,px,py,&px,&py))continue;
+#endif
+    if(px<l||px>=r||py<t||py>=b)continue;
+    uint32_t p=slot->rgba[(size_t)((int)(py-t)+scroll)*width+(int)(px-l)];
+    if(p>>24)blend(&target(c)[(size_t)y*WC_WIDTH+x],p&0xffffffu,(p>>24)*alpha/255);
+  }
+  return true;
+}
+static void selection_plane(wc_t *c,int l,int t,int r,int b,unsigned alpha) {
+  int cl=l,ct=t,cr=r,cb=b;
+#if DG_D10
+  film_destination_bounds(c,&cl,&ct,&cr,&cb);
+#else
+  if(cl<0)cl=0;
+  if(ct<0)ct=0;
+  if(cr>WC_WIDTH)cr=WC_WIDTH;
+  if(cb>WC_HEIGHT)cb=WC_HEIGHT;
+#endif
+  for(int y=ct;y<cb;y++)for(int x=cl;x<cr;x++) {
+    float px=x+.5f,py=y+.5f;
+#if DG_D10
+    if(c->film_transform_count&&!dg_film_transform_point(c->film_transform,c->film_transform_count,px,py,&px,&py))continue;
+#endif
+    if(px>=l&&px<r&&py>=t&&py<b) {
+      uint32_t *pixel=&target(c)[(size_t)y*WC_WIDTH+x];
+      blend(pixel,(*pixel^0xffffffu)&0xffffffu,alpha);
+    }
+  }
+}
+static void draw_text_selection(wc_t *c,dg_runtime_t *d,const dg_member_t *m,
+ const char *text,const wc_text_style_t *style,int scroll,unsigned alpha,int l,int t,int r,int b) {
+  if(d->hilite_member!=m->id||d->hilite_start>=d->hilite_end||!text||r<=l||b<=t)return;
+  if(scroll<0)scroll=0;
+  if(scroll>4096||b-t>4096-scroll)return;
+  int count=member_layout(c,d,m,text,r-l,b-t+scroll,style);
+  unsigned end=d->hilite_end<(unsigned)count?d->hilite_end:(unsigned)count;
+  struct {int l,t,r,b;} rows[WC_LAYOUT_CHARS];unsigned used=0;
+  for(unsigned i=d->hilite_start;i<end;i++) {
+    const int16_t *box=&layout_boxes[i*4];if(box[3]<=0)continue;
+    int left=box[0],right=box[0]+box[2];
+    if(right<left){int swap=left;left=right;right=swap;}
+    if(right==left)right++;
+    if(used&&rows[used-1].t==box[1]) {
+      if(left<rows[used-1].l)rows[used-1].l=left;
+      if(right>rows[used-1].r)rows[used-1].r=right;
+      if(box[1]+box[3]>rows[used-1].b)rows[used-1].b=box[1]+box[3];
+    } else {rows[used].l=left;rows[used].t=box[1];rows[used].r=right;rows[used++].b=box[1]+box[3];}
+  }
+  // A selected paragraph separator extends that row through the field's
+  // right edge, as the authored dropdown's line range requests.
+  unsigned unit=0;
+  for(const unsigned char *p=(const unsigned char *)utf8_text(text);*p&&unit<end;) {
+    unsigned char lead=*p++;unsigned units=lead>=0xf0?2:1;
+    if((lead=='\r'||lead=='\n')&&unit>=d->hilite_start&&unit>0) {
+      int previous=(int)unit-1;while(previous>=0&&layout_boxes[previous*4+3]<=0)previous--;
+      if(previous>=0)for(unsigned j=0;j<used;j++)if(rows[j].t==layout_boxes[previous*4+1])rows[j].r=r-l;
+    }
+    while((*p&0xc0)==0x80)p++;
+    unit+=units;
+  }
+  for(unsigned i=0;i<used;i++) {
+    int left=l+rows[i].l,top=t+rows[i].t-scroll,right=l+rows[i].r,bottom=t+rows[i].b-scroll;
+    if(left<l)left=l;
+    if(top<t)top=t;
+    if(right>r)right=r;
+    if(bottom>b)bottom=b;
+    if(right>left&&bottom>top)selection_plane(c,left,top,right,bottom,alpha);
+  }
+}
+// Portable native controls. Their geometry and state are source/runtime data;
+// these pixels do not claim parity with a particular Windows theme.
+static void draw_native_button(wc_t *c,dg_runtime_t *d,const dg_member_t *m,
+ unsigned alpha,int l,int t,int r,int b) {
+  unsigned kind=dg_button_kind(m);bool selected=dg_button_hilite(d,m->id);
+  int width=r-l,height=b-t;if(width<=0||height<=0)return;
+  int side=height<13?height:13,mark_top=(height-side)/2;
+  int cl=l,ct=t,cr=r,cb=b;
+#if DG_D10
+  film_destination_bounds(c,&cl,&ct,&cr,&cb);
+#else
+  if(cl<0)cl=0;
+  if(ct<0)ct=0;
+  if(cr>WC_WIDTH)cr=WC_WIDTH;
+  if(cb>WC_HEIGHT)cb=WC_HEIGHT;
+#endif
+  for(int y=ct;y<cb;y++)for(int x=cl;x<cr;x++) {
+    float px=x+.5f,py=y+.5f;
+#if DG_D10
+    if(c->film_transform_count&&!dg_film_transform_point(c->film_transform,c->film_transform_count,px,py,&px,&py))continue;
+#endif
+    if(px<l||px>=r||py<t||py>=b)continue;
+    int u=(int)(px-l),v=(int)(py-t);uint32_t color=0;bool paint=true;
+    if(kind==DG_BUTTON_PUSH) {
+      color=selected?0xa0a0a0:0xc0c0c0;
+      if(!u||!v||u==width-1||v==height-1)color=0;
+      else if(u==1||v==1)color=selected?0x606060:0xffffff;
+      else if(u==width-2||v==height-2)color=selected?0xffffff:0x606060;
+    } else if(u>=side||v<mark_top||v>=mark_top+side)paint=false;
+    else {
+      v-=mark_top;color=0xffffff;
+      if(kind==DG_BUTTON_CHECK) {
+        if(!u||!v||u==side-1||v==side-1)color=0;
+        else if(selected) {
+          int a=u*13/side,z=v*13/side;
+          if((a>=2&&a<=5&&abs(z-(a+3))<=1)||(a>=5&&a<=10&&abs(z-(13-a))<=1))color=0;
+        }
+      } else {
+        float center=side*.5f,dx=u+.5f-center,dy=v+.5f-center;
+        float distance=dx*dx+dy*dy,radius=side*.5f;
+        if(distance>radius*radius)paint=false;
+        else if(distance>=(radius-1)*(radius-1)||
+                (selected&&distance<=radius*radius*.20f))color=0;
+      }
+    }
+    if(paint)blend(&target(c)[(size_t)y*WC_WIDTH+x],color,alpha);
+  }
+  const char *text=m->text;uint32_t label_color=m->text_style?m->text_style->color:0;
+  for(unsigned i=0;i<d->field_count;i++)if(d->field_members[i]==m->id) {
+    text=lv_cstr(d->values,d->values->roots[DG_FIELD_TEXT_ROOT+i]);
+    lv_t color=d->values->roots[DG_FIELD_COLOR_ROOT+i];
+    if(lv_type(color)!=LV_VOID) {
+      unsigned n=(unsigned)lv_integer(d->values,color);const uint32_t *palette=dg_stage_palette(d);
+      label_color=lv_type(color)==LV_COLOR||n>255||!palette?n:palette[n];
+    }
+  }
+  if(!text||!*text)return;
+  wc_text_style_t authored;int scroll;
+  const wc_text_style_t *style=member_text_style(d,m,&authored,&scroll);
+  if(d->values->failed)return;
+  int left=kind==DG_BUTTON_PUSH?l+2:l+side+4;
+  int pitch=style&&style->line_height>0?style->line_height:13;
+  int top=t+(height>pitch?(height-pitch)/2:0),right=r-(kind==DG_BUTTON_PUSH?2:0);
+  if(style){authored=*style;authored.align=kind==DG_BUTTON_PUSH?1:0;style=&authored;}
+  if(kind==DG_BUTTON_PUSH&&selected){left++;top++;right++;}
+  if(right>left&&!draw_text(c,text,style,label_color,alpha,left,top,right,b,NULL,0,0))
+    lv_fail(d->values,"native button label rasterization failed");
+}
+#endif
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
 static const dg_text_extra_t *member_color_runs(dg_runtime_t *d, const dg_member_t *m,
                                                 const char *text) {
@@ -954,19 +1313,103 @@ int wc_text_char_at(wc_t *c, dg_runtime_t *d, const dg_member_t *m, const char *
   if (scroll < 0) scroll = 0;
   if (scroll > 4096 || height > 4096 - scroll) return -1;
   y += scroll;
-  int count = text_layout(c, text, width, height + scroll, style);
+  int count =
+#if DG_MODERN
+      member_layout(c,d,m,text,width,height+scroll,style);
+#else
+      text_layout(c,text,width,height+scroll,style);
+#endif
   for (int i = 0; i < count; i++) {
     const int16_t *box = &layout_boxes[i * 4];
-    if (x >= box[0] && x < box[0] + box[2] && y >= box[1] && y < box[1] + box[3])
+    int left=box[0],right=box[0]+box[2];
+    if(right<left){int swap=left;left=right;right=swap;}
+    if(right==left)right++;
+    if (x >= left && x < right && y >= box[1] && y < box[1] + box[3])
       return i;
   }
   return -1;
 }
+bool wc_text_position(wc_t *c,dg_runtime_t *d,const dg_member_t *m,const char *text,
+                        int width,int position,int *x,int *y) {
+  if(!m || !text || width<1 || width>4096 || !c->host.layout)return false;
+  wc_text_style_t authored;int scroll;
+  const wc_text_style_t *style=member_text_style(d,m,&authored,&scroll);
+  if(d->values->failed)return false;
+  const char *utf8=utf8_text(text);
+  int count=
+#if DG_MODERN
+      member_layout(c,d,m,text,width,4096,style);
+#else
+      text_layout(c,utf8,width,4096,style);
+#endif
+  if(*utf8 && !count)return false;
+  int index=position>0?position-1:0;
+  if(index<count && layout_boxes[index*4+3]>0) {
+    *x=layout_boxes[index*4];*y=layout_boxes[index*4+1]+layout_boxes[index*4+3]-1;return true;
+  }
+  // A caret at/past the final character remains at its final line end.
+  // Newline records have no glyph box, so find the preceding visible cell.
+  int previous=index<count?index-1:count-1;
+  for(;previous>=0;previous--)if(layout_boxes[previous*4+3]>0) {
+    *x=layout_boxes[previous*4]+layout_boxes[previous*4+2];*y=layout_boxes[previous*4+1]+layout_boxes[previous*4+3]-1;return true;
+  }
+  *x=style && style->align==1?width/2:style && style->align==2?width:0;
+  *y=style && style->line_height>0?style->line_height-1:12;return true;
+}
+#if DG_CAP_TEXT_BOX
+int wc_text_height(wc_t *c,dg_runtime_t *d,const dg_member_t *m,const char *text,int width) {
+  if(!m || !text || width<0 || width>4096 || !c->host.layout)return -1;
+  wc_text_style_t authored;int scroll;
+  const wc_text_style_t *style=member_text_style(d,m,&authored,&scroll);
+  if(d->values->failed)return -1;
+  int line=style && style->line_height>0?style->line_height:13;
+  if(!width || m->text_box_present) {
+    int16_t probe[8]={0};int n=0;
+    unsigned count=0;const dg_text_format_t *formats=member_text_formats(d,m,text,style,&count);
+    if(formats&&count&&c->host.rich_layout) {
+      dg_text_format_t first=formats[0];first.offset=0;
+      n=c->host.rich_layout(c->host.ctx,"\nX",4096,4096,&first,1,probe,2);
+    } else if(c->host.layout) {
+      n=c->host.layout(c->host.ctx,"\nX",4096,4096,style,probe,2);
+    }
+    if(n==2&&probe[5]>0)line=probe[5];
+    if(!width)return line>0&&line<=4096?line:-1;
+  }
+  const char *utf8=utf8_text(text);
+  int count=member_layout(c,d,m,text,width,4096,style),height=line;
+  for(int i=0;i<count;i++) {
+    const int16_t *box=&layout_boxes[i*4];
+    int bottom=box[1]+(m->text_box_present?line:box[3]);
+    if(bottom>height)height=bottom;
+  }
+  size_t end=strlen(utf8);
+  while(end && (utf8[end-1]=='\r' || utf8[end-1]=='\n')) {
+    char last=utf8[--end];
+    if(last=='\n' && end && utf8[end-1]=='\r')end--;
+    height+=line;
+  }
+  return height<=4096?height:-1;
+}
+#endif
 #if DG_D10
+bool wc_member_resident(wc_t *c,dg_runtime_t *d,uint32_t member,bool load) {
+  const dg_member_t *m=dg_member(d,member);
+  if(!m || (m->type!=1 && m->type!=5 && m->type!=12) || !m->asset || !*m->asset)return false;
+  for(unsigned i=0;i<WC_IMAGE_SLOTS;i++)if(c->images[i].pixels && !strcmp(c->images[i].name,m->asset))return true;
+  if(!load)return false;
+  if(!c->host.read || !c->host.read(c->host.ctx,m->asset,NULL,0)) {
+    char message[160];snprintf(message,sizeof(message),"preload image asset unavailable: %s",m->asset);
+    lv_fail(d->values,message);return false;
+  }
+  return wc_image(c,d->values,m->asset,m->width,m->height,8)!=NULL;
+}
 bool wc_read_image(wc_t *c, dg_runtime_t *d, uint32_t member, dg_pixel_image_t *out) {
   memset(out, 0, sizeof(*out));
   const dg_member_t *m = member ? dg_member(d, member) : NULL;
   unsigned width = m ? m->width : 800, height = m ? m->height : 600;
+#if DG_CAP_TEXT_BOX
+  if(m)dg_text_dimensions(d,m->id,false,&width,&height);
+#endif
   if ((member && !m) || !width || !height || width > 4096 || height > 4096)
     return false;
   uint32_t *pixels = malloc((size_t)width * height * sizeof(*pixels));
@@ -1002,7 +1445,17 @@ bool wc_read_image(wc_t *c, dg_runtime_t *d, uint32_t member, dg_pixel_image_t *
     wc_text_style_t authored;
     int scroll;
     const wc_text_style_t *style = member_text_style(d, m, &authored, &scroll);
-    bool ok = coverage && c->host.text && text &&
+#if DG_MODERN
+    unsigned format_count=0;const dg_text_format_t *formats=member_text_formats(d,m,text,style,&format_count);
+    if(formats) {
+      bool rich_ok=c->host.rich_text && c->host.rich_text(c->host.ctx,utf8_text(text),width,height,
+          formats,format_count,pixels);
+      free(coverage);if(rich_ok)return true;
+      free(pixels);memset(out,0,sizeof(*out));
+      lv_fail(d->values,"formatted text rasterization service unavailable or failed");return false;
+    }
+#endif
+    bool ok = !d->values->failed && coverage && c->host.text && text &&
         c->host.text(c->host.ctx, utf8_text(text), (int)width, (int)height, style, coverage);
     if (ok) {
       uint32_t rgb = m->text_style ? m->text_style->color : 0;
@@ -1118,7 +1571,7 @@ static void draw_flash_overlays(wc_t *c, dg_runtime_t *d, unsigned channel,
       ascent = ascent * (int)size / (st->size ? (int)st->size : 1);
     int line_height = (int)size + (field->leading < 0 ? 0 : field->leading);
     wc_text_style_t style = {st->font_id, size, st->align,
-                             ascent, line_height};
+                             ascent, line_height, 0};
     int al, at, ar, ab;
     dg_sprite_bounds(d, s, &al, &at, &ar, &ab);
     al += ox; ar += ox; at += oy; ab += oy;
@@ -1607,6 +2060,7 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
       return;
     }
     wc_image_t image = {.width = mutable->width, .height = mutable->height,
+        .depth = mutable->depth,
         .pixels = mutable->pixels, .follow_alpha = mutable->use_alpha,
         .force_opaque = !mutable->use_alpha};
     if (!mutable->use_alpha && !dg_ink_whole_rect(ink) && ink != 36) {
@@ -1705,12 +2159,20 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
     free(masked.pixels);
     draw_flash_overlays(c, d, i, s, m, ox, oy, NULL, false);
 #endif
-  } else if (m && (m->type == 3 || m->type == 7)) {
+  }
+#if DG_MODERN
+  else if(m&&dg_button_kind(m))draw_native_button(c,d,m,opacity*255/100,l,t,r,b);
+#endif
+  else if (m && (m->type == 3 || m->type == 7)) {
+#if DG_CAP_TEXT_BOX
+    draw_text_box(c,d,m,s->value.ink&63u,opacity*255/100,l,t,r,b);
+#endif
     const char *text = m->text;
     uint32_t color = indexed_color(d, s->value.fore);
     wc_text_style_t authored;
     int scroll;
     const wc_text_style_t *style = member_text_style(d, m, &authored, &scroll);
+    if(values->failed)return;
 #if DG_MODERN
     if (m->text_style) {
       uint32_t rgb = m->text_style->color;
@@ -1745,8 +2207,18 @@ static void draw_sprite(wc_t *c, dg_runtime_t *d, unsigned i, const dg_sprite_t 
         runs[run_count] = (wc_text_run_t){extra->runs[run_count].offset,
                                           opaque_rgb(extra->runs[run_count].rgb) & 0xffffffu};
 #endif
+#if DG_MODERN
+    unsigned format_count=0;const dg_text_format_t *formats=member_text_formats(d,m,text,style,&format_count);
+    if(formats) {
+      if(!draw_formatted_text(c,text,formats,format_count,opacity*255/100,l,t,r,b,scroll))
+        lv_fail(d->values,"formatted text rasterization service unavailable or failed");
+    } else
+#endif
     if(!draw_text(c, text, style, color & 0xffffffu, opacity * 255 / 100, l, t, r, b, runs, run_count, scroll))
       lv_fail(d->values,"text rasterization failed: font, allocation or dimensions");
+#if DG_MODERN
+    draw_text_selection(c,d,m,text,style,scroll,opacity*255/100,l,t,r,b);
+#endif
   } else if ((m && m->type == 8) || s->value.type < 16) {
     unsigned thickness = s->value.thickness & 15;
     unsigned line = thickness ? thickness - 1 : 0;
@@ -2055,18 +2527,65 @@ static const dg_cursor_bitmap_t *cursor_bitmap(wc_t *c, dg_runtime_t *d,
   slot->last = ++c->serial;
   return &slot->bitmap;
 }
+#if defined(DIRECTOR64_SOURCE_CURSOR_MASK) && DIRECTOR64_SOURCE_CURSOR_MASK
+const wc_resource_cursor_t *wc_source_cursor(wc_t *c,lv_runtime_t *values,unsigned resource) {
+  if (resource>=32 || !(DIRECTOR64_SOURCE_CURSOR_MASK & (UINT32_C(1)<<resource))) return NULL;
+  wc_resource_cursor_t *source=&c->resource_cursor;
+  if (!source->loaded || source->resource!=resource) {
+    char asset[40];
+    snprintf(asset,sizeof(asset),"d64-cursor-%u.dcur",resource);
+    uint32_t length=0;
+    uint8_t *data=read_image(c,asset,&length);
+    bool ok=wc_resource_cursor_decode(source,resource,data,length);
+    free(data);
+    if (!ok) { lv_fail(values,"missing or invalid executable cursor resource"); return NULL; }
+  }
+  return source;
+}
+#endif
+int wc_native_cursor(dg_runtime_t *d) {
+  dg_cursor_t cursor = dg_cursor_current(d);
+  if (cursor.image || cursor.mask) return -1;
+#if defined(DIRECTOR64_SOURCE_CURSOR_MASK) && DIRECTOR64_SOURCE_CURSOR_MASK
+  if (cursor.resource >= 0 && cursor.resource < 32 &&
+      (DIRECTOR64_SOURCE_CURSOR_MASK & (UINT32_C(1) << (unsigned)cursor.resource)))
+    return -1;
+#endif
+  switch (cursor.resource) {
+  case -1: case 0: return 0;
+  case 1: case 2: case 3: case 4: case 200: return cursor.resource;
+  default: return -1;
+  }
+}
 static void draw_cursor(wc_t *c, dg_runtime_t *d, dg_cursor_t cursor,
-                        wc_pointer_t at) {
+                        int pointer_x, int pointer_y) {
   if (!cursor.image && cursor.resource == 200)
     return; // Director's hidden cursor.
+#if defined(DIRECTOR64_SOURCE_CURSOR_MASK) && DIRECTOR64_SOURCE_CURSOR_MASK
+  if (!cursor.image && cursor.resource >= 0 && cursor.resource < 32 &&
+      (DIRECTOR64_SOURCE_CURSOR_MASK & (UINT32_C(1) << (unsigned)cursor.resource))) {
+    const wc_resource_cursor_t *source=wc_source_cursor(c,d->values,(unsigned)cursor.resource);
+    if (!source) return;
+    for (unsigned row=0;row<source->height;row++)
+      for (unsigned column=0;column<source->width;column++) {
+        int x=pointer_x-(int)source->hot_x+(int)column;
+        int y=pointer_y-(int)source->hot_y+(int)row;
+        if (x>=0 && y>=0 && x<WC_WIDTH && y<WC_HEIGHT) {
+          uint32_t *pixel=&target(c)[y*WC_WIDTH+x];
+          *pixel=wc_resource_cursor_pixel(source->pixels[row*source->width+column],*pixel);
+        }
+      }
+    return;
+  }
+#endif
   const dg_cursor_bitmap_t *bitmap = cursor_bitmap(c, d, cursor);
   if (!bitmap)
     return;
   uint16_t pixels[256];
-  dg_cursor_pixels_ink(bitmap, pixels, (uint16_t)at.ink);
+  dg_cursor_pixels(bitmap, pixels);
   for (int row = 0; row < DG_CURSOR_SIZE; row++)
     for (int column = 0; column < DG_CURSOR_SIZE; column++) {
-      int px = at.x - bitmap->hot_x + column, py = at.y - bitmap->hot_y + row;
+      int px = pointer_x - bitmap->hot_x + column, py = pointer_y - bitmap->hot_y + row;
       uint16_t pixel = pixels[row * DG_CURSOR_SIZE + column];
       if ((pixel & 1) && px >= 0 && py >= 0 && px < WC_WIDTH && py < WC_HEIGHT)
         target(c)[py * WC_WIDTH + px] = from5551(pixel);
@@ -2099,31 +2618,27 @@ void wc_capture_stage(wc_t *c, uint32_t member) {
 }
 #endif
 
+#include "compositor_transitions.h"
+
 bool wc_render(wc_t *c, dg_runtime_t *d, int pointer_x, int pointer_y,
                bool pointer_shown, unsigned externals) {
-  const wc_pointer_t pointer = {pointer_x, pointer_y, 1};
-  return wc_render_pointers(c, d, &pointer, pointer_shown ? 1 : 0, externals);
-}
-bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
-                        unsigned count, unsigned externals) {
-  if (count > WC_POINTERS)
-    count = WC_POINTERS;
   dg_cursor_t cursor = dg_cursor_current(d);
   dg_update_stage(d);
-  unsigned fade_age = d->ticks - d->palette_fade_start;
-  unsigned fade_half = d->palette_fade_half;
-  bool fading = fade_half && fade_age < fade_half * 2;
-  bool fade_changed = (fading || c->palette_previous) && c->palette_tick != d->ticks;
-  if (c->palette_serial != d->palette_fade_serial || c->owner != d) {
-    free(c->palette_previous);
-    c->palette_previous = NULL;
-    if (fading && c->drawn && c->owner == d) {
-      c->palette_previous = malloc(sizeof(c->scene));
-      if (!c->palette_previous) lv_fail(d->values, "palette fade snapshot allocation failed");
-      else memcpy(c->palette_previous, c->scene, sizeof(c->scene));
-    }
-    c->palette_serial = d->palette_fade_serial;
-    fade_changed = true;
+  bool transition_new=d->transition_active &&
+      (c->transition_serial!=d->transition_serial || c->owner!=d);
+  bool transition_changed=transition_new ||
+      (c->transition_previous && (!d->transition_active || c->transition_tick!=d->ticks));
+  if(transition_new) {
+    free(c->transition_previous); free(c->transition_next);
+    c->transition_previous=malloc(sizeof(c->scene));
+    c->transition_next=malloc(sizeof(c->scene));
+    if(!c->transition_previous || !c->transition_next) {
+      free(c->transition_previous); free(c->transition_next);
+      c->transition_previous=c->transition_next=NULL;
+      lv_fail(d->values,"transition snapshot allocation failed");
+    } else if(c->drawn && c->owner==d)memcpy(c->transition_previous,c->scene,sizeof(c->scene));
+    else memset(c->transition_previous,255,sizeof(c->scene));
+    c->transition_serial=d->transition_serial;
   }
   uint32_t background = 0;
 #if DG_MODERN
@@ -2136,13 +2651,13 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
   bool same_scene = !c->cache_disabled && c->drawn && c->owner == d && c->movie == d->movie &&
       c->revision == d->visual_revision && c->background == background &&
       c->externals == externals;
-  if (!fade_changed && same_scene && dg_cursor_equal(c->cursor, cursor) && c->pointer_count == count &&
-      !memcmp(c->pointers, pointers, count * sizeof(*pointers)) &&
+  if (!transition_changed && same_scene && dg_cursor_equal(c->cursor, cursor) && c->pointer_shown == pointer_shown &&
+      (!pointer_shown || (c->pointer_x == pointer_x && c->pointer_y == pointer_y)) &&
       !d->values->failed)
     return false;
   c->serial++;
   c->renders++;
-  if (same_scene) {
+  if (same_scene || (c->transition_next && !transition_new && d->transition_active)) {
     memcpy(target(c), c->scene, sizeof(c->pixels));
   } else {
     c->scene_renders++;
@@ -2160,6 +2675,31 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
   } else
 #endif
     draw_scene(c, d, 0, 0, true);
+#if DG_D10
+  if (d->window_visible && d->window_runtime) {
+    uint32_t *plane = malloc(sizeof(c->pixels));
+    if (!plane) lv_fail(d->values, "window framebuffer allocation failed");
+    else {
+      uint32_t *previous = c->target;
+      dg_runtime_t *child = dg_window_begin(d);
+      if (child) {
+        c->target = plane;
+        draw_scene(c, child, 0, 0, false);
+        c->target = previous;
+        dg_window_end(d);
+        int left = d->window_rect[0], top = d->window_rect[1];
+        int width = d->window_rect[2] - left, height = d->window_rect[3] - top;
+        if (width > WC_WIDTH) width = WC_WIDTH;
+        if (height > WC_HEIGHT) height = WC_HEIGHT;
+        for (int y = 0; y < height; y++)
+          for (int x = 0; x < width; x++)
+            if (left + x >= 0 && left + x < WC_WIDTH && top + y >= 0 && top + y < WC_HEIGHT)
+              target(c)[(size_t)(top + y) * WC_WIDTH + left + x] = plane[(size_t)y * WC_WIDTH + x];
+      }
+      free(plane);
+    }
+  }
+#endif
 #if DG_D5
   if (d->ticks < d->alert_until && !d->values->failed) {
     // A recovered script alert, in the builtin monospace font.
@@ -2170,24 +2710,47 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
 #endif
     memcpy(c->scene, target(c), sizeof(c->scene));
   }
-  if (fading) {
-    unsigned alpha = fade_age < fade_half ? fade_age * 255 / fade_half
-                                         : (fade_half * 2 - fade_age) * 255 / fade_half;
-    if (fade_age < fade_half && c->palette_previous)
-      memcpy(target(c), c->palette_previous, sizeof(c->scene));
-    uint32_t color = d->palette_fade_kind == 0x40 ? 0xffffffffu : 0xff000000u;
-    for (unsigned i = 0; i < WC_WIDTH * WC_HEIGHT; i++) blend(&target(c)[i], color & 0xffffffu, alpha);
-  } else { free(c->palette_previous); c->palette_previous = NULL; }
-  c->palette_tick = d->ticks;
-  for (unsigned i = 0; i < count && !d->values->failed; i++)
-    draw_cursor(c, d, cursor, pointers[i]);
+  if(transition_new && c->transition_previous) {
+    memcpy(c->transition_next,c->scene,sizeof(c->scene));
+    c->transition_l=0; c->transition_t=0;
+    c->transition_r=WC_WIDTH;c->transition_b=WC_HEIGHT;
+    if(d->transition_area) {
+      c->transition_l=WC_WIDTH;c->transition_t=WC_HEIGHT;
+      c->transition_r=c->transition_b=0;
+      for(int y=0;y<WC_HEIGHT;y++)for(int x=0;x<WC_WIDTH;x++) {
+        unsigned at=(unsigned)y*WC_WIDTH+(unsigned)x;
+        if(c->transition_previous[at]==c->transition_next[at])continue;
+        if(x<c->transition_l)c->transition_l=x;
+        if(y<c->transition_t)c->transition_t=y;
+        if(x>=c->transition_r)c->transition_r=x+1;
+        if(y>=c->transition_b)c->transition_b=y+1;
+      }
+      if(c->transition_r<c->transition_l)c->transition_l=c->transition_r=0;
+      if(c->transition_b<c->transition_t)c->transition_t=c->transition_b=0;
+      c->transition_l&=~1;c->transition_r=(c->transition_r+1)&~1;
+    }
+    if(transition_random(d->transition_type) && c->transition_r>c->transition_l && c->transition_b>c->transition_t)
+      transition_grid(c,d);
+  }
+  if(c->transition_previous) {
+    if(d->transition_active)transition_compose(c,d);
+    else {
+      // The score may already have moved on after the final reveal tick.
+      free(c->transition_previous);free(c->transition_next);
+      c->transition_previous=c->transition_next=NULL;
+    }
+  }
+  c->transition_tick=d->ticks;
+  if (pointer_shown && !d->values->failed)
+    draw_cursor(c, d, cursor, pointer_x, pointer_y);
   c->drawn = true;
   c->owner = d;
   c->movie = d->movie;
   c->revision = d->visual_revision;
   c->cursor = cursor;
-  memcpy(c->pointers, pointers, count * sizeof(*pointers));
-  c->pointer_count = count;
+  c->pointer_x = pointer_x;
+  c->pointer_y = pointer_y;
+  c->pointer_shown = pointer_shown;
   c->background = background;
   c->externals = externals;
   return true;

@@ -34,6 +34,7 @@ def test_full_engine_keeps_source_family_and_exact_stream_directories():
     assert f'{{"BRUECK", {path}}}' in header
     assert "#define GAME_STREAM_ROOT" in header
     assert "-DDIRECTOR64_COLOR_DEPTH=8" in web.family_defines(GameSpec.load("findus-garden"))
+    assert "-DDIRECTOR64_SOURCE_CURSOR_MASK=12u" in web.game_defines(GameSpec.load("loewenzahn-1"))
 
 
 def test_unknown_player_keys_are_refused():
@@ -43,10 +44,35 @@ def test_unknown_player_keys_are_refused():
         web.player(game)
 
 
+@pytest.mark.parametrize("size", [False, 65535, 16777217, 65536.0, "65536"])
+def test_save_capacity_rejects_invalid_values(size):
+    game = GameSpec.load("findus-workshop")
+    game = replace(game, data={**game.data, "player": {"save_slot_bytes": size}})
+    with pytest.raises(ValueError, match="save_slot_bytes must be an integer"):
+        web.profile_header(game)
+
+
+def test_painting_profiles_have_large_binary_cast_storage_only_where_required():
+    for slug in ("loewenzahn-6", "loewenzahn-7", "loewenzahn-advent"):
+        game = GameSpec.load(slug)
+        header = web.profile_header(game)
+        assert "#define DIRECTOR64_SAVE_SLOT_BYTES 16777216u" in header
+        assert "-DDIRECTOR64_SAVE_SLOT_BYTES=16777216u" in web.game_defines(game)
+        assert "-sINITIAL_MEMORY=112MB" in web.compile_command(game, game.work / "web")
+        for name in ("images.cst|images", "temp.cst|temp", "library.cst|library"):
+            assert name in web.player(game)["saves"]
+    assert "tempimages.cst|tempimages" in web.player(GameSpec.load("loewenzahn-7"))["saves"]
+    for slug in ("findus-birthday", "loewenzahn-8"):
+        header = web.profile_header(GameSpec.load(slug))
+        assert "#define DIRECTOR64_SAVE_SLOT_BYTES 65536u" in header
+
+
 def test_runtime_is_built_for_the_family_switches_and_package():
     willy = GameSpec.load("willy-werkel-cars")
     assert web.family_defines(willy) == ["-DDIRECTOR64_DIRECTOR_VERSION=6",
-                                         "-DDIRECTOR64_EXTENDED_D6=1"]
+                                         "-DDIRECTOR64_EXTENDED_D6=1",
+                                         "-DDIRECTOR64_FULL_ENGINE=1",
+                                         "-DDIRECTOR64_MEDIA_ROOT=Willy1"]
     assert web.game_defines(willy) == ["-DDIRECTOR64_WILLY=1", "-DDIRECTOR64_GAME_PROBE=1"]
     command = web.compile_command(willy, willy.work / "web")
     assert command[0] == "emcc"
@@ -55,6 +81,9 @@ def test_runtime_is_built_for_the_family_switches_and_package():
         assert source in command
     exports = next(a for a in command if a.startswith("-sEXPORTED_FUNCTIONS="))
     assert "_d64_load_package" in exports and "_d64_rpc" in exports
+    assert "_d64_step_pad," in exports and "_d64_native_cursor," in exports
+    assert "_d64_pointer_player" not in exports and "_d64_render_pads" not in exports
+    assert not any("interaction/pointer.c" in item for item in command)
 
 
 def test_site_packs_keep_images_compressed(tmp_path):

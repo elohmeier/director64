@@ -5,6 +5,13 @@
 static dg_runtime_t d;
 static lv_runtime_t r;
 static unsigned sprite_calls, frame_calls, movie_calls;
+static unsigned hook_calls;
+static lv_flow_t hook_key(lv_runtime_t *v,lv_frame_t *f) {
+  (void)f;hook_calls++;
+  assert(lv_integer(v,lv_get(v,NULL,"keycode",(lv_t){0}))==0);
+  assert(!strcmp(lv_cstr(v,lv_get(v,NULL,"key",(lv_t){0})),"a"));
+  return LV_RETURN;
+}
 static bool sprite_pass, frame_pass;
 static lv_flow_t sprite_key(lv_runtime_t *v, lv_frame_t *f) {
   if (!f->pc++)
@@ -43,9 +50,10 @@ static const lv_handler_t handlers[] = {
     HANDLER("keyup", 2, "ScoreScript", frame_key),
     HANDLER("keydown", 3, "MovieScript", movie_key),
     HANDLER("keyup", 3, "MovieScript", movie_key),
+    HANDLER("physicalhook", 3, "MovieScript", hook_key),
 };
 static const lv_movie_t code = {
-    .name = "KEYS.DXR", .count = 6, .handlers = handlers};
+    .name = "KEYS.DXR", .count = 7, .handlers = handlers};
 static const dg_cast_t cast = {.name="Internal",.file=1,.cast=1};
 static const dg_member_t members[] = {
     {.id = DG_ID(1, 1, 1), .cast = 1, .number = 1, .type = 11},
@@ -126,6 +134,11 @@ int main(void) {
   // A focus left behind by the departing movie cannot address the next one.
   d.keyboard_focus = 1;
   assert(dg_enter(&d, &movie, 1, NULL, 0) && !d.keyboard_focus);
+  boot(false);hook_calls=0;
+  snprintf(d.key_down_script,sizeof(d.key_down_script),"physicalhook");
+  d.text_key=8;d.text_key_code=51;
+  key(true);key(false);
+  assert(hook_calls==1 && movie_calls==2 && !r.failed);
   puts("keyboard: focused text, yielding pass/consume hierarchy, release and "
        "movie reset passed");
 }

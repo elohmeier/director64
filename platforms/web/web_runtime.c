@@ -4,13 +4,15 @@
 // frame by frame; the Node probe harness (node/probe.mjs) drives the same
 // functions through a line protocol, so fuzzing and journeys exercise exactly
 // what the players run.
+#include "game_profile.h" // generated from the game's game.toml [player] table
 #include "ink.h"
 #include "web_runtime.h"
 #include "compositor.h"
 #include "game.h"
 #include "stream_name.h"
-#include "pointer.h"
-#include "game_profile.h" // generated from the game's game.toml [player] table
+#include "user_files.h"
+#include "json_text.h"
+#include "input.h"
 #ifdef DIRECTOR64_WILLY
 #include "willy_input.h"
 #endif
@@ -45,7 +47,8 @@ static unsigned global_count;
 
 static lv_runtime_t values;
 static dg_runtime_t director;
-static pointer_control_t pointer;
+static input_state_t pointer;
+static input_sample_t pad;
 static wc_t compositor;
 static web_host_t host;
 static bool booted;
@@ -158,6 +161,37 @@ static bool write_file(void *ctx, const char *name, const char *data,
   flash_dirty = false;
   return ok;
 }
+static bool file_exists(void *ctx, const char *name) {
+  (void)ctx;
+  if (game_file_exists(name)) return true;
+#ifdef GAME_DATA_FOLDER
+  const char *base = name;
+  for (const char *p = name; *p; p++) if (*p == '/' || *p == '\\' || *p == ':') base = p + 1;
+  char path[256];
+  int n = snprintf(path, sizeof(path), "%s/%s", GAME_DATA_FOLDER, base);
+  if (!*base || n < 0 || n >= (int)sizeof(path)) return false;
+  for (int i = (int)strlen(GAME_DATA_FOLDER) + 1; i < n; i++) path[i] = (char)toupper((unsigned char)path[i]);
+  return host.data && host.data(host.ctx, path, NULL, 0) >= 0;
+#else
+  return false;
+#endif
+}
+#if DG_D10
+static bool remove_file(void *ctx, const char *name) {
+  (void)ctx;
+  bool ok = game_remove_file(name);
+  if (flash_dirty && host.save_commit) host.save_commit(host.ctx, ok);
+  flash_dirty = false;
+  return ok;
+}
+static bool rename_file(void *ctx, const char *old, const char *name) {
+  (void)ctx;
+  bool ok = game_rename_file(old, name);
+  if (flash_dirty && host.save_commit) host.save_commit(host.ctx, ok);
+  flash_dirty = false;
+  return ok;
+}
+#endif
 #include "audio.inc"
 static void trace(void *ctx, const char *text) {
   (void)ctx;
@@ -224,6 +258,14 @@ static bool hit(void *ctx, const dg_member_t *m, unsigned ink, int x, int y) {
   (void)ctx;
   return wc_hit(&compositor, &values, m, ink, x, y);
 }
+#if DG_MODERN
+static bool rich_text(void *ctx,const char *text,int width,int height,const dg_text_format_t *formats,unsigned count,uint32_t *out) {
+  (void)ctx;return host.rich_text && host.rich_text(host.ctx,text,width,height,formats,count,out);
+}
+static int rich_layout(void *ctx,const char *text,int width,int height,const dg_text_format_t *formats,unsigned count,int16_t *boxes,int max) {
+  (void)ctx;return host.rich_layout?host.rich_layout(host.ctx,text,width,height,formats,count,boxes,max):0;
+}
+#endif
 static uint32_t read_asset(void *ctx, const char *name, uint8_t *out,
                            uint32_t cap) {
   (void)ctx;
@@ -236,14 +278,44 @@ static bool video_frame(void *ctx, const dg_runtime_t *owner, unsigned sprite, u
   return host.video_frame &&
          host.video_frame(host.ctx, sprite, out, cap, width, height);
 }
+#if DG_EXTENDED
+static bool text_position(void *ctx,uint32_t member,int position,int *x,int *y) {
+  (void)ctx;dg_runtime_t *active=(dg_runtime_t *)values.context;
 #if DG_D10
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  active=dg_member_context(active,member);
+#endif
+  const dg_member_t *m=dg_member(active,member);if(!m)return false;
+  const char *text=m->text;
+  for(unsigned j=0;j<active->field_count;j++)if(active->field_members[j]==member)
+    text=lv_cstr(&values,values.roots[DG_FIELD_TEXT_ROOT+j]);
+  unsigned width=m->width,height=m->height;
+#if DG_CAP_TEXT_BOX
+  dg_text_dimensions(active,m->id,false,&width,&height);
+#endif
+  (void)height;return wc_text_position(&compositor,active,m,text,(int)width,position,x,y);
+}
+#endif
+#if DG_CAP_TEXT_BOX
 // The character of a text member under (x, y) of its box, as the host sets
 // the text the compositor draws: the field's live text, in the sprite's
 // rectangle or the member's own size.
+static int text_height(void *ctx,uint32_t member,unsigned width) {
+  (void)ctx;dg_runtime_t *active=(dg_runtime_t *)values.context;
+#if DG_D10
+  active=dg_member_context(active,member);
+#endif
+  const dg_member_t *m=dg_member(active,member);if(!m)return -1;
+  const char *text=m->text;
+  for(unsigned j=0;j<active->field_count;j++)if(active->field_members[j]==member)
+    text=lv_cstr(&values,values.roots[DG_FIELD_TEXT_ROOT+j]);
+  return wc_text_height(&compositor,active,m,text,(int)width);
+}
 static int text_char_at(void *ctx, uint32_t member, unsigned sprite, int x, int y) {
   (void)ctx;
   dg_runtime_t *active = (dg_runtime_t *)values.context;
+#if DG_D10
+  active=dg_member_context(active,member);
+#endif
   const dg_member_t *m = dg_member(active, member);
   if (!m)
     return -1;
@@ -251,7 +323,8 @@ static int text_char_at(void *ctx, uint32_t member, unsigned sprite, int x, int 
   for (unsigned j = 0; j < active->field_count; j++)
     if (active->field_members[j] == m->id)
       text = lv_cstr(&values, values.roots[DG_FIELD_TEXT_ROOT + j]);
-  int width = m->width, height = m->height;
+  unsigned member_width,member_height;dg_text_dimensions(active,m->id,false,&member_width,&member_height);
+  int width=(int)member_width,height=(int)member_height;
   if (sprite && sprite < DG_SPRITES) {
     dg_sprite_t flat = active->sprites[sprite];
     flat.value.rotation = flat.value.skew = 0;
@@ -264,9 +337,13 @@ static int text_char_at(void *ctx, uint32_t member, unsigned sprite, int x, int 
   return wc_text_char_at(&compositor, active, m, text, width, height, x, y);
 }
 #endif
+#if DG_D10
+static bool member_resident(void *ctx,uint32_t member,bool load) {
+  (void)ctx;return wc_member_resident(&compositor,dg_member_context((dg_runtime_t *)values.context,member),member,load);
+}
 static bool read_image(void *ctx, uint32_t member, dg_pixel_image_t *out) {
   (void)ctx;
-  return wc_read_image(&compositor, (dg_runtime_t *)values.context, member, out);
+  return wc_read_image(&compositor, dg_member_context((dg_runtime_t *)values.context,member), member, out);
 }
 static bool flash_field_hit(void *ctx, dg_runtime_t *owner,
                             struct dg_flash_instance *field, float x, float y) {
@@ -335,6 +412,15 @@ static const char *game_data_folder(void *ctx) {
 #if DG_D10
 // The authored long name find() last resolved through its 8.3 truncation.
 static char found_alias[40];
+static void remember_alias(const char *name) {
+  size_t n = 0;
+  for (; name[n] && n + 1 < sizeof(found_alias); n++)
+    found_alias[n] = name[n];
+  if (!strchr(name, '.'))
+    for (const char *p = ".dxr"; *p && n + 1 < sizeof(found_alias); p++)
+      found_alias[n++] = *p;
+  found_alias[n] = 0;
+}
 #endif
 static const dg_movie_t *find(const char *name) {
   char normalized[64];
@@ -367,8 +453,7 @@ static const dg_movie_t *find(const char *name) {
     for (unsigned i = 0; i < dg_registry_count; i++)
       if (!strcmp(dg_registry[i]->code->name, normalized)) {
 #if DG_D10
-        snprintf(found_alias, sizeof(found_alias), "%s%s", name,
-                 strchr(name, '.') ? "" : ".dxr");
+        remember_alias(name);
 #endif
         return dg_registry[i];
       }
@@ -418,7 +503,7 @@ static const dg_movie_t *find_path_stem(const char *path, const char *movie) {
     snprintf(candidate, sizeof(candidate), "%s__%s", prefix, stem);
     const dg_movie_t *m = find(candidate);
     if (m) {
-      snprintf(found_alias, sizeof(found_alias), "%s%s", stem, strchr(stem, '.') ? "" : ".dxr");
+      remember_alias(stem);
       return m;
     }
   }
@@ -429,7 +514,7 @@ static const dg_movie_t *find_path_stem(const char *path, const char *movie) {
     snprintf(candidate, sizeof(candidate), "%s__%s", prefix, stem);
     const dg_movie_t *m = find(candidate);
     if (m) {
-      snprintf(found_alias, sizeof(found_alias), "%s%s", stem, strchr(stem, '.') ? "" : ".dxr");
+      remember_alias(stem);
       return m;
     }
   }
@@ -443,7 +528,7 @@ static const dg_movie_t *find_path(const char *path, const char *movie) {
     return m;
   m = find_path_stem(path, short_stem);
   if (m)
-    snprintf(found_alias, sizeof(found_alias), "%s%s", movie, strchr(movie, '.') ? "" : ".dxr");
+    remember_alias(movie);
   return m;
 }
 #endif
@@ -483,6 +568,9 @@ void web_runtime_host(web_host_t h) { host = h; }
 
 EMSCRIPTEN_KEEPALIVE uint8_t *d64_flash(void) { return flash; }
 EMSCRIPTEN_KEEPALIVE unsigned d64_flash_bytes(void) { return sizeof(flash); }
+EMSCRIPTEN_KEEPALIVE int d64_flash_import(const uint8_t *data, unsigned length) {
+  return game_save_import(flash, sizeof(flash), data, length);
+}
 
 // Loads the game package the runtime then boots. Returns false with
 // d64_package_error() naming the check that rejected it.
@@ -532,6 +620,9 @@ EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
     served_gain[i] = -1.0f;
   wc_init(&compositor,
           (wc_host_t){.read = read_asset, .text = rasterize, .layout = layout,
+#if DG_MODERN
+                      .rich_text=rich_text,.rich_layout=rich_layout,
+#endif
                       .video_frame = video_frame},
           (size_t)WEB_IMAGE_BUDGET);
   dg_init(&director, &values,
@@ -541,24 +632,27 @@ EMSCRIPTEN_KEEPALIVE int d64_boot(unsigned random_seed) {
 #endif
 #if DG_D10
                           .stream_name = game_stream_name,
+                          .remove_file = remove_file, .rename_file = rename_file,
 #endif
                           .read_file = read_file, .write_file = write_file,
+                          .file_exists = file_exists,
                           .sound = sound, .sound_pause = sound_pause, .sound_busy = sound_busy,
                           .sound_break_loop = sound_break_loop,
 #if DG_EXTENDED
-                          .sound_position = sound_position,
+                          .sound_position = sound_position, .text_position = text_position,
 #endif
 #if DG_D10
                           .play_file = play_file, .find_movie = find_movie,
                           .movie_path = game_movie_path, .data_folder = game_data_folder,
-                          .read_data = read_data, .capture_stage = capture_stage, .read_image = read_image, .flash_field_hit = flash_field_hit,
-#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
-                          .text_char_at = text_char_at,
+                          .read_data = read_data, .capture_stage = capture_stage, .read_image = read_image, .member_resident = member_resident, .flash_field_hit = flash_field_hit,
 #endif
+#if DG_CAP_TEXT_BOX
+                          .text_char_at = text_char_at, .text_height = text_height,
 #endif
                           .trace = trace, .hit = hit},
           NULL, global_names, global_count, random_seed);
-  pointer_init(&pointer);
+  input_init(&pointer);
+  pad = (input_sample_t){0};
 #ifdef DIRECTOR64_PRINTING
   game_print_init(&values);
 #endif
@@ -639,109 +733,87 @@ EMSCRIPTEN_KEEPALIVE int d64_step(int x, int y, int buttons) {
 #endif
   return values.failed ? 1 : director.quit ? 2 : 0;
 }
-// ---- Controllers: up to four players' gamepads ----
-// The host reports every connected gamepad as a controller sample (input.h
-// buttons, stick in -80..80) and then runs d64_step_pads: each player moves
-// their own cursor and whoever presses or points holds Director's one mouse
-// (runtime/interaction/pointer.c).
-static input_sample_t pads;
-EMSCRIPTEN_KEEPALIVE void d64_pad(unsigned player, int connected,
-                                  unsigned buttons, int stick_x, int stick_y) {
-  if (player >= INPUT_PLAYERS)
-    return;
-  input_pad_t pad = {.connected = connected != 0,
-                     .buttons = (uint16_t)(connected ? buttons : 0),
-                     .stick_x = (int8_t)(stick_x < -128 ? -128 : stick_x > 127 ? 127 : stick_x),
-                     .stick_y = (int8_t)(stick_y < -128 ? -128 : stick_y > 127 ? 127 : stick_y)};
-  if (player) {
-    pads.pads[player - 1] = pad;
-  } else {
-    pads.connected = pad.connected;
-    pads.buttons = pad.buttons;
-    pads.stick_x = pad.stick_x;
-    pads.stick_y = pad.stick_y;
-  }
+// ---- One logical controller and pointer ----
+EMSCRIPTEN_KEEPALIVE void d64_pad(int connected, unsigned buttons,
+                                 int stick_x, int stick_y) {
+  pad = (input_sample_t){
+      .connected = connected != 0,
+      .buttons = (uint16_t)(connected ? buttons : 0),
+      .stick_x = (int8_t)(stick_x < -128 ? -128 : stick_x > 127 ? 127 : stick_x),
+      .stick_y = (int8_t)(stick_y < -128 ? -128 : stick_y > 127 ? 127 : stick_y)};
 }
-// Moves the holder's cursor to the page's mouse, so a controller picks up
-// where the mouse left the pointer.
+// A controller continues at the last physical pointer location.
 EMSCRIPTEN_KEEPALIVE void d64_pointer_warp(int x, int y) {
-  input_state_t *in = &pointer_active(&pointer)->input;
-  in->x = (x < 8 ? 8 : x > SCREEN_W - 10 ? SCREEN_W - 10 : x) * INPUT_ONE;
-  in->y = (y < 8 ? 8 : y > SCREEN_H - 10 ? SCREEN_H - 10 : y) * INPUT_ONE;
+  pointer.x = (x < 8 ? 8 : x > SCREEN_W - 10 ? SCREEN_W - 10 : x) * INPUT_ONE;
+  pointer.y = (y < 8 ? 8 : y > SCREEN_H - 10 ? SCREEN_H - 10 : y) * INPUT_ONE;
+  // Physical-pointer mode may have observed a release without a pad tick.
+  // Re-entering controller mode starts fresh button edges at this position.
+  pointer.held = pointer.pressed = pointer.released = 0;
 }
-EMSCRIPTEN_KEEPALIVE int d64_pointer_x(void) {
-  return pointer_driver(&pointer)->input.x / INPUT_ONE;
+EMSCRIPTEN_KEEPALIVE int d64_pointer_x(void) { return pointer.x / INPUT_ONE; }
+EMSCRIPTEN_KEEPALIVE int d64_pointer_y(void) { return pointer.y / INPUT_ONE; }
+EMSCRIPTEN_KEEPALIVE int d64_native_cursor(void) {
+  return wc_native_cursor(&director);
 }
-EMSCRIPTEN_KEEPALIVE int d64_pointer_y(void) {
-  return pointer_driver(&pointer)->input.y / INPUT_ONE;
-}
-EMSCRIPTEN_KEEPALIVE unsigned d64_pointer_player(void) { return pointer.active; }
 EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y);
-// One service tick from the controllers. Returns as d64_step does, or 3 when
-// the holder pressed A on an editable field: the tick did not run, and the
-// host opens its own text entry there (at d64_pointer_x/y).
-EMSCRIPTEN_KEEPALIVE int d64_step_pads(void) {
+// Returns as d64_step does, or 3 when A opens host text entry. That tick
+// does not run; the host opens the field at d64_pointer_x/y instead.
+EMSCRIPTEN_KEEPALIVE int d64_step_pad(void) {
   if (!booted || values.failed)
     return 1;
   if (director.quit)
     return 2;
 #ifdef DIRECTOR64_MUCKLAS
-  mucklas_pad_keys(&director, &pads);
+  mucklas_pad_keys(&director, &pad);
 #endif
-  pointer_update(&pointer, &director, &pads);
-  const input_state_t *in = &pointer_driver(&pointer)->input;
-  int x = in->x / INPUT_ONE, y = in->y / INPUT_ONE;
-  if ((in->pressed & INPUT_A) && d64_text_field(x, y))
+  input_update(&pointer, &pad);
+  int x = pointer.x / INPUT_ONE, y = pointer.y / INPUT_ONE;
+  if ((pointer.pressed & INPUT_A) && d64_text_field(x, y))
     return 3;
-  return d64_step(x, y, in->held);
-}
-// The stage with every controller's cursor that shows (pointer_visible), each
-// in its player's colour once more than one is connected; the holder draws
-// last, so a crowded screen never hides the cursor Director follows.
-EMSCRIPTEN_KEEPALIVE uint32_t *d64_render_pads(void) {
-  if (!booted || values.failed)
-    return NULL;
-  unsigned connected = 0;
-  for (unsigned i = 0; i < POINTER_PLAYERS; i++)
-    connected += input_sample_pad(&pads, i).connected;
-  wc_pointer_t shown[WC_POINTERS];
-  unsigned count = 0;
-  for (unsigned n = 0; n < POINTER_PLAYERS && count < WC_POINTERS; n++) {
-    unsigned player = (pointer.active + 1 + n) % POINTER_PLAYERS;
-    if (!pointer_visible(&pointer, player))
-      continue;
-    const input_state_t *in = &pointer.players[player].input;
-    pointer_color_t color = pointer_player_color(player);
-    shown[count++] = (wc_pointer_t){
-        in->x / INPUT_ONE, in->y / INPUT_ONE,
-        connected > 1 ? dg_cursor_ink(color.r, color.g, color.b) : 1};
-  }
-  unsigned externals = host.video_revision ? host.video_revision(host.ctx) : 0;
-  return wc_render_pointers(&compositor, &director, shown, count, externals)
-             ? compositor.pixels
-             : NULL;
+  return d64_step(x, y, pointer.held);
 }
 // Text entry. When a press lands on an editable field the page (or the
 // Android host) opens a text box over the field and pauses the game while it
 // is open. The same checks decide when a field accepts entry. The field's stage
 // rectangle is filled in for the page to place the box.
 static int text_field_rect[4];
-EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y) {
 #if DG_EXTENDED
-  if (!booted || values.failed || director.text_pending)
+static unsigned text_field_at(dg_runtime_t *d,int x,int y) {
+  if(d->text_pending)
     return 0;
-  unsigned sprite = dg_mouse_hit(&director, x, y);
-  if (!sprite || sprite >= DG_SPRITES || !dg_text_editable(&director, sprite))
+  unsigned sprite = dg_mouse_hit(d, x, y);
+  if (!sprite || sprite >= DG_SPRITES || !dg_text_editable(d, sprite))
     return 0;
-  const dg_member_t *m = dg_member(&director, director.sprites[sprite].value.member);
+  const dg_member_t *m = dg_member(d, d->sprites[sprite].value.member);
   if (!m || (m->type != 3 && m->type != 7))
     return 0;
   lv_t text = lv_get(&values, NULL, "text", lv_make(LV_MEMBER, (int32_t)m->id));
   if (strlen(lv_cstr(&values, text)) > 20)
     return 0;
-  dg_bounds(&director, sprite, &text_field_rect[0], &text_field_rect[1],
+  dg_bounds(d, sprite, &text_field_rect[0], &text_field_rect[1],
             &text_field_rect[2], &text_field_rect[3]);
   return sprite;
+}
+#endif
+EMSCRIPTEN_KEEPALIVE unsigned d64_text_field(int x, int y) {
+#if DG_EXTENDED
+  if(!booted || values.failed)return 0;
+#if DG_D10
+  if(director.window_visible && director.window_runtime &&
+      x>=director.window_rect[0] && x<director.window_rect[2] &&
+      y>=director.window_rect[1] && y<director.window_rect[3]) {
+    dg_runtime_t *child=dg_window_begin(&director);if(!child)return 0;
+    unsigned sprite=text_field_at(child,x-director.window_rect[0],y-director.window_rect[1]);
+    dg_window_end(&director);
+    if(sprite) {
+      text_field_rect[0]+=director.window_rect[0];text_field_rect[2]+=director.window_rect[0];
+      text_field_rect[1]+=director.window_rect[1];text_field_rect[3]+=director.window_rect[1];
+      return DG_WINDOW_SPRITE|sprite;
+    }
+    return 0; // An occluded stage field cannot take input through the panel.
+  }
+#endif
+  return text_field_at(&director,x,y);
 #else
   (void)x;
   (void)y;
@@ -801,6 +873,16 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_key_field(int x, int y, int anywhere) {
 // The field's text as the keyboard starts from: a lone space is empty.
 EMSCRIPTEN_KEEPALIVE const char *d64_text_value(unsigned sprite) {
 #if DG_EXTENDED || defined(DIRECTOR64_MUCKLAS)
+#if DG_D10
+  if(sprite&DG_WINDOW_SPRITE) {
+    if(!booted || !director.window_visible || !director.window_runtime)return "";
+    dg_runtime_t *child=dg_window_begin(&director);if(!child)return "";
+    unsigned channel=sprite&~DG_WINDOW_SPRITE;
+    const dg_member_t *m=channel && channel<DG_SPRITES ? dg_member(child,child->sprites[channel].value.member):NULL;
+    const char *text=m?lv_cstr(&values,lv_get(&values,NULL,"text",lv_make(LV_MEMBER,(int32_t)m->id))):"";
+    dg_window_end(&director);return strcmp(text," ")?text:"";
+  }
+#endif
   if (booted && sprite && sprite < DG_SPRITES) {
     const dg_member_t *m = dg_member(&director, director.sprites[sprite].value.member);
     if (m) {
@@ -846,6 +928,33 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_print_request(void) {
   return 0;
 #endif
 }
+EMSCRIPTEN_KEEPALIVE unsigned d64_user_request_id(void) {
+  const dg_user_request_t *r=dg_user_request();return r?r->id:0;
+}
+EMSCRIPTEN_KEEPALIVE unsigned d64_user_request_kind(void) {
+  const dg_user_request_t *r=dg_user_request();return r?r->kind:0;
+}
+EMSCRIPTEN_KEEPALIVE const char *d64_user_title(void) {
+  const dg_user_request_t *r=dg_user_request();return r?r->title:"";
+}
+EMSCRIPTEN_KEEPALIVE const char *d64_user_name(void) {
+  const dg_user_request_t *r=dg_user_request();return r?r->name:"";
+}
+EMSCRIPTEN_KEEPALIVE const char *d64_user_filter(void) {
+  const dg_user_request_t *r=dg_user_request();return r?r->filter:"";
+}
+EMSCRIPTEN_KEEPALIVE const uint8_t *d64_user_data(void) {
+  const dg_user_request_t *r=dg_user_request();return r?r->data:NULL;
+}
+EMSCRIPTEN_KEEPALIVE unsigned d64_user_size(void) {
+  const dg_user_request_t *r=dg_user_request();return r?r->size:0;
+}
+EMSCRIPTEN_KEEPALIVE int d64_user_reply(unsigned id,const char *name,const uint8_t *data,unsigned size,
+                                        const uint32_t *pixels,unsigned width,unsigned height) {
+  return dg_user_reply(id,name,data,size,pixels,width,height);
+}
+EMSCRIPTEN_KEEPALIVE int d64_user_cancel(unsigned id) {return dg_user_cancel(id);}
+EMSCRIPTEN_KEEPALIVE int d64_user_complete(unsigned id,int success) {return dg_user_complete(id,success!=0);}
 EMSCRIPTEN_KEEPALIVE uint32_t *d64_pixels(void) { return compositor.pixels; }
 // The stage the page presents: 640x480, or the authored 800x600 (ink.h).
 EMSCRIPTEN_KEEPALIVE unsigned d64_stage_width(void) { return WC_WIDTH; }
@@ -874,25 +983,13 @@ EMSCRIPTEN_KEEPALIVE unsigned d64_image_loads(void) { return compositor.loads; }
 
 // ---- The probe line protocol (platforms/web/node/probe.mjs) ----
 
-static void quoted(const char *text) {
-  emit("\"");
-  for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
-#if DG_D10
-    // D10's strings mix windows-1252 bytes (numToChar-built database text)
-    // with UTF-8 member text; its probe escapes every non-ASCII byte so the
-    // report stays JSON either way.
-    if (*p > 126) {
-      emit("\\u%04x", *p);
-      continue;
-    }
-#endif
-    if (*p < 32 || *p == '"' || *p == '\\')
-      emit("\\u%04x", *p);
-    else
-      emit("%c", *p);
-  }
-  emit("\"");
+static void json_emit(void *ctx,const char *bytes,size_t length) {
+  (void)ctx;emit("%.*s",(int)length,bytes);
 }
+static void quoted_bytes(const void *bytes,size_t length) {
+  d64_json_quote(bytes,length,json_emit,NULL);
+}
+static void quoted(const char *text) { quoted_bytes(text,strlen(text)); }
 #ifdef DIRECTOR64_GAME_PROBE
 // The game's own state line (games/<slug>/probe/state.inc), printed through
 // this runtime's output buffer.
@@ -967,10 +1064,8 @@ static void raw_state(void) {
 #endif
     emit("}");
   }
-  const pointer_player_t *driver = pointer_driver(&pointer);
-  emit("],\"pointer\":{\"player\":%u,\"x\":%d,\"y\":%d},\"saves\":{",
-       pointer.active + 1, driver->input.x / INPUT_ONE,
-       driver->input.y / INPUT_ONE);
+  emit("],\"pointer\":{\"x\":%d,\"y\":%d},\"saves\":{",
+       pointer.x / INPUT_ONE, pointer.y / INPUT_ONE);
   // The saved files by name, with their text.
   static char contents[16384];
   for (unsigned i = 0; game_save_name(i); i++) {
@@ -981,7 +1076,7 @@ static void raw_state(void) {
       emit(",");
     quoted(game_save_name(i));
     emit(":");
-    quoted(contents);
+    quoted_bytes(contents,length);
   }
   emit("},\"save_generation\":%u}\n", game_save_generation());
 }
@@ -994,7 +1089,7 @@ EMSCRIPTEN_KEEPALIVE const char *d64_rpc(const char *command) {
   output_length = 0;
   output[0] = 0;
   unsigned ticks, sprite, buttons;
-  int x, y, down;
+  int x, y, down, consumed = 0;
   char entered[64];
   (void)entered;
 #ifdef DIRECTOR64_DEV_LENIENT
@@ -1092,14 +1187,15 @@ EMSCRIPTEN_KEEPALIVE const char *d64_rpc(const char *command) {
          m ? m->filled : 0, m ? m->line_width : 0);
     return output;
 #endif
-  } else if (sscanf(command, "pad %u %d %d %u", &ticks, &x, &y, &buttons) == 4 &&
+  } else if (sscanf(command, "pad %u %d %d %u%n", &ticks, &x, &y, &buttons, &consumed) == 4 &&
+             !command[consumed] &&
              ticks <= 100000 && x >= -128 && x <= 127 && y >= -128 && y <= 127 &&
              buttons <= UINT16_MAX) {
     input_sample_t sample = {.connected = true, .stick_x = x, .stick_y = y,
                              .buttons = buttons};
     for (unsigned i = 0; i < ticks && !values.failed && !director.quit; i++) {
-      pointer_update(&pointer, &director, &sample);
-      const input_state_t *in = &pointer_driver(&pointer)->input;
+      input_update(&pointer, &sample);
+      const input_state_t *in = &pointer;
       bool ok = step(in->x / INPUT_ONE, in->y / INPUT_ONE, !!(in->held & INPUT_A));
       if (probe_render) { d64_render(0, 0, 0); probe_sample(); }
       if (!ok || values.failed) break;

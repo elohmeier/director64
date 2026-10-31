@@ -7,6 +7,8 @@ use std::collections::{BTreeSet, HashMap};
 use serde_json::{Map, Value, json};
 
 use super::js;
+#[path = "text_formats.rs"]
+mod formats;
 
 fn int(v: &Value) -> i64 {
     v.as_i64()
@@ -71,6 +73,7 @@ pub fn bind_text_fonts(
     let mut limits = Vec::new();
     for movie in movies.iter_mut() {
         let movie_name = movie["name"].clone();
+        let legacy = movie["directorVersion"].as_i64().is_some_and(|v|v<600);
         let scope = font_scope(movie);
         for member in movie["members"].as_array_mut().into_iter().flatten() {
             let Some(t) = member.get("typography").filter(|t| !t.is_null()).cloned() else {
@@ -80,16 +83,9 @@ pub fn bind_text_fonts(
             let mut style = |index: i64| -> Result<Value, String> {
                 let s = &t["styles"][index as usize];
                 let font = scoped_font(&aliases, fonts, &scope, s["font"].as_str().unwrap_or(""))?;
-                let size = &s["pointSize"];
-                let size_f = size.as_f64().unwrap_or(f64::NAN);
-                if !is_integer(size) || !(1.0..=255.0).contains(&size_f) {
-                    return Err(format!(
-                        "unsupported authored point size {}",
-                        js::number(size_f)
-                    ));
-                }
+                let size = formats::paige_size(&s["pointSize"])?;
                 if let Some(f) = font {
-                    variants[f].insert(size_f as i64);
+                    variants[f].insert(size);
                 }
                 let line_height = if truthy(&paragraph["leadingFixed"]) {
                     paragraph["leadingFixed"].clone()
@@ -141,32 +137,16 @@ pub fn bind_text_fonts(
                     "fonts": missing, "detail": "Authored font names/style metrics preserved; these source fonts are not embedded in the recovered media."}));
             }
             let mut rendering: Vec<&str> = Vec::new();
-            let distinct: BTreeSet<String> = active
-                .iter()
-                .map(|&i| js::stringify(&t["styles"][i as usize]))
-                .collect();
-            if distinct.len() > 1 {
-                rendering.push("multiple character styles");
-            }
-            if active.iter().any(|&i| {
-                t["styles"][i as usize]["face"]
-                    .as_object()
-                    .is_some_and(|f| !f.is_empty())
-            }) {
-                rendering.push("character face effects");
-            }
-            let first_paragraph = int(&t["paragraphRuns"][0]["index"]);
-            if t["paragraphRuns"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|r| int(&r["offset"]) < text_length)
-                .any(|r| int(&r["index"]) != first_paragraph)
-            {
-                rendering.push("multiple paragraph styles");
+            if legacy {
+                if active.iter().map(|&i|js::stringify(&t["styles"][i as usize])).collect::<BTreeSet<_>>().len()>1 {
+                    rendering.push("multiple character styles");
+                }
+                if active.iter().any(|&i|t["styles"][i as usize]["face"].as_object().is_some_and(|f|!f.is_empty())) {
+                    rendering.push("character face effects");
+                }
             }
             let p = paragraph;
-            if int(&p["justification"]) > 2
+            if int(&p["justification"]) > 3
                 || [
                     "direction",
                     "leftIndent",
@@ -202,6 +182,7 @@ pub fn bind_text_fonts(
     if field_styles {
         for movie in movies.iter_mut() {
             let movie_name = movie["name"].clone();
+        let legacy = movie["directorVersion"].as_i64().is_some_and(|v|v<600);
             let scope = font_scope(movie);
             let casts = movie["casts"].clone();
             for member in movie["members"].as_array_mut().into_iter().flatten() {
@@ -256,34 +237,12 @@ pub fn bind_text_fonts(
                     "ascent": s["ascent"], "descent": (int(&s["lineHeight"]) - int(&s["ascent"])).max(0), "leading": 0,
                     "lineHeight": s["lineHeight"], "color": s["color"],
                 });
-                let text_length = member["text"]
-                    .as_str()
-                    .map(|t| t.encode_utf16().count())
-                    .unwrap_or(0) as i64;
-                let active: Vec<&Value> = styles
-                    .iter()
-                    .filter(|r| int(&r["offset"]) < text_length || int(&r["offset"]) == 0)
-                    .collect();
-                let mut rendering: Vec<&str> = Vec::new();
-                let distinct: BTreeSet<String> = active
-                    .iter()
-                    .map(|r| {
-                        js::stringify(&json!([
-                            r["sourceFontId"],
-                            r["size"],
-                            r["face"],
-                            r["color"]
-                        ]))
-                    })
-                    .collect();
-                if distinct.len() > 1 {
-                    rendering.push("multiple character styles");
-                }
-                if truthy(&s["face"]) {
-                    rendering.push("character face effects");
-                }
-                if !rendering.is_empty() {
-                    limits.push(json!({"movie": movie_name, "cast": cast, "member": number, "kind": "text-layout", "detail": rendering.join(", ")}));
+                if legacy {
+                    let distinct=styles.iter().map(|r|js::stringify(&json!([r["sourceFontId"],r["size"],r["face"],r["color"]]))).collect::<BTreeSet<_>>();
+                    let mut detail=Vec::new();
+                    if distinct.len()>1{detail.push("multiple character styles");}
+                    if styles.iter().any(|r|truthy(&r["face"])){detail.push("character face effects");}
+                    if !detail.is_empty(){limits.push(json!({"movie":movie_name,"cast":cast,"member":number,"kind":"text-layout","detail":detail.join(", ")}));}
                 }
                 let object = member.as_object_mut().unwrap();
                 // `member.textStyle = member.textInsertStyle = {...}` assigns right to left.
@@ -293,6 +252,7 @@ pub fn bind_text_fonts(
             }
         }
     }
+    formats::bind(movies, fonts, &aliases, &mut variants, field_styles, &mut limits)?;
     for (index, font) in fonts.iter_mut().enumerate() {
         let number = font["number"].clone();
         let list: Vec<Value> = variants[index]

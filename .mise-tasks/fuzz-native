@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 mkdir -p build/validation/native-fuzz/corpus
 cc=${CC:-clang}
-flags=(-std=c17 -O1 -g -fno-omit-frame-pointer -DDIRECTOR64_DIRECTOR_VERSION=6
+flags=(-std=c17 -O1 -g -fno-omit-frame-pointer
        -Iruntime/director -Iruntime/lingo -Iruntime/package -Iplatforms/web)
 python3 - <<'PY'
 from pathlib import Path
@@ -18,15 +18,41 @@ for kind,depth in ((b'FDI1',2),(b'FDI2',4)):
     (folder/'corpus'/kind.decode()).write_bytes(b'\0'+data)
 (folder/'seed.c').write_text('#define main contract_main\n#include "'+str(root/'tests/native/test_package.c')+'"\n#undef main\nint main(void){size_t n=build();putchar(1);return fwrite(buffer,1,n,stdout)!=n;}\n')
 PY
-"$cc" "${flags[@]}" build/validation/native-fuzz/seed.c runtime/package/package.c \
+"$cc" "${flags[@]}" -DDIRECTOR64_DIRECTOR_VERSION=6 \
+    build/validation/native-fuzz/seed.c runtime/package/package.c \
     -o build/validation/native-fuzz/seed
 build/validation/native-fuzz/seed > build/validation/native-fuzz/corpus/package
-"$cc" "${flags[@]}" -fsanitize=fuzzer,address,undefined \
-    tools/validation/fuzz-runtime.c platforms/web/compositor.c runtime/director/director.c \
-    runtime/director/shape.c runtime/lingo/lingo_runtime.c runtime/package/package.c \
-    -lm -o build/validation/native-fuzz/fuzz-runtime
+# The real writer/loader fixture includes VECT, TRAN and RICH sections. A D6
+# corpus alone cannot reach their modern-profile readers with valid input.
+cargo build --release --manifest-path compiler/Cargo.toml
+uv run --locked pytest -q tests/test_linked_package.py::test_linked_movie_metadata_survives_packaging \
+    --basetemp build/validation/native-fuzz/modern-fixture
+python3 - <<'PY'
+from pathlib import Path
+folder=Path('build/validation/native-fuzz')
+packages=list((folder/'modern-fixture').rglob('game.d64p'))
+assert len(packages)==1
+data=bytearray(packages[0].read_bytes())
+data[12:28]=bytes(range(1,17))
+modern=folder/'corpus-modern';modern.mkdir(exist_ok=True)
+(modern/'package').write_bytes(b'\1'+data)
+for name in ('FDI1','FDI2'):
+    (modern/name).write_bytes((folder/'corpus'/name).read_bytes())
+PY
 export ASAN_OPTIONS=halt_on_error=1:detect_leaks=1
 export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
-build/validation/native-fuzz/fuzz-runtime build/validation/native-fuzz/corpus \
-    -max_total_time="${FUZZ_SECONDS:-15}" -timeout=5 -rss_limit_mb=1024 \
-    -max_len=65536 -artifact_prefix=build/validation/native-fuzz/ "$@"
+for profile in d6 d85; do
+    options=(-DDIRECTOR64_DIRECTOR_VERSION=6)
+    corpus=build/validation/native-fuzz/corpus
+    if [ "$profile" = d85 ]; then
+        options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1)
+        corpus=build/validation/native-fuzz/corpus-modern
+    fi
+    binary="build/validation/native-fuzz/fuzz-runtime-$profile"
+    "$cc" "${flags[@]}" "${options[@]}" -fsanitize=fuzzer,address,undefined \
+        tools/validation/fuzz-runtime.c platforms/web/compositor.c runtime/director/director.c \
+        runtime/director/shape.c runtime/lingo/lingo_runtime.c runtime/package/package.c \
+        -lm -o "$binary"
+    "$binary" "$corpus" -max_total_time="${FUZZ_SECONDS:-15}" -timeout=5 -rss_limit_mb=1024 \
+        -max_len=65536 -artifact_prefix="build/validation/native-fuzz/$profile-" "$@"
+done

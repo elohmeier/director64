@@ -1,9 +1,9 @@
 // The game's files, as its Lingo reads and writes them: the saves it may
-// write, kept in a 128 KiB save image the host makes durable, and the
+// write, kept in a per-game save image the host makes durable, and the
 // read-only files the installed game would have found beside it. What a game
 // has is data in its game.toml [player] table, generated into game_profile.h.
 //
-// The save image holds two 64 KiB generations; a write commits a whole new
+// The save image holds two generations (64 KiB each by default); a write commits a whole new
 // one to the slot not in use and reads it back, so a failed write leaves the
 // previous generation. A generation is a 32-byte header ("D64S", version,
 // generation, used bytes, CRC-32 with the CRC field as zero, entry count)
@@ -16,7 +16,12 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { SLOT = 65536, HEADER = 32, NAME = 64 };
+#ifndef DIRECTOR64_SAVE_SLOT_BYTES
+#define DIRECTOR64_SAVE_SLOT_BYTES 65536u
+#endif
+_Static_assert(DIRECTOR64_SAVE_SLOT_BYTES >= 65536u && DIRECTOR64_SAVE_SLOT_BYTES <= 16u*1024u*1024u,
+               "save slots must be between 64 KiB and 16 MiB");
+enum { SLOT = DIRECTOR64_SAVE_SLOT_BYTES, HEADER = 32, NAME = 64 };
 
 #ifdef GAME_SAVES
 static const char *const saves[] = {GAME_SAVES};
@@ -52,15 +57,16 @@ static void put32(uint8_t *p, uint32_t v) {
   p[2] = (uint8_t)(v >> 8);
   p[3] = (uint8_t)v;
 }
-static uint32_t crc(const uint8_t *p) {
+static uint32_t crc_size(const uint8_t *p, size_t size) {
   uint32_t c = UINT32_MAX;
-  for (unsigned i = 0; i < SLOT; i++) {
+  for (size_t i = 0; i < size; i++) {
     c ^= i >= 16 && i < 20 ? 0 : p[i];
     for (unsigned b = 0; b < 8; b++)
       c = (c >> 1) ^ (0xedb88320u & (0u - (c & 1u)));
   }
   return c ^ UINT32_MAX;
 }
+static uint32_t crc(const uint8_t *p) { return crc_size(p, SLOT); }
 
 // A name against one pattern, without case: ? any character, # a digit,
 // * any run.
@@ -145,9 +151,9 @@ static long find(const uint8_t *data, uint32_t count, const char *name) {
   }
   return -1;
 }
-static bool valid(const uint8_t *p) {
-  if (memcmp(p, "D64S", 4) || get32(p + 4) != 1 || get32(p + 12) > SLOT - HEADER ||
-      get32(p + 16) != crc(p))
+static bool valid_size(const uint8_t *p, size_t slot_bytes) {
+  if (memcmp(p, "D64S", 4) || get32(p + 4) != 1 || get32(p + 12) > slot_bytes - HEADER ||
+      get32(p + 16) != crc_size(p, slot_bytes))
     return false;
   uint32_t used = get32(p + 12), at = 0;
   for (uint32_t i = 0; i < get32(p + 20); i++) {
@@ -159,6 +165,33 @@ static bool valid(const uint8_t *p) {
     at += 1 + n + 4 + length;
   }
   return at == used;
+}
+static bool valid(const uint8_t *p) { return valid_size(p, SLOT); }
+
+// Expand the legacy device without interpreting or rewriting file contents.
+// Only CRC-valid old generations become new generations; an unreadable legacy
+// device fails without touching the destination or the durable original.
+bool game_save_import(uint8_t *out, size_t capacity, const uint8_t *data, size_t length) {
+  if (!out || !data || capacity != 2u * SLOT) return false;
+  if (length == capacity) { memmove(out, data, length); return true; }
+  const size_t legacy = 65536u;
+  if (SLOT == legacy || length != 2u * legacy) return false;
+  bool usable[2] = {valid_size(data, legacy), valid_size(data + legacy, legacy)};
+  bool erased = true;
+  for (size_t i = 0; i < length; i++) if (data[i] != 255) { erased = false; break; }
+  if (!usable[0] && !usable[1] && !erased) return false;
+  uint8_t *expanded = malloc(capacity);
+  if (!expanded) return false;
+  memset(expanded, 255, capacity);
+  for (unsigned i = 0; i < 2; i++) if (usable[i]) {
+    uint8_t *slot = expanded + i * SLOT;
+    memset(slot, 0, SLOT);
+    memcpy(slot, data + i * legacy, HEADER + get32(data + i * legacy + 12));
+    put32(slot + 16, crc(slot));
+  }
+  memcpy(out, expanded, capacity);
+  free(expanded);
+  return true;
 }
 
 save_status_t game_save_load(save_backend_t backend) {
@@ -211,6 +244,17 @@ const char *game_save_name(unsigned n) {
   return NULL;
 }
 
+bool game_file_exists(const char *name) {
+  char canonical[NAME];
+  if (save_name(name, canonical) && (store.status == SAVE_VALID || store.status == SAVE_BLANK) &&
+      find(store.data, store.count, canonical) >= 0) return true;
+  const char *base = name;
+  for (const char *p = name; *p; p++) if (*p == '/' || *p == '\\' || *p == ':') base = p + 1;
+  for (unsigned i = 0; i < COUNT(files); i++)
+    if (files[i][0] && matches(files[i][0], base, NULL)) return true;
+  return false;
+}
+
 bool game_read_file(const char *name, char *out, unsigned cap, unsigned *length) {
   char canonical[NAME];
   if (save_name(name, canonical) && (store.status == SAVE_VALID || store.status == SAVE_BLANK)) {
@@ -218,7 +262,7 @@ bool game_read_file(const char *name, char *out, unsigned cap, unsigned *length)
     if (at >= 0) {
       unsigned n = store.data[at];
       uint32_t size = get32(store.data + at + 1 + n);
-      if (size && size < cap) {
+      if (size < cap) {
         memcpy(out, store.data + at + 1 + n + 4, size);
         out[size] = 0;
         *length = size;
@@ -239,45 +283,55 @@ bool game_read_file(const char *name, char *out, unsigned cap, unsigned *length)
   return false;
 }
 
-bool game_write_file(const char *name, const char *data, unsigned length) {
-  char canonical[NAME];
-  if (!save_name(name, canonical) || (store.status != SAVE_VALID && store.status != SAVE_BLANK))
-    return false;
-  if (store.generation == UINT32_MAX) {
-    store.status = SAVE_FULL;
-    return false;
-  }
+static bool change_file(const char *name, const char *replacement, const char *data,
+                        unsigned length, bool remove, bool rename) {
+  char canonical[NAME], target[NAME];
+  if (!save_name(name, canonical) || (replacement && !save_name(replacement, target)) ||
+      (store.status != SAVE_VALID && store.status != SAVE_BLANK)) return false;
+  long old = find(store.data, store.count, canonical);
+  if (remove && old < 0) return true;
+  if (rename) {
+    if (old < 0) return false;
+    if (!strcmp(canonical, target)) return true;
+    unsigned n = store.data[old];
+    length = get32(store.data + old + 1 + n);
+    data = (const char *)store.data + old + 1 + n + 4;
+  } else strcpy(target, canonical);
+  long replaced = rename ? find(store.data, store.count, target) : old;
+  // Exhaustion must not make an existing generation unreadable.
+  if (store.generation == UINT32_MAX) return false;
   uint8_t *block = calloc(1, SLOT), *check = malloc(SLOT);
   if (!block || !check) {
     free(block);
     free(check);
     return false;
   }
-  // The new generation: every other entry as it was, this one replaced or
-  // appended.
-  long old = find(store.data, store.count, canonical);
+  // Build one new generation, retaining every unrelated entry unchanged.
   uint32_t used = 0, count = 0;
   long at = 0;
   for (uint32_t i = 0; i < store.count; i++) {
     unsigned n = store.data[at];
     uint32_t size = 1 + n + 4 + get32(store.data + at + 1 + n);
-    if (at != old) {
+    if (at != old && at != replaced) {
       memcpy(block + HEADER + used, store.data + at, size);
       used += size;
       count++;
     }
     at += size;
   }
-  size_t n = strlen(canonical);
-  bool fits = used + 1 + n + 4 + length <= SLOT - HEADER;
+  size_t n = strlen(target);
+  bool fits = remove || (length <= SLOT - HEADER &&
+                          (size_t)used + 1 + n + 4 + length <= SLOT - HEADER);
   if (fits) {
-    uint8_t *entry = block + HEADER + used;
-    entry[0] = (uint8_t)n;
-    memcpy(entry + 1, canonical, n);
-    put32(entry + 1 + n, length);
-    if (length) memcpy(entry + 1 + n + 4, data, length);
-    used += (uint32_t)(1 + n + 4 + length);
-    count++;
+    if (!remove) {
+      uint8_t *entry = block + HEADER + used;
+      entry[0] = (uint8_t)n;
+      memcpy(entry + 1, target, n);
+      put32(entry + 1 + n, length);
+      if (length) memcpy(entry + 1 + n + 4, data, length);
+      used += (uint32_t)(1 + n + 4 + length);
+      count++;
+    }
     memcpy(block, "D64S", 4);
     put32(block + 4, 1);
     put32(block + 8, store.generation + 1);
@@ -301,6 +355,13 @@ bool game_write_file(const char *name, const char *data, unsigned length) {
   free(block);
   free(check);
   return ok;
+}
+bool game_write_file(const char *name, const char *data, unsigned length) {
+  return change_file(name, NULL, data, length, false, false);
+}
+bool game_remove_file(const char *name) { return change_file(name, NULL, NULL, 0, true, false); }
+bool game_rename_file(const char *old, const char *name) {
+  return change_file(old, name, NULL, 0, false, true);
 }
 
 // The nth file (from 1) a folder listing shows: the [player] folders entry

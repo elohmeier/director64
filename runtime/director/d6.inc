@@ -39,6 +39,10 @@ static dg_member_t *d6_new_member(dg_runtime_t *d, unsigned file, unsigned cast,
 // Mutable field indices are internal, so removal can compact every parallel
 // array without changing a cast-member identity held by recovered scripts.
 static void d6_erase_field(dg_runtime_t *d, uint32_t id) {
+#if DG_MODERN
+  button_forget(d,id);
+#endif
+  format_clear(d,id);
   for (unsigned i = 0; i < d->field_count; i++) if (d->field_members[i] == id) {
     unsigned last = --d->field_count;
     d->field_members[i] = d->field_members[last];
@@ -50,6 +54,20 @@ static void d6_erase_field(dg_runtime_t *d, uint32_t id) {
     d->field_font_changed[i] = d->field_font_changed[last];
     d->field_sizes[i] = d->field_sizes[last];
     d->field_align[i] = d->field_align[last];
+    d->field_faces[i] = d->field_faces[last];
+    d->field_face_changed[i] = d->field_face_changed[last];
+    d->field_size_changed[i] = d->field_size_changed[last];
+    d->field_line_space[i]=d->field_line_space[last];d->field_char_spacing[i]=d->field_char_spacing[last];
+    d->field_spacing_changed[i]=d->field_spacing_changed[last];
+#if DG_CAP_TEXT_BOX
+    d->field_box_live[i]=d->field_box_live[last];d->field_box_types[i]=d->field_box_types[last];
+    d->field_margins[i]=d->field_margins[last];d->field_borders[i]=d->field_borders[last];
+    d->field_box_shadows[i]=d->field_box_shadows[last];d->field_word_wrap[i]=d->field_word_wrap[last];
+    d->field_box_bg[i]=d->field_box_bg[last];d->field_box_paint[i]=d->field_box_paint[last];
+    d->field_widths[i]=d->field_widths[last];d->field_heights[i]=d->field_heights[last];
+    d->field_content_heights[i]=d->field_content_heights[last];
+    d->field_measure_revision[i]=d->field_measure_revision[last];
+#endif
     d->field_editable[i] = d->field_editable[last];
     d->field_members[last] = 0;
     d->values->roots[DG_FIELD_TEXT_ROOT + last] = (lv_t){0};
@@ -72,6 +90,7 @@ bool dg_text_editable(dg_runtime_t *d, unsigned sprite) {
   if (!sprite || sprite >= DG_SPRITES) return false;
   const dg_member_t *m = dg_member(d, d->sprites[sprite].value.member);
   if (!m || (m->type != 3 && m->type != 7)) return false;
+  if(dg_button_kind(m))return false;
   return d->sprite_editable[sprite] ? d->sprite_editable[sprite] > 0
       : (d->sprites[sprite].value.flags & 64) || d6_member_editable(d, m);
 }
@@ -90,6 +109,11 @@ static float d6_kerning(const dg_text_style_t *style, unsigned first, unsigned s
   return 0;
 }
 static lv_t d6_char_position(dg_runtime_t *d, const dg_member_t *m, int position) {
+  if(m && d->platform.text_position) {
+    int x=0,y=0;
+    if(d->platform.text_position(d->context,m->id,position,&x,&y))return lv_point(d->values,x,y);
+    if(d->values->failed)return (lv_t){0};
+  }
 #if DIRECTOR64_DIRECTOR_VERSION >= 10
   // A member whose converted style carries no advance table still answers a
   // position: the exercises place highlight boxes from it, and half an em
@@ -170,7 +194,22 @@ static bool d6_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
       *out = lv_text(d->values, "Projector", false); return true;
     }
     if ((ln == LN_OPTIONDOWN) || (ln == LN_CONTROLDOWN) || (ln == LN_COMMANDDOWN) || (ln == LN_SHIFTDOWN)) {
+#if DG_CAP_KEYBOARD
+      dg_runtime_t *keyboard=d;
+#if DG_D10
+      keyboard=sound_host(d); // Physical modifiers are shared by the windows.
+#endif
+      unsigned key=ln==LN_OPTIONDOWN?58:ln==LN_SHIFTDOWN?56:59;
+      bool held=(keyboard->keys_down[key>>5]&(UINT32_C(1)<<(key&31)))!=0;
+      unsigned right=ln==LN_OPTIONDOWN?61:ln==LN_SHIFTDOWN?60:62;
+      held|=(keyboard->keys_down[right>>5]&(UINT32_C(1)<<(right&31)))!=0;
+      // Windows projectors expose Control through commandDown as well.
+      if(ln==LN_COMMANDDOWN)held|=(keyboard->keys_down[55>>5]&(UINT32_C(1)<<(55&31)))!=0 ||
+          (keyboard->keys_down[54>>5]&(UINT32_C(1)<<(54&31)))!=0;
+      *out=lv_num(held);return true;
+#else
       *out = lv_num(0); return true;
+#endif
     }
 #if DIRECTOR64_DIRECTOR_VERSION >= 10
     if (ln == LN_KEYBOARDFOCUSSPRITE) {
@@ -286,25 +325,39 @@ static bool d6_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
   }
   return false;
 }
+static unsigned d6_cast_capacity(void) {
+#if defined(DIRECTOR64_SAVE_SLOT_BYTES) && DIRECTOR64_SAVE_SLOT_BYTES > 65536
+  return DIRECTOR64_SAVE_SLOT_BYTES-512u;
+#else
+  return 65000;
+#endif
+}
 static bool d6_save_cast(dg_runtime_t *d, const dg_cast_t *cast) {
   const dg_movie_t *movie = dg_loaded(d, cast->file);
   if (!movie || !d->platform.write_file) return false;
-  unsigned char *data = malloc(65000);
+  unsigned capacity=d6_cast_capacity();
+  unsigned char *data = malloc(capacity);
   if (!data) return false;
   memcpy(data, "D6TF\1\0", 6);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  if(cast_images_count(d,cast))data[4]=2;
+#endif
   unsigned at = 8, count = 0;
   for (unsigned i = 0; i < d->field_count; i++) {
     const dg_member_t *m = dg_member(d, d->field_members[i]);
     if (!m || DG_ID_FILE(m->id) != cast->file || m->cast != cast->cast || !m->type) continue;
     const char *text = lv_cstr(d->values, d->values->roots[DG_FIELD_TEXT_ROOT + i]);
     unsigned n = (unsigned)strlen(m->name), length = (unsigned)strlen(text);
-    if (!n || n > 63 || length > 16383 || at + 8 + n + length > 65000) { free(data); return false; }
+    if (!n || n > 63 || length > 16383 || at + 8 + n + length > capacity) { free(data); return false; }
     d6_put16(data + at, m->number); d6_put16(data + at + 2, m->type);
     d6_put16(data + at + 4, n); d6_put16(data + at + 6, length); at += 8;
     memcpy(data + at, m->name, n); at += n;
     memcpy(data + at, text, length); at += length; count++;
   }
   d6_put16(data + 6, count);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+  if(!cast_images_write(d,cast,data,capacity,&at)){free(data);return false;}
+#endif
   const char *store_name = movie->code->name;
 #if DIRECTOR64_DIRECTOR_VERSION >= 10
   const char *store = d10_cast_store(d, cast->file);
@@ -317,11 +370,16 @@ static void d6_restore_cast_file(dg_runtime_t *d, const dg_cast_t *cast,
                                  const char *filename) {
   if (!d->platform.read_file) return;
   {
-    unsigned char *data = malloc(65001); unsigned length = 0;
+    unsigned capacity=d6_cast_capacity();
+    unsigned char *data = malloc(capacity+1u); unsigned length = 0;
     if (!data) { error(d,"cast restore memory","allocation"); return; }
-    if (!d->platform.read_file(d->context, filename, (char *)data, 65001, &length)) {free(data);return;}
+    if (!d->platform.read_file(d->context, filename, (char *)data, capacity+1u, &length)) {free(data);return;}
     unsigned at = 8, count = length >= 8 ? d6_u16(data + 6) : 0;
-    bool valid = length >= 8 && length <= 65000 && !memcmp(data,"D6TF\1\0",6) && count <= DG_FIELDS;
+    bool images=false;
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    images=length>=8&&!memcmp(data,"D6TF\2\0",6);
+#endif
+    bool valid = length >= 8 && length <= capacity && (images||!memcmp(data,"D6TF\1\0",6)) && count <= DG_FIELDS;
     unsigned numbers[DG_FIELDS], names[DG_FIELDS], name_sizes[DG_FIELDS];
     unsigned new_members = 0, new_fields = 0;
     for (unsigned pass = 0; pass < 2 && valid; pass++) {
@@ -356,7 +414,11 @@ static void d6_restore_cast_file(dg_runtime_t *d, const dg_cast_t *cast,
         }
         at+=n+size;
       }
-      valid &= at == length;
+      if(images) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+        valid &= cast_images_restore(d,cast,data,length,at,new_members,pass!=0);
+#endif
+      } else valid &= at == length;
       if (!pass) valid &= new_members + d->dynamic_count <= 32 && new_fields + d->field_count <= DG_FIELDS;
     }
     free(data);
@@ -388,24 +450,9 @@ static bool d6_call(dg_runtime_t *d, const char *name, unsigned argc, const lv_t
     if (d->platform.trace) d->platform.trace(d->context, "CERTIFICATE_PRINT_NOTICE");
     return true;
   }
-  if ((ln == LN_PUPPETTRANSITION) && argc == 4) {
-    // The recovered car-save and shutdown scripts use numeric transitions
-    // (1 wipe right, 10 edges-in square). The time argument is in quarter
-    // seconds with the original quarter-second floor, recorded in ticks with
-    // the transition. The compositor does not draw the wipe: the new stage
-    // shows at once and the score keeps playing, where the original blocked.
-    lv_runtime_t *r = d->values;
-    int type=lv_integer(r,a[0]), time=lv_integer(r,a[1]);
-    int chunk=lv_integer(r,a[2]), area=lv_integer(r,a[3]);
-    if ((type!=1 && type!=10) || time<0 || chunk<0 || (area!=0 && area!=1)) {
-      error(d,"numeric transition parameters","unsupported");return true;
-    }
-    d->transition_type=(unsigned)type;d->transition_serial++;
-    d->transition_duration=time>0?(unsigned)time*15u:15u;
-    d->transition_chunk=chunk>0?(unsigned)chunk:1u;
-    if (d->platform.trace) d->platform.trace(d->context,"D6_TRANSITION");
-    return true;
-  }
+  if (ln == LN_PUPPETTRANSITION)
+    return puppet_transition(d, argc, a);
+
   lv_runtime_t *r=d->values;
   if (ln == LN_UNLOADMEMBER) {
     // This is a purge hint, not erase: immutable package assets are demand-loaded
@@ -469,6 +516,9 @@ static bool d6_call(dg_runtime_t *d, const char *name, unsigned argc, const lv_t
   if ((ln == LN_ERASE) && argc == 1 && lv_type(a[0]) == LV_MEMBER) {
     for (unsigned i = 0; i < d->dynamic_count; i++)
       if (d->dynamic_members[i].member.id == (uint32_t)lv_id(a[0])) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+        cast_images_erase(d,(uint32_t)lv_id(a[0]));
+#endif
         d6_erase_field(d, (uint32_t)lv_id(a[0]));
         d->dynamic_members[i].member = (dg_member_t){0};
         d->dynamic_members[i].name[0] = 0;

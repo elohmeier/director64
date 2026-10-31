@@ -33,5 +33,21 @@ int main(void) {
   assert(lv_numeric(convert("integer", lv_float(-7.6))) == -8);
   lv_t decimal = convert("float", lv_text(&runtime, "7.25", false));
   assert(lv_is_float(decimal) && lv_numeric(decimal) == 7.25);
+  // Mucklas KR negates the point returned by its direction helper. Keep
+  // geometric identity and allocate a new value rather than changing it.
+  lv_t direction = lv_point(&runtime, 3, -4.5);
+  lv_t reverse = lv_unary(&runtime, "-", direction);
+  assert(!runtime.failed && runtime.objects[lv_id(reverse)].geometry == 2);
+  assert(lv_numeric(lv_at(&runtime, reverse, 1)) == -3);
+  assert(lv_numeric(lv_at(&runtime, reverse, 2)) == 4.5);
+  assert(lv_numeric(lv_at(&runtime, direction, 1)) == 3);
+  assert(lv_numeric(lv_at(&runtime, direction, 2)) == -4.5);
+  lv_set_at(&runtime, reverse, 1, lv_num(99));
+  assert(lv_numeric(lv_at(&runtime, direction, 1)) == 3);
+  lv_t bounds = lv_rect(&runtime, -1, 2, -3, 4);
+  lv_t flipped = lv_unary(&runtime, "-", bounds);
+  assert(!runtime.failed && runtime.objects[lv_id(flipped)].geometry == 4);
+  for (unsigned i = 1; i <= 4; i++)
+    assert(lv_numeric(lv_at(&runtime, flipped, i)) == -lv_numeric(lv_at(&runtime, bounds, i)));
   puts("lingo numeric conversions: ok");
 }

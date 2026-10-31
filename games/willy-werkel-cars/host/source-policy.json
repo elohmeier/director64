@@ -22,5 +22,6 @@
   },
   "projector": "Willy32.exe",
   "source_sha256": "938be20a50e2825f5acf4788aabfdc145b94d1a1fb61b7264a4a81156428afac",
-  "extended_d6": true
+  "extended_d6": true,
+  "full_engine": true
 }

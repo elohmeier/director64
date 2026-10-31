@@ -1,6 +1,46 @@
 // Mucklas's probe state line for the web runtime's probe
 // (platforms/web/web_runtime.c), which includes it after defining values, director, pointer, enter(), find() and the output helpers.
 #include "pointer_probe.h"
+static lv_t match_global(const char *name) {
+  int index=lv_global_id(&values,name);
+  return index>=0 ? values.globals[index] : (lv_t){0};
+}
+static void match_counts(unsigned *humans,unsigned *computers) {
+  *humans=*computers=0;
+  if(!director.movie)return;
+  const char *movie=director.movie->code->name;
+  if(!strcmp(movie,"KR.DXR")) {
+    lv_t refs=match_global("gobjektreferens");
+    if(lv_type(refs)!=LV_PROPLIST)return;
+    lv_t drivers=lv_get(&values,NULL,"kotte",refs);
+    if(lv_type(drivers)==LV_LIST)
+      for(unsigned i=1;i<=lv_count(&values,drivers)&&i<=4;i++)
+        *humans+=lv_type(lv_at(&values,drivers,i))==LV_INSTANCE;
+    *computers=lv_type(lv_get(&values,NULL,"dator",refs))==LV_INSTANCE;
+  } else if(!strcmp(movie,"SS.DXR")) {
+    lv_t players=match_global("gspelarlista");
+    if(lv_type(players)!=LV_LIST)return;
+    for(unsigned i=1;i<=lv_count(&values,players)&&i<=4;i++) {
+      lv_t player=lv_at(&values,players,i);
+      if(lv_type(player)!=LV_INSTANCE)continue;
+      lv_t type=lv_get(&values,NULL,"typ",player);
+      if(lv_type(type)!=LV_STRING&&lv_type(type)!=LV_SYMBOL)continue;
+      const char *name=lv_cstr(&values,type);
+      *humans+=!strcmp(name,"manniska");*computers+=!strcmp(name,"dator");
+    }
+  } else if(!strcmp(movie,"KB.DXR")) {
+    const char *names[]={"gundermucklalist","gmellanmucklalist","govermucklalist"};
+    for(unsigned i=0;i<3;i++) {
+      lv_t player=match_global(names[i]);
+      if(lv_type(player)!=LV_PROPLIST)continue;
+      lv_t type=lv_get(&values,NULL,"typavspelare",player);
+      if(lv_type(type)!=LV_STRING&&lv_type(type)!=LV_SYMBOL)continue;
+      const char *name=lv_cstr(&values,type);
+      *humans+=!strcmp(name,"musspelare")||!strcmp(name,"medspelare");
+      *computers+=!strcmp(name,"dator");
+    }
+  }
+}
 static void state(void) {
   printf("{\"movie\":"); quoted(director.movie ? director.movie->code->name : "");
   printf(",\"frame\":%u,\"tick\":%u,\"depth\":%u,\"quit\":%s,\"sounds\":%u,\"save_generation\":%u,\"error\":", director.frame, director.ticks, values.depth, director.quit ? "true":"false", sound_count, game_save_generation());
@@ -36,5 +76,7 @@ static void state(void) {
     int l,t,r,b; dg_bounds(&director,i,&l,&t,&r,&b); if(comma)putchar(',');comma=true;
     printf("{\"id\":%u,\"member\":%u,\"script\":%u,\"bounds\":[%d,%d,%d,%d],\"blend\":%u}",i,s->value.member,s->value.script,l,t,r,b,dg_opacity(s));
   }
-  printf("]");native_pointer_state(&pointer);puts("}");fflush(stdout);
+  unsigned humans,computers;match_counts(&humans,&computers);
+  printf("],\"match_humans\":%u,\"match_computers\":%u",humans,computers);
+  native_pointer_state(&pointer);puts("}");fflush(stdout);
 }

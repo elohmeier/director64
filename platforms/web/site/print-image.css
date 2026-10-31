@@ -1,0 +1,7 @@
+@page { size: A4 portrait; margin: 0; }
+@page portrait { size: A4 portrait; margin: 0; }
+@page landscape { size: A4 landscape; margin: 0; }
+html, body { margin: 0; padding: 0; background: white; }
+body { page: portrait; width: 210mm; height: 297mm; }
+html[data-print-orientation="landscape"] body { page: landscape; width: 297mm; height: 210mm; }
+img { display: block; width: 100%; height: 100%; object-fit: contain; }

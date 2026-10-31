@@ -155,6 +155,7 @@ function setupFullscreen() {
 
 // ---- Controllers: menus read them; the running game reads them otherwise ----
 function topLayer() {
+  if(session?.userFiles.open)return {element:session.userFiles.element,back:()=>session.userFiles.cancel()};
   if ($("dialog").open) return {element: $("dialog"), back: () => $("dialog").close("cancel")};
   if (session?.typing) return {keyboard: session.keyboard};
   if (menu.open) return {element: $("menu"), back: () => menu.close()};

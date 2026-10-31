@@ -1,30 +1,21 @@
+import {formatText} from "./rich-text.js";
 // The player: runs a game package on the shared engine's Wasm runtime at the
 // runtime's 60 Hz service clock, presents its composited stage, plays its
 // sounds, reads the mouse, keyboard and controllers, and keeps its saves
 // durable in the origin-private file system.
 import {AudioEngine} from "./audio.js";
-import {PORTS} from "./gamepad.js";
-import {KeyEvents, OnScreenKeyboard} from "./keyboard.js";
+import {cursorPresentation} from "./cursor.js";
+import {KeyEvents, MAC_KEYS, OnScreenKeyboard} from "./keyboard.js";
 import {FLASH_BYTES, SaveStore, plausibleFlash} from "./saves.js";
 import {Presenter, WakeLock} from "./screen.js";
 import {t} from "./strings.js";
 import {$, ask, hideOverlay, notify, overlay, toast} from "./ui.js";
 import {VideoPlayers} from "./video.js";
 import {unpackAsset} from "./packed.js";
+import {UserFiles} from "./user-files.js";
 
 // The stage the runtime draws; an 800x600 game reports its own (d64_stage_width).
 let WIDTH = 640, HEIGHT = 480;
-// Macintosh virtual key codes (Events.h kVK_*) by KeyboardEvent.code.
-const MAC_KEYS = {
-  KeyA: 0, KeyS: 1, KeyD: 2, KeyF: 3, KeyH: 4, KeyG: 5, KeyZ: 6, KeyX: 7, KeyC: 8, KeyV: 9,
-  KeyB: 11, KeyQ: 12, KeyW: 13, KeyE: 14, KeyR: 15, KeyY: 16, KeyT: 17, Digit1: 18, Digit2: 19,
-  Digit3: 20, Digit4: 21, Digit6: 22, Digit5: 23, Equal: 24, Digit9: 25, Digit7: 26, Minus: 27,
-  Digit8: 28, Digit0: 29, BracketRight: 30, KeyO: 31, KeyU: 32, BracketLeft: 33, KeyI: 34,
-  KeyP: 35, Enter: 36, KeyL: 37, KeyJ: 38, Quote: 39, KeyK: 40, Semicolon: 41, Backslash: 42,
-  Comma: 43, Slash: 44, KeyN: 45, KeyM: 46, Period: 47, Tab: 48, Space: 49, Backquote: 50,
-  Backspace: 51, Escape: 53, NumpadEnter: 76, Home: 115, PageUp: 116, Delete: 117, End: 119,
-  PageDown: 121, ArrowLeft: 123, ArrowRight: 124, ArrowDown: 125, ArrowUp: 126,
-};
 // The catch-up rule (as jni/main.c): at most four ticks per pass and twelve
 // ticks of backlog; time beyond that is dropped rather than rushed through.
 const MAX_STEPS = 4, BACKLOG_TICKS = 12;
@@ -60,20 +51,10 @@ export async function textRasterizer(fonts) {
   const ascent16 = scratch.measureText("H").fontBoundingBoxAscent || 16;
   const monogram = `${Math.max(1, Math.round((16 * 11) / ascent16))}px monogram`;
 
-  // Director wraps a text member's paragraphs at its box width, on spaces.
+  // Director prefers word boundaries, then splits a word that cannot fit
+  // the box. Original8.5.1r104 measured an eleven-letter word as two lines.
   function lines(text, width) {
-    const out = [];
-    for (const paragraph of text.split(/\r\n|\r|\n/)) {
-      let line = "";
-      for (const word of paragraph.split(/(?<= )/)) {
-        if (line && scratch.measureText(line + word.trimEnd()).width > width) {
-          out.push(line);
-          line = word;
-        } else line += word;
-      }
-      out.push(line);
-    }
-    return out;
+    return placedLines(text, width).map(({line}) => line);
   }
   // The same lines with where each starts in the text, for layout().
   function placedLines(text, width) {
@@ -90,6 +71,17 @@ export async function textRasterizer(fonts) {
           line = word;
           lineStart = at;
         } else line += word;
+        while (line.length > 1 && scratch.measureText(line.trimEnd()).width > Math.max(1, width)) {
+          let prefix = "";
+          for (const glyph of line) {
+            if (prefix && scratch.measureText(prefix + glyph).width > Math.max(1, width)) break;
+            prefix += glyph;
+          }
+          if (prefix.length === line.length) break;
+          out.push({line: prefix, start: lineStart});
+          line = line.slice(prefix.length);
+          lineStart += prefix.length;
+        }
         at += word.length;
       }
       out.push({line, start: lineStart});
@@ -110,12 +102,22 @@ export async function textRasterizer(fonts) {
       scratch.font = monogram;
       text.split(/\r\n|\r|\n/).forEach((line, i) => scratch.fillText(line, 0, 12 + i * 13));
     } else {
-      scratch.font = `${style.size}px "${family}"`;
+      scratch.font = `${style.face & 2 ? "italic " : ""}${style.face & 1 ? "bold " : ""}${style.size || 12}px "${family}"`;
       const ascent = style.ascent > 0 ? style.ascent : Math.round(style.size * 0.8);
       const lineHeight = style.lineHeight > 0 ? style.lineHeight : Math.round(style.size * 1.2);
       scratch.textAlign = ["left", "center", "right"][style.align] ?? "left";
       const x = style.align === 1 ? width / 2 : style.align === 2 ? width : 0;
-      lines(text, width).forEach((line, i) => scratch.fillText(line.trimEnd(), x, ascent + i * lineHeight));
+      lines(text, width).forEach((line, i) => {
+        const shown = line.trimEnd(), baseline = ascent + i * lineHeight;
+        scratch.fillText(shown, x, baseline);
+        if (style.face & 12) {
+          const length = scratch.measureText(shown).width;
+          const left = style.align === 1 ? x - length / 2 : style.align === 2 ? x - length : x;
+          const thickness = Math.max(1, Math.round(style.size / 16));
+          if (style.face & 4) scratch.fillRect(left, baseline + Math.max(1, style.size / 12), length, thickness);
+          if (style.face & 8) scratch.fillRect(left, baseline - style.size * .3, length, thickness);
+        }
+      });
       scratch.textAlign = "left";
     }
     const pixels = scratch.getImageData(0, 0, width, height).data;
@@ -153,12 +155,49 @@ export async function textRasterizer(fonts) {
       }
       place(rows, () => 0, 0, 13);
     } else {
-      scratch.font = `${style.size}px "${family}"`;
+      scratch.font = `${style.face & 2 ? "italic " : ""}${style.face & 1 ? "bold " : ""}${style.size || 12}px "${family}"`;
       const lineHeight = style.lineHeight > 0 ? style.lineHeight : Math.round(style.size * 1.2);
       place(placedLines(text, width),
             (w) => (style.align === 1 ? (width - w) / 2 : style.align === 2 ? width - w : 0), 0, lineHeight);
     }
     return boxes;
+  };
+  const richFont = (style) => {
+    const family = families.get(style.font);
+    if (!family) throw new Error(`missing authored font ${style.font} at size ${style.size}`);
+    scratch.font = `${style.face & 2 ? "italic " : ""}${style.face & 1 ? "bold " : ""}${style.size || 12}px "${family}"`;
+  };
+  const formatted = (text, width, formats) => {
+    const measured = formats.map(style => {
+      if (style.ascent > 0 && style.lineHeight > 0) return style;
+      richFont(style); const metrics = scratch.measureText("Hg"), size = style.size || 12;
+      const ascent = Math.round(metrics.fontBoundingBoxAscent ?? size * .8);
+      const descent = Math.round(metrics.fontBoundingBoxDescent ?? size * .2);
+      return {...style, ascent: style.ascent > 0 ? style.ascent : ascent,
+        lineHeight: style.lineHeight > 0 ? style.lineHeight : Math.max(1, ascent + descent)};
+    });
+    return formatText(text, width, measured, (value, style) => {richFont(style); return scratch.measureText(value).width;});
+  };
+  rasterize.richLayout = (text, width, height, formats) => formatted(text, width, formats).boxes;
+  rasterize.richText = (text, width, height, formats) => {
+    const layout = formatted(text, width, formats);
+    scratch.canvas.width = width; scratch.canvas.height = height;
+    scratch.clearRect(0, 0, width, height); scratch.textBaseline = "alphabetic"; scratch.textAlign = "left";
+    for (const row of layout.rows) for (const part of row.parts) {
+      if (part.y >= height) continue;
+      richFont(part.style); scratch.fillStyle = `#${part.style.color.toString(16).padStart(6, "0")}`;
+      if (part.style.charSpacing) {
+        let offset = 0, ordinal = 0;
+        for (const c of part.text) {
+          scratch.fillText(c, part.x + scratch.measureText(part.text.slice(0, offset)).width + ordinal * part.style.charSpacing, part.baseline);
+          offset += c.length; ordinal++;
+        }
+      } else scratch.fillText(part.text, part.x, part.baseline);
+      const thickness = Math.max(1, Math.round((part.style.size || 12) / 16));
+      if (part.style.face & 4) scratch.fillRect(part.x, part.baseline + Math.max(1, (part.style.size || 12) / 12), part.width, thickness);
+      if (part.style.face & 8) scratch.fillRect(part.x, part.baseline - (part.style.size || 12) * .3, part.width, thickness);
+    }
+    return new Uint8Array(scratch.getImageData(0, 0, width, height).data);
   };
   return rasterize;
 }
@@ -195,7 +234,8 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   const canvas = $("screen");
   const presenter = new Presenter(canvas, settings.get("scaling"));
   const wake = new WakeLock();
-  const saves = new SaveStore(`${controlled ? "director64-validation" : "director64"}/${profile.slug}`);
+  const saveBytes = profile.save_bytes ?? FLASH_BYTES;
+  const saves = new SaveStore(`${controlled ? "director64-validation" : "director64"}/${profile.slug}`, saveBytes);
   saves.addEventListener("state", (event) => saveStatus(event.detail));
   const durable = await saves.open();
   const stored = durable ? await saves.read() : null;
@@ -219,12 +259,14 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
 
   const {default: createDirector64} = await import(runtime);
   let module;
-  const flash = () => module.HEAPU8.subarray(module._d64_flash(), module._d64_flash() + FLASH_BYTES);
+  const flash = () => module.HEAPU8.subarray(module._d64_flash(), module._d64_flash() + saveBytes);
   module = await createDirector64({
     director64Host: {
       asset: images,
       text,
       layout: text.layout,
+      richText: text.richText,
+      richLayout: text.richLayout,
       sound: (channel, name, looping, start, end) => audio.play(channel, name, looping, start, end),
       soundPause: (channel, paused) => audio.pauseChannel(channel, paused),
       soundBreakLoop: (channel) => audio.breakLoop(channel),
@@ -249,7 +291,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
       trace: (line) => console.debug(line),
     },
   });
-  if (module._d64_flash_bytes() !== FLASH_BYTES) throw new Error("runtime save device size");
+  if (module._d64_flash_bytes() !== saveBytes) throw new Error("runtime save device size");
   if (module._d64_stage_width) {
     WIDTH = module._d64_stage_width();
     HEIGHT = module._d64_stage_height();
@@ -260,7 +302,14 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   const loaded = module._d64_load_package(pointer, game.package.length);
   module._free(pointer);
   if (!loaded) throw new Error(t("game.rejected", {error: module.UTF8ToString(module._d64_package_error())}));
-  if (stored) flash().set(stored);
+  if (stored) {
+    const input = module._malloc(stored.length);
+    if (!input) throw new Error("save import allocation failed");
+    module.HEAPU8.set(stored, input);
+    const accepted = module._d64_flash_import(input, stored.length);
+    module._free(input);
+    if (!accepted) throw new Error("Save data unreadable; existing saves were not changed");
+  }
   else flash().fill(255);
 
   function exportSave() {
@@ -273,7 +322,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   }
   async function importSave(file) {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    if (!plausibleFlash(bytes)) return notify(t("save.invalid"));
+    if (!plausibleFlash(bytes, saveBytes)) return notify(t("save.invalid"));
     if (!durable) return notify(t("save.noStorage"));
     if (!await ask({title: t("save.replaceTitle"), text: t("save.replaceText"),
       confirm: t("button.replace"), cancel: t("button.cancel")})) return;
@@ -312,10 +361,10 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
 
   // ---- Input: the mouse maps through the letterboxed canvas to the stage ----
   // Buttons as input.h bits: the left button is A, the right one B.
-  const mouse = {x: WIDTH / 2, y: HEIGHT / 2, buttons: 0, pressed: 0, inside: false};
+  const mouse = {x: WIDTH / 2, y: HEIGHT / 2, buttons: 0, pressed: 0, inside: false, type: "mouse"};
   const BUTTON = {0: 1, 2: 2};
-  // Controllers drive the pointer from their first use until the mouse moves.
-  let usingPads = false;
+  // The controller and physical pointer share one cursor.
+  let usingPad = false;
   function locate(event) {
     const rect = canvas.getBoundingClientRect();
     const scale = Math.min(rect.width / WIDTH, rect.height / HEIGHT);
@@ -329,8 +378,9 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   }
   function useMouse(event) {
     // A press that a controller started finishes before the mouse takes over.
-    if (usingPads && pads.active) return false;
-    usingPads = false;
+    if (usingPad && pads.active) return false;
+    usingPad = false;
+    mouse.type = event.pointerType;
     locate(event);
     return true;
   }
@@ -353,26 +403,23 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   canvas.addEventListener("pointerup", (event) => {
     const bit = BUTTON[event.button];
     if (!bit) return;
-    if (!usingPads) locate(event);
+    if (!usingPad) locate(event);
     mouse.buttons &= ~bit;
   });
   canvas.addEventListener("lostpointercapture", () => { mouse.buttons = 0; });
-  canvas.addEventListener("pointerleave", () => { if (!mouse.buttons && !usingPads) mouse.inside = false; });
+  canvas.addEventListener("pointerleave", () => { if (!mouse.buttons && !usingPad) mouse.inside = false; });
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
   window.addEventListener("blur", () => { mouse.buttons = 0; });
-  // Every port the runtime knows of, connected or not.
-  function feedPads(state) {
-    for (let i = 0; i < PORTS; i++) {
-      const port = state.ports[i];
-      module._d64_pad(i, port ? 1 : 0, port?.buttons ?? 0, port?.stickX ?? 0, port?.stickY ?? 0);
-    }
+  function feedPad(state) {
+    const sample = state.sample;
+    module._d64_pad(state.connected ? 1 : 0, sample?.buttons ?? 0,
+      sample?.stickX ?? 0, sample?.stickY ?? 0);
   }
 
   // ---- Text entry: a box over the editable field the player pressed ----
   // The page opens a text box there and holds the game until the text is
   // committed or cancelled: typed on the real keyboard, or on the page's own
-  // on-screen keyboard from a controller. Field text is windows-1252: ASCII everywhere, German letters
-  // on Director 10 (dg_edit_text, which the extended families have).
+  // on-screen keyboard from a controller. Entry is encoded as UTF-8.
   const box = $("text-entry");
   const german = profile.port.director_version >= 1000;
   const allowed = german ? /^[\x20-\x21\x23-\x7eÄÖÜßäöü]*$/ : /^[\x20-\x21\x23-\x7e]*$/;
@@ -433,7 +480,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   function commitEntry() {
     const text = box.value;
     if (!allowed.test(text) || text.length > 20) return refuse(t("text.badCharacter"));
-    const bytes = Uint8Array.from(text, (c) => c.charCodeAt(0)); // Latin-1 = windows-1252 here
+    const bytes = new TextEncoder().encode(text);
     const pointer = module._malloc(bytes.length + 1);
     module.HEAPU8.set(bytes, pointer);
     module.HEAPU8[pointer + bytes.length] = 0;
@@ -470,7 +517,6 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     const code = MAC_KEYS[event.code];
     if (code === undefined) return;
     const allowed = running && !holds.size && !entry.sprite &&
-      !event.ctrlKey && !event.metaKey && !event.altKey &&
       !(event.target instanceof HTMLInputElement) && !event.target.closest?.("dialog, .menu-panel");
     if (keys.forward(code, character(event), down, allowed))
       event.preventDefault(); // arrows and space would scroll the page
@@ -549,6 +595,8 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   // ---- The service loop ----
   let running = false, last = 0, phase = 0, dropped = 0;
   let renders = 0, steps = 0, windowStart = performance.now();
+  const userFiles = new UserFiles({module,hold,swallow:()=>pads.swallow(),root:$("stage")});
+  window.addEventListener("pagehide",()=>userFiles.dispose(),{once:true});
   function present(pointer) {
     if (!pointer) return;
     presenter.present(module.HEAPU8.subarray(pointer, pointer + WIDTH * HEIGHT * 4));
@@ -556,6 +604,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   }
   function stop(status, error = module.UTF8ToString(module._d64_error())) {
     running = false;
+    userFiles.dispose();
     wake.want(false);
     videos.closeAll();
     audio.stopAll();
@@ -579,16 +628,17 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     if (audio.errors.length) return stop(1, audio.errors[0]);
     if (videos.errors.length) return stop(1, videos.errors[0]);
     if (keys.error) return stop(1, keys.error);
+    userFiles.poll();
     const state = pads.poll(now);
     if (state.actions.length) unlockAudio();
     if (!capturesPads() && !holds.size && !entry.sprite) {
-      feedPads(state);
-      if (state.active && !usingPads) {
+      feedPad(state);
+      if (state.active && !usingPad) {
         module._d64_pointer_warp(mouse.x, mouse.y);
-        usingPads = true;
+        usingPad = true;
       }
     }
-    if (usingPads && !state.connected) usingPads = false;
+    if (usingPad && !state.connected) usingPad = false;
     // A controller reaching a box the mouse opened brings up its keyboard.
     if (entry.sprite && !osk.open && state.actions.length) showKeyboard();
     if (!holds.size && !entry.sprite) {
@@ -606,8 +656,8 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
         let status;
         if (injected.length) {
           status = module._d64_step(mouse.x, mouse.y, injected.shift());
-        } else if (usingPads) {
-          status = module._d64_step_pads();
+        } else if (usingPad) {
+          status = module._d64_step_pad();
           mouse.x = module._d64_pointer_x();
           mouse.y = module._d64_pointer_y();
           mouse.inside = true;
@@ -619,6 +669,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
           status = module._d64_step(mouse.x, mouse.y, mouse.buttons | mouse.pressed);
         }
         mouse.pressed = 0;
+        if(userFiles.poll())break;
         const request = module._d64_print_request();
         if (request && request !== printed && !injected.length) {
           printed = request;
@@ -632,8 +683,9 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
         steps++;
         if (status) return stop(status);
       }
-      present(usingPads ? module._d64_render_pads()
-        : module._d64_render(mouse.x, mouse.y, mouse.inside ? 1 : 0));
+      const cursor = cursorPresentation(module._d64_native_cursor(), !usingPad && mouse.type === "mouse");
+      canvas.style.cursor = cursor.css;
+      present(module._d64_render(mouse.x, mouse.y, mouse.inside && cursor.software ? 1 : 0));
       if (module.UTF8ToString(module._d64_error())) return stop(1);
     }
     if (now - windowStart >= 1000) {
@@ -643,7 +695,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
         `${(steps / seconds).toFixed(0)} ticks/s · ${(renders / seconds).toFixed(0)} redraws/s · ` +
         `images ${(module._d64_image_bytes() / 1048576).toFixed(0)} MB · ` +
         `dropped ${(dropped / 1e6).toFixed(1)} s · alerts ${module._d64_script_errors()}` +
-        (usingPads ? ` · pad ${module._d64_pointer_player() + 1}/${state.connected}` : "");
+        (usingPad ? " · controller" : "");
       steps = renders = 0;
       windowStart = now;
     }
@@ -663,6 +715,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     return null;
   }
   if (backup) await saves.discardBackup(); // the imported save loaded
+  if (stored && stored.length !== saveBytes) saves.commit(flash().slice());
   console.info(`save status ${status}, generation ${module._d64_save_generation()}`);
   hideOverlay();
   // The Play button keeps focus otherwise, and its Space and Enter with it.
@@ -674,6 +727,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   last = performance.now();
   phase = 0;
   present(module._d64_render(mouse.x, mouse.y, 0));
+  userFiles.poll();
   if (!controlled) requestAnimationFrame(tick);
   if (audioLocked) toast(t("audio.locked"), {ms: 6000});
   window.director64 = {...window.director64, module, audio, saves,
@@ -681,7 +735,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   if (controlled) {
     const {attachValidation} = await import("./validation.js");
     window.director64.validation = attachValidation({module, audio, videos, present,
-      width: WIDTH, height: HEIGHT, seed});
+      width: WIDTH, height: HEIGHT, seed,serviceRequests:()=>userFiles.poll()});
   }
 
   // What the page's menu works with.
@@ -689,6 +743,7 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     hasSaves: profile.saves,
     durable,
     hold,
+    userFiles,
     exportSave,
     importSave,
     get running() { return running; },

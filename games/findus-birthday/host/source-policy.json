@@ -5,7 +5,18 @@
       "path": "director64-system-fonts/PETTSON.TTF",
       "disc_path": "FONTS/PETTSON.TTF",
       "sha256": "3e18352d1f81aa93c7b7c5002650777e77c900b5f98c1d35ed6174f239e4e459",
-      "aliases": ["Pettson"]
+      "aliases": [
+        "Pettson"
+      ]
+    },
+    {
+      "path": "director64-system-fonts/arial32.exe",
+      "sha256": "85297a4d146e9c87ac6f74822734bdee5f4b2a722d7eaa584b7f2cbf76f478f6",
+      "entry": "Arial.TTF",
+      "font_sha256": "35c0f3559d8db569e36c31095b8a60d441643d95f59139de40e23fada819b833",
+      "aliases": [
+        "Arial"
+      ]
     }
   ],
   "external_cast_aliases": {

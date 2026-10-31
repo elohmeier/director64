@@ -36,6 +36,7 @@ EXPORTS = (
     "free",
     "d64_flash",
     "d64_flash_bytes",
+    "d64_flash_import",
     "d64_boot",
     "d64_boot_rpc",
     "d64_step",
@@ -64,13 +65,15 @@ EXPORTS = (
     "d64_edit_text",
     "d64_key",
     "d64_print_request",
+    "d64_user_request_id", "d64_user_request_kind", "d64_user_title", "d64_user_name",
+    "d64_user_filter", "d64_user_data", "d64_user_size", "d64_user_reply",
+    "d64_user_cancel", "d64_user_complete",
     "d64_pad",
     "d64_pointer_warp",
     "d64_pointer_x",
     "d64_pointer_y",
-    "d64_pointer_player",
-    "d64_step_pads",
-    "d64_render_pads",
+    "d64_native_cursor",
+    "d64_step_pad",
     "d64_load_package",
     "d64_package_error",
     "d64_unpack_asset",
@@ -89,6 +92,7 @@ SITE_FILES = (
     "saves.js",
     "video.js",
     "gamepad.js",
+    "cursor.js",
     "keyboard.js",
     "screen.js",
     "settings.js",
@@ -96,6 +100,9 @@ SITE_FILES = (
     "style.css",
     "print.html",
     "print.css",
+    "user-files.js", "rich-text.js",
+    "print-image.html",
+    "print-image.css",
 )
 # CC0 (datagoblin): the builtin font unstyled text prints with.
 FONT = Path("third_party/fonts/monogram.ttf")
@@ -111,9 +118,14 @@ def player(game: GameSpec) -> dict:
     game.require_port()
     table = game.data.get("player", {})
     known = {"saves", "files", "folders", "long_date", "movie_path", "data_folder",
-             "key_field", "switches", "color_depth", "stream_paths", "save_paths"}
+             "key_field", "switches", "color_depth", "stream_paths", "save_paths",
+             "save_slot_bytes"}
     if set(table) - known:
         raise ValueError(f"{game.slug}: unknown [player] keys {sorted(set(table) - known)}")
+    size = table.get("save_slot_bytes", 65536)
+    if type(size) is not int or not 65536 <= size <= 16 * 1024 * 1024:
+        raise ValueError(
+            f"{game.slug}: player.save_slot_bytes must be an integer from 65536 to 16777216")
     return table
 
 
@@ -147,6 +159,7 @@ def profile_header(game: GameSpec) -> str:
     ]
     if table.get("saves"):
         lines.append("#define GAME_SAVES " + ", ".join(c_string(n) for n in table["saves"]))
+    lines.append(f"#define DIRECTOR64_SAVE_SLOT_BYTES {table.get('save_slot_bytes', 65536)}u")
     if table.get("save_paths"):
         lines.append("#define GAME_SAVE_PATHS 1")
     if table.get("files"):
@@ -232,7 +245,6 @@ def sources(game: GameSpec) -> list[str]:
         "runtime/director/director.c",
         "runtime/director/shape.c",
         "runtime/interaction/input.c",
-        "runtime/interaction/pointer.c",
         "runtime/package/package.c",
         "runtime/storage/saves.c",
         *adapter,
@@ -278,7 +290,8 @@ def compile_command(game: GameSpec, output: Path) -> list[str]:
         "-sEXPORT_NAME=createDirector64",
         "-sENVIRONMENT=web,node",
         "-sALLOW_MEMORY_GROWTH=1",
-        "-sINITIAL_MEMORY=64MB",
+        f"-sINITIAL_MEMORY={64 + (3 * (player(game).get('save_slot_bytes', 65536) - 65536)
+                                  + 1048575) // 1048576}MB",
         "-sSTACK_SIZE=8MB",
         "-sEXPORTED_FUNCTIONS=" + ",".join("_" + name for name in EXPORTS),
         "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,HEAPU8,HEAPU32,HEAP32",
@@ -474,6 +487,15 @@ def game_defines(game: GameSpec) -> list[str]:
     printing code in games/<slug>/runtime), and its probe step and state
     (games/<slug>/probe) when it has them."""
     defines = [f"-DDIRECTOR64_{name}=1" for name in player(game).get("switches", [])]
+    if player(game).get("save_slot_bytes", 65536) != 65536:
+        defines.append(f"-DDIRECTOR64_SAVE_SLOT_BYTES={player(game)['save_slot_bytes']}u")
+    if cursors := web_policy(game).get("executable_cursors"):
+        ids = [entry["id"] for entry in cursors["entries"]]
+        if any(type(value) is not int or not 0 <= value < 32 for value in ids):
+            raise ValueError("executable cursor runtime IDs must be integers from 0 to 31")
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate executable cursor runtime ID")
+        defines.append(f"-DDIRECTOR64_SOURCE_CURSOR_MASK={sum(1 << value for value in ids)}u")
     if (game.directory / "probe").is_dir():
         defines.append("-DDIRECTOR64_GAME_PROBE=1")
     return defines
@@ -600,6 +622,7 @@ def build_site(game: GameSpec, runtime: Path, converted: Path, command: list[str
             "source": game.source["id"],
             "port": {"director_version": port["director_version"]},
             "saves": bool(player(game).get("saves")),
+            "save_bytes": 2 * player(game).get("save_slot_bytes", 65536),
         },
         "runtime": {
             "toolchain": EMSDK_IMAGE,

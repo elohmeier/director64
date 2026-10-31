@@ -731,6 +731,17 @@ fn palette_search<'c>(
     Ok(found.map(|(cast, bytes)| (cast, bytes, candidates)))
 }
 
+/// The six-byte transition descriptor in a Director5+ CASt record.
+pub fn transition_cast_model(bytes: &[u8]) -> R<Value> {
+    let start = 12usize.checked_add(be32(bytes, 4)? as usize).ok_or("transition offset overflow")?;
+    let data = bytes.get(start..).ok_or("transition cast requires its six-byte source record")?;
+    if be32(bytes, 8)? != 6 || data.len() < 6 {
+        return Err("transition cast requires its six-byte source record".into());
+    }
+    Ok(json!({"time_raw": data[0], "chunk_size": data[1], "type": data[2],
+              "flags_raw": data[3], "duration_ms": be16(data, 4)?}))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn convert_member<'c>(
     fs: &mut dyn Files,
@@ -1544,6 +1555,9 @@ fn convert_member<'c>(
                 "vectorShape" => {
                     let xmed = xmed.ok_or("vectorShape has no static SWF media")?;
                     let shape = vector_shape_pixels(xmed)?;
+                    if let Some(vector) = super::vector::vector_shape_model(payload)? {
+                        set(entry, "vectorShape", vector);
+                    }
                     set(entry, "width", json!(shape.width));
                     set(entry, "height", json!(shape.height));
                     set(entry, "regX", json!(shape.reg_x));
@@ -1834,6 +1848,7 @@ fn convert_member<'c>(
                 other => return Err(format!("Xtra {other} requires native conversion")),
             }
         }
+        14 => { set(entry, "transition", transition_cast_model(bytes)?); }
         4 => {
             let data = child(Some(id), "CLUT", true)?.ok_or("palette member without CLUT")?;
             let colors = decode_palette(data)?;
@@ -1849,6 +1864,15 @@ fn convert_member<'c>(
             );
         }
         3 | 7 => {
+            if int(&m.info["type"])==7 {
+                let start=12+be32(bytes,4)? as usize;
+                let length=be32(bytes,8)? as usize;
+                let data=bytes.get(start..start.checked_add(length).ok_or("native button extent overflow")?)
+                    .ok_or("native button metadata exceeds chunk")?;
+                set(entry,"buttonType",json!(super::text_box::button(data)?));
+                // Checked state is a runtime property, not a serialized CASt bit.
+                set(entry,"hilite",json!(false));
+            }
             let text = child(Some(id), "STXT", false)?;
             let extended = policy["extended_d6"].as_bool().unwrap_or(false);
             if let Some(text) = text.filter(|_| version == 500 || extended) {
@@ -1862,7 +1886,7 @@ fn convert_member<'c>(
                 }
                 set(entry, "text", json!(js::latin1(&text[12..12 + length])));
             }
-            if extended {
+            if extended || version>=700 {
                 let start = 12 + be32(bytes, 4)? as usize;
                 let end = (start + be32(bytes, 8)? as usize).min(bytes.len());
                 let b = &bytes[start.min(end)..end];
@@ -1875,6 +1899,7 @@ fn convert_member<'c>(
                 set(entry, "regY", json!(0));
                 set(entry, "editable", json!(b[25] & 1 != 0));
                 set(entry, "textAlign", json!(bei16(b, 4)?));
+                set(entry, "textBox", super::text_box::classic(b)?);
             }
         }
         _ => {}

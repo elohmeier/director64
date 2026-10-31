@@ -25,7 +25,18 @@ public class KeyTest {
     check(!Keys.forward(new KeyEvent(1,11,0,0)));
     Keys.forward(new KeyEvent(0,11,0,0));check(Native.down==downs+3);
     Keys.releaseAll();
-    check(!Keys.forward(new KeyEvent(0,11,1,0)));
+    check(Keys.forward(new KeyEvent(0,11,1,0)));Keys.releaseAll();
+    check(Native.events.stream().allMatch(e -> e.equals("0:97:true") || e.equals("0:97:false")));
+    // Physical modifier states and the shifted printable key are all delivered.
+    Native.events.clear();
+    check(Keys.forward(new KeyEvent(0,11,2,0,KeyEvent.KEYCODE_CTRL_LEFT)));
+    check(Keys.forward(new KeyEvent(0,11,10,0,KeyEvent.KEYCODE_SHIFT_LEFT)));
+    check(Keys.forward(new KeyEvent(0,11,10,0)));
+    check(Keys.forward(new KeyEvent(1,11,0,0)));
+    check(Native.events.contains("59:0:true") && Native.events.contains("56:0:true"));
+    check(Native.events.contains("0:65:true") && Native.events.contains("0:65:false"));
+    Keys.releaseAll();
+    check(Native.events.contains("59:0:false") && Native.events.contains("56:0:false"));
     System.out.println("Android keys: modifiers, repeat, shared ownership, pause and disconnect pass");
   }
 }

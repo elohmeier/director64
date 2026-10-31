@@ -15,7 +15,8 @@ scores as `pfScore.dat`. `[convert]` maps each scene's `SOUNDS` folder into
 one `sounds` stream namespace and empties three `puppetAllSprites` sweeps
 over film loops the converter flattens.
 
-Known gaps:
-
-- One Baumhöhle wrapper loop shows a mouth mask at the lower left.
-- `(the stage).image.crop()` answers a blank image (hen-house floor shot).
+`visual-cave.json` follows ordinary input into the cave and animates its board
+wrapper to check nested mouth masks. `visual-hens.json` starts the hen-house
+game and checks the textured floor snapshot produced by
+`(the stage).image.crop()`. These browser component checks do not establish
+original-projector pixel parity or hardware display qualification.

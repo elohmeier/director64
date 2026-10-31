@@ -1,0 +1,31 @@
+-- Synthetic legacy field box properties in original Director8.5.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\text-field-chrome.txt")
+out.openFile("C:\text-field-chrome.txt",2)
+w=window("director64-probe")
+w.fileName=the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+tell w
+ t=member(7,1)
+ t.text="AB CD EF GH"
+ t.font="Arial"
+ t.fontSize=12
+ t.rect=rect(0,0,40,40)
+ t.boxType=#adjust
+ out.writeString(string([#defaults,t.margin,t.border,t.boxDropShadow,t.wordWrap,t.lineHeight,t.rect,t.pageHeight]) & RETURN)
+ repeat with m in [0,2]
+  repeat with b in [0,1]
+   repeat with s in [0,2]
+    t.margin=m
+    t.border=b
+    t.boxDropShadow=s
+    t.wordWrap=1
+    out.writeString(string([#wrapped,m,b,s,t.rect,t.pageHeight]) & RETURN)
+    t.wordWrap=0
+    out.writeString(string([#nowrap,m,b,s,t.rect,t.pageHeight]) & RETURN)
+   end repeat
+  end repeat
+ end repeat
+end tell
+out.closeFile()

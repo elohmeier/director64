@@ -12,6 +12,11 @@ static const dg_cast_t casts[] = {{.name="Internal",.file=1,.cast=1}};
 static const dg_frame_t frames[] = {{0, 0}};
 static uint32_t palette[256];
 static unsigned image_reads;
+static const double alpha_vertices[] = {-2,-1, 4,-1, -2,5};
+static const dg_vector_shape_t alpha_shape = {.vertex_count=3,.vertices=alpha_vertices,
+    .stroke_width=2,.stroke=0,.fill=0,.filled=true,.closed=true};
+static const dg_vector_shape_t outline_shape = {.vertex_count=3,.vertices=alpha_vertices,
+    .stroke_width=2,.stroke=0,.fill=0xffffff,.filled=false,.closed=true};
 static const dg_member_t members[] = {
     {.id = DG_ID(1, 1, 1), .number = 1, .cast = 1, .type = 1,
      .width = 4, .height = 2, .name = "source"},
@@ -21,10 +26,14 @@ static const dg_member_t members[] = {
      .width = 4, .height = 2, .name = "text", .text = "X"},
     {.id = DG_ID(1,1,4), .number = 4, .cast = 1, .type = 7,
      .width = 4, .height = 2, .name = "button", .text = "X"},
+    {.id = DG_ID(1,1,5), .number = 5, .cast = 1, .type = 1,
+     .source_xtra=2,.vector_shape=&alpha_shape,.width=8,.height=8,.name="solid polygon"},
+    {.id = DG_ID(1,1,6), .number = 6, .cast = 1, .type = 1,
+     .source_xtra=2,.vector_shape=&outline_shape,.width=8,.height=8,.name="outline polygon"},
 };
 static const dg_movie_t movie = {
     .code = &code, .id = 1, .tempo = 30, .cast_count = 1,
-    .member_count = 4, .frame_count = 1, .casts = casts,
+    .member_count = 6, .frame_count = 1, .casts = casts,
     .members = members, .frames = frames, .palette = palette};
 static bool read_image(void *ctx, uint32_t member, dg_pixel_image_t *out) {
   (void)ctx; (void)member;
@@ -57,6 +66,50 @@ static void fill(lv_t image, lv_t box, unsigned rgb) {
 }
 static lv_t option(const char *key, lv_t value) {
   return lv_list(&values, 2, (lv_t[]){lv_symbol(&values, key), value}, true);
+}
+static lv_t vertex(int x, int y) {
+  return option("vertex", lv_point(&values,x,y));
+}
+static void vector_patches(void) {
+  lv_t alpha_member=lv_make(LV_MEMBER,DG_ID(1,1,5));
+  lv_t outline_member=lv_make(LV_MEMBER,DG_ID(1,1,6));
+  lv_t old=lv_get(&values,NULL,"vertexlist",alpha_member);
+  assert(lv_count(&values,old)==3);
+  lv_t first=lv_get(&values,NULL,"vertex",lv_at(&values,old,1));
+  assert(lv_integer(&values,lv_at(&values,first,1))==-2);
+  lv_t corners=lv_list(&values,3,(lv_t[]){vertex(-3,-2),vertex(5,-2),vertex(-3,6)},false);
+  lv_set(&values,NULL,"vertexlist",alpha_member,corners);
+  lv_set(&values,NULL,"vertexlist",outline_member,corners);
+  assert(!values.failed);
+  const dg_pixel_image_t *solid=dg_member_image(&director,DG_ID(1,1,5));
+  const dg_pixel_image_t *outline=dg_member_image(&director,DG_ID(1,1,6));
+  assert(solid&&outline&&solid->width==12&&solid->height==12);
+  assert(solid->reg_x==6&&solid->reg_y==6&&solid->use_alpha);
+  assert(solid->pixels[3*12+3]>>24==255&&!(solid->pixels[11*12+11]>>24));
+  assert(!(outline->pixels[3*12+3]>>24));
+  // Generated source geometry survives input-list mutation and getter copies.
+  lv_set_at(&values,corners,1,vertex(100,100));
+  lv_t got=lv_get(&values,NULL,"vertexlist",alpha_member);
+  first=lv_get(&values,NULL,"vertex",lv_at(&values,got,1));
+  assert(lv_integer(&values,lv_at(&values,first,1))==-3);
+  // Reproduce the puzzle's source-free shape/image/extractAlpha/copyPixels/
+  // setAlpha chain. The texture retains its color, the patch corners vanish,
+  // and a later polygon edit does not retroactively repaint this patch.
+  lv_t texture=make(14,14,32);fill(texture,rect(0,0,14,14),0x20a040);
+  lv_t mask=make(14,14,8);
+  lv_t drawn=lv_get(&values,NULL,"image",outline_member);
+  lv_t shape=lv_get(&values,NULL,"image",alpha_member);
+  lv_t coverage=call("extractalpha",1,&shape);
+  call("copypixels",4,(lv_t[]){texture,drawn,rect(1,1,13,13),rect(0,0,12,12)});
+  call("copypixels",4,(lv_t[]){mask,coverage,rect(1,1,13,13),rect(0,0,12,12)});
+  call("setalpha",2,(lv_t[]){texture,mask});
+  lv_set(&values,NULL,"usealpha",texture,lv_num(1));
+  lv_t saved_alpha=call("extractalpha",1,&texture);
+  assert(pixel(saved_alpha,4,4)==0&&pixel(saved_alpha,12,12)==0xffffff);
+  assert(pixel(texture,4,4)==0x20a040);
+  lv_set(&values,NULL,"vertexlist",alpha_member,lv_list(&values,3,
+      (lv_t[]){vertex(0,0),vertex(1,0),vertex(0,1)},false));
+  assert(pixel(saved_alpha,4,4)==0);
 }
 int main(void) {
   dg_init(&director, &values, (dg_platform_t){.read_image = read_image}, NULL, NULL, 0, 1);
@@ -179,6 +232,7 @@ int main(void) {
   stage = lv_at(&values, values.roots[0], 1);
   assert(pixel(stage, 1, 0) == 0x010000);
   assert(pixel(lv_get(&values, NULL, "image", target), 0, 0) == 0xabcdef);
+  vector_patches();
   dg_images_dispose(&director);
   puts("imaging: independent surfaces, mutations, alpha, copies, bounds and lifetime passed");
   return 0;

@@ -1,0 +1,21 @@
+-- Getter types distinguish classic fields from modern Text members.
+global out
+out=new(xtra("fileio"))
+out.createFile("C:\text-field-types.txt")
+out.openFile("C:\text-field-types.txt",2)
+w=window("director64-probe")
+w.fileName=the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+tell w
+ t=member(7,1)
+ t.text="ABCD"
+ t.fontStyle="plain"
+ t.alignment="left"
+ out.writeString(string([#field,t.type,ilk(t.fontStyle),t.fontStyle,ilk(t.alignment),t.alignment]) & RETURN)
+ t=new(#text)
+ t.text="ABCD"
+ t.fontStyle=[#plain]
+ t.alignment=#left
+ out.writeString(string([#text,t.type,ilk(t.fontStyle),t.fontStyle,ilk(t.alignment),t.alignment]) & RETURN)
+end tell
+out.closeFile()

@@ -27,6 +27,40 @@ SCHEMA = 1
 IDENTIFIER = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,95}\Z")
 INTERRUPT_ERRORS = (subprocess.TimeoutExpired, KeyboardInterrupt)
 MAX_DISC_PATH_VARIANTS = 256
+FULL_SCRIPT_MARKER = "-- director64: full-script"
+XOBJECT_FILEIO_MARKER = "-- director64: fileio-xobject"
+FUNCTION_FILEIO_MARKER = "-- director64: fileio-functions"
+
+
+def experiment_output(body: str) -> tuple[str, str]:
+    """Bound the two explicitly declared original FileIO probe interfaces."""
+    legacy = XOBJECT_FILEIO_MARKER in body.splitlines()[:2]
+    pattern = (r'out\s*=\s*FileIO\(mNew,\s*"write",\s*"C:\\([a-z-]+\.txt)"\)'
+               if legacy else r'out\.createFile\("C:\\([a-z-]+\.txt)"\)')
+    functional = FUNCTION_FILEIO_MARKER in body.splitlines()[:2]
+    if functional:
+        pattern = r'createFile\(out,\s*"C:\\([a-z-]+\.txt)"\)'
+    close = "out(mDispose)" if legacy else "closeFile(out)" if functional else "out.closeFile()"
+    match = re.search(pattern, body)
+    if not match or close not in body:
+        raise ValueError("experiment must write and close a named synthetic C:\\ result")
+    return match[1], "xobject" if legacy else "xtra-functions" if functional else "xtra"
+
+
+def experiment_lingo(body: str) -> str:
+    """Keep ordinary probes in startup; allow explicit authored event probes."""
+    legacy = XOBJECT_FILEIO_MARKER in body.splitlines()[:2]
+    functional = FUNCTION_FILEIO_MARKER in body.splitlines()[:2]
+    close = body.rfind("out(mDispose)" if legacy else
+                       "closeFile(out)" if functional else "out.closeFile()")
+    if close < 0:
+        raise ValueError("synthetic experiment must close its output")
+    marker = ('out(mWriteString, "DIRECTOR64_PROBE_COMPLETE" & RETURN)\n'
+              if legacy else 'writeString(out, "DIRECTOR64_PROBE_COMPLETE" & RETURN)\n'
+              if functional else 'out.writeString("DIRECTOR64_PROBE_COMPLETE" & RETURN)\n')
+    body = body[:close] + marker + body[close:]
+    return (body if body.startswith(FULL_SCRIPT_MARKER + "\n")
+            else "on startup\n" + body + "\nend\n")
 
 
 def digest(path: Path) -> str:
@@ -250,11 +284,11 @@ def capture(args: argparse.Namespace) -> int:
             raise ValueError("experiment must name a tools/reference synthetic Lingo probe")
         probe = game_spec.root / "tools/reference" / (args.experiment + ".lingo")
         experiment_source = probe.read_text(encoding="ascii")
-        match = re.search(r'out\.createFile\("C:\\([a-z-]+\.txt)"\)', experiment_source)
-        if not match or "out.closeFile()" not in experiment_source:
-            raise ValueError("experiment must write and close a named synthetic C:\\ result")
-        layout["experiment"] = {"name": args.experiment, "result": match[1],
-                                "source_sha256": digest(probe)}
+        result_name, io_mode = experiment_output(experiment_source)
+        layout["experiment"] = {"name": args.experiment, "result": result_name, "io_mode": io_mode,
+                                "source_sha256": digest(probe),
+                                "script_mode": ("full-script" if experiment_source.startswith(
+                                    FULL_SCRIPT_MARKER + "\n") else "startup")}
     if inventory:
         layout["aliases"] = inventory.get("aliases", {})
     replay_path = (args.replay or game_spec.directory / "tests/reference/boot.json").resolve()
@@ -279,6 +313,14 @@ def capture(args: argparse.Namespace) -> int:
         )
     output.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(replay_path, output / "replay.json")
+    if layout.get("memory_report_mib") is not None:
+        report = output / "legacy-meminfo"
+        report.write_text(legacy_meminfo(layout["memory_report_mib"]), encoding="ascii")
+        layout["memory_environment"] = {"kind": "private-wine-proc-meminfo",
+            "reported_ram_mib": layout["memory_report_mib"],
+            "reported_swap_mib": layout["memory_report_mib"],
+            "report_sha256": digest(report), "game_files_modified": False,
+            "actual_container_memory_limit": "host-default", "process_affinity": "host-default"}
     write_json(output / "layout.json", layout)
     if layout.get("optical_drive"):
         prepare_optical_source(source, output / "disc", layout)
@@ -324,6 +366,11 @@ def capture(args: argparse.Namespace) -> int:
             "No scene tolerance or fidelity claim is derived from successful media capture.",
         ],
     }
+    if layout.get("memory_environment"):
+        metadata["runner"]["memory_environment"] = layout["memory_environment"]
+        metadata["limitations"].append(
+            "Wine reads an explicitly declared private legacy memory report; actual "
+            "container memory limits and affinity remain at host defaults.")
     if layout.get("compatibility"):
         metadata["limitations"].append(
             "The private installation uses a declared protection compatibility patch; "
@@ -346,7 +393,7 @@ def capture(args: argparse.Namespace) -> int:
         "--security-opt",
         "no-new-privileges",
         "--pids-limit",
-        "128",
+        "512",
         "--env",
         "WINEPREFIX=/session/wine",
         "--env",
@@ -372,6 +419,8 @@ def capture(args: argparse.Namespace) -> int:
         "--volume",
         f"{output}:/session",
     ]
+    if layout.get("memory_report_mib") is not None:
+        argv += ["--volume", f"{output / 'legacy-meminfo'}:/proc/meminfo:ro"]
     if layout.get("optical_drive"):
         argv += ["--volume", f"{output / 'disc'}:/media/disc:ro"]
         if layout["optical_drive"]["raw_image"]:
@@ -431,6 +480,14 @@ def visible_windows() -> list[dict]:
     return windows
 
 
+def playback_process(maps: str) -> bool:
+    """Early projectors embed the engine in the mapped retail executable."""
+    names = maps.lower()
+    return (any(name in names for name in ("dirapi.dll", "iml32.dll"))
+            or any("/drive_c/original/" in row and row.endswith(".exe")
+                   for row in names.splitlines()))
+
+
 def loaded_modules() -> dict:
     """Hash mapped playback engines as well as their thin launcher."""
     modules = {}
@@ -439,7 +496,7 @@ def loaded_modules() -> dict:
             maps = (process / "maps").read_text()
         except (OSError, UnicodeError):
             continue
-        if not any(name in maps.lower() for name in ("dirapi.dll", "iml32.dll")):
+        if not playback_process(maps):
             continue
         for row in maps.splitlines():
             fields = row.split(None, 5)
@@ -514,6 +571,16 @@ def install_aliases(root: Path, aliases: dict) -> None:
                         raise ValueError(f"conflicting disc alias target: {target} -> {source}")
             if not matches:
                 (parent / candidate[-1]).symlink_to(os.path.relpath(source, parent))
+
+
+def legacy_meminfo(mebibytes: int) -> str:
+    """A declared Wine API report, independent of actual resource limits."""
+    if type(mebibytes) is not int or not 16 <= mebibytes <= 1024:
+        raise ValueError("legacy memory report must be16..1024MiB")
+    total = mebibytes * 1024
+    return (f"MemTotal: {total} kB\nMemFree: {total // 2} kB\n"
+            f"SwapTotal: {total} kB\nSwapFree: {total // 2} kB\n"
+            "Buffers: 0 kB\nCached: 0 kB\nSReclaimable: 0 kB\n")
 
 
 def prepare_optical_source(source: Path, output: Path, layout: dict) -> None:
@@ -641,11 +708,8 @@ def container_capture(args: argparse.Namespace) -> int:
             target.write_text(content, encoding="cp1252")
         if layout.get("experiment"):
             body = (session / "experiment.lingo").read_text(encoding="ascii")
-            close = body.rfind("out.closeFile()")
-            body = (body[:close] + 'out.writeString("DIRECTOR64_PROBE_COMPLETE" & RETURN)\n'
-                    + body[close:])
             installed_file(game, "LINGO.INI").write_bytes(
-                ("on startup\n" + body + "\nend\n").replace("\n", "\r").encode("ascii"))
+                experiment_lingo(body).replace("\n", "\r").encode("ascii"))
         fonts = session / "wine" / "drive_c" / "windows" / "Fonts"
         for path in installed.rglob("*"):
             if path.is_file() and path.suffix.lower() in {".ttf", ".otf"}:

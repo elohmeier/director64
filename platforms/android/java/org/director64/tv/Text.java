@@ -101,6 +101,12 @@ final class Text {
           line.setLength(0);
         }
         line.append(word);
+        while (line.length() > 1 && paint.measureText(stripEnd(line.toString())) > Math.max(1, width)) {
+          int prefix = wrapPrefix(line.toString(), width);
+          if (prefix == line.length()) break;
+          out.add(line.substring(0, prefix));
+          line.delete(0, prefix);
+        }
       }
       out.add(line.toString());
     }
@@ -112,14 +118,18 @@ final class Text {
    * layout).
    */
   synchronized short[] layout(
-      byte[] utf8, int width, int height, int font, int size, int align, int ascent, int lineHeight) {
+      byte[] utf8, int width, int height, int font, int size, int align, int ascent, int lineHeight, int face) {
     String text = new String(utf8, StandardCharsets.UTF_8);
     short[] boxes = new short[text.length() * 4];
-    Typeface face = typeface(font, size);
+    Typeface type = typeface(font, size);
+    paint.setFakeBoldText((face & 1) != 0);
+    paint.setTextSkewX((face & 2) != 0 ? -0.25f : 0);
+    paint.setUnderlineText((face & 4) != 0);
+    paint.setStrikeThruText((face & 8) != 0);
     List<int[]> starts = new ArrayList<>();
     List<String> rows = new ArrayList<>();
     int step;
-    if (face == null) {
+    if (type == null) {
       paint.setTypeface(monogram);
       paint.setTextSize(monogramSize);
       step = 13;
@@ -131,7 +141,7 @@ final class Text {
         if (at < text.length()) at += text.startsWith("\r\n", at) ? 2 : 1;
       }
     } else {
-      paint.setTypeface(face);
+      paint.setTypeface(type);
       paint.setTextSize(size);
       step = lineHeight > 0 ? lineHeight : Math.round(size * 1.2f);
       int start = 0;
@@ -148,6 +158,14 @@ final class Text {
             lineStart = at;
           }
           line.append(word);
+          while (line.length() > 1 && paint.measureText(stripEnd(line.toString())) > Math.max(1, width)) {
+            int prefix = wrapPrefix(line.toString(), width);
+            if (prefix == line.length()) break;
+            rows.add(line.substring(0, prefix));
+            starts.add(new int[] {lineStart});
+            line.delete(0, prefix);
+            lineStart += prefix;
+          }
           at += word.length();
         }
         rows.add(line.toString());
@@ -159,7 +177,7 @@ final class Text {
     for (int row = 0; row < rows.size(); row++) {
       String line = rows.get(row);
       float shown = paint.measureText(stripEnd(line));
-      float offset = face == null ? 0 : align == 1 ? (width - shown) / 2 : align == 2 ? width - shown : 0;
+      float offset = type == null ? 0 : align == 1 ? (width - shown) / 2 : align == 2 ? width - shown : 0;
       int start = starts.get(row)[0];
       for (int k = 0; k < line.length() && start + k < text.length(); k++) {
         float left = offset + paint.measureText(line, 0, k);
@@ -174,6 +192,17 @@ final class Text {
     return boxes;
   }
 
+  // Keep surrogate pairs together when a single long word wraps.
+  private int wrapPrefix(String text, int width) {
+    int end = 0;
+    while (end < text.length()) {
+      int next = end + Character.charCount(text.codePointAt(end));
+      if (end > 0 && paint.measureText(text, 0, next) > Math.max(1, width)) break;
+      end = next;
+    }
+    return end;
+  }
+
   private static String stripEnd(String s) {
     int end = s.length();
     while (end > 0 && Character.isWhitespace(s.charAt(end - 1))) end--;
@@ -181,14 +210,18 @@ final class Text {
   }
 
   synchronized byte[] rasterize(
-      byte[] utf8, int width, int height, int font, int size, int align, int ascent, int lineHeight) {
+      byte[] utf8, int width, int height, int font, int size, int align, int ascent, int lineHeight, int face) {
     String text = new String(utf8, StandardCharsets.UTF_8);
-    Typeface face = typeface(font, size);
+    Typeface type = typeface(font, size);
+    paint.setFakeBoldText((face & 1) != 0);
+    paint.setTextSkewX((face & 2) != 0 ? -0.25f : 0);
+    paint.setUnderlineText((face & 4) != 0);
+    paint.setStrikeThruText((face & 8) != 0);
     Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8);
     Canvas canvas = new Canvas(bitmap);
     canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
     paint.setColor(Color.WHITE);
-    boolean builtin = face == null;
+    boolean builtin = type == null;
     if (builtin) {
       paint.setTypeface(monogram);
       paint.setTextSize(monogramSize);
@@ -196,7 +229,7 @@ final class Text {
       String[] rows = text.split("\r\n|\r|\n", -1);
       for (int i = 0; i < rows.length; i++) canvas.drawText(rows[i], 0, 12 + i * 13, paint);
     } else {
-      paint.setTypeface(face);
+      paint.setTypeface(type);
       paint.setTextSize(size);
       int baseline = ascent > 0 ? ascent : Math.round(size * 0.8f);
       int step = lineHeight > 0 ? lineHeight : Math.round(size * 1.2f);
@@ -221,6 +254,52 @@ final class Text {
       }
     }
     return coverage;
+  }
+
+  private void richPaint(RichText.Style style) {
+    int size=style.size==0?12:style.size;
+    paint.setTypeface(typeface(style.font,size));paint.setTextSize(size);
+    paint.setFakeBoldText((style.face&1)!=0);paint.setTextSkewX((style.face&2)!=0?-.25f:0);
+    paint.setUnderlineText((style.face&4)!=0);paint.setStrikeThruText((style.face&8)!=0);
+    paint.setTextAlign(Paint.Align.LEFT);paint.setColor(0xff000000|style.color);
+  }
+  private RichText.Plan formatted(byte[] utf8,int width,int[] styles) {
+    int[] normalized=styles.clone();
+    for(int at=0;at<normalized.length;at+=10)if(normalized[at+5]<=0||normalized[at+6]<=0) {
+      richPaint(new RichText.Style(normalized,at));Paint.FontMetrics metrics=paint.getFontMetrics();
+      int ascent=Math.round(-metrics.ascent),descent=Math.round(metrics.descent),leading=Math.round(metrics.leading);
+      if(normalized[at+5]<=0)normalized[at+5]=ascent;
+      if(normalized[at+6]<=0)normalized[at+6]=Math.max(1,ascent+descent+leading);
+    }
+    return RichText.layout(new String(utf8,StandardCharsets.UTF_8),width,normalized,(value,style)->{
+      richPaint(style);return paint.measureText(value);
+    });
+  }
+  synchronized short[] layoutRich(byte[] utf8,int width,int height,int[] styles) {
+    return formatted(utf8,width,styles).boxes;
+  }
+  synchronized byte[] rasterizeRich(byte[] utf8,int width,int height,int[] styles) {
+    RichText.Plan plan=formatted(utf8,width,styles);
+    Bitmap bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);
+    Canvas canvas=new Canvas(bitmap);canvas.drawColor(Color.TRANSPARENT,PorterDuff.Mode.CLEAR);
+    for(RichText.Part part:plan.parts)if(part.y<height) {
+      richPaint(part.style);
+      if(part.style.charSpacing!=0) {
+        int ordinal=0;
+        for(int at=0;at<part.text.length();) {
+          int count=Character.charCount(part.text.codePointAt(at));
+          float x=part.x+paint.measureText(part.text,0,at)+ordinal*part.style.charSpacing;
+          canvas.drawText(part.text,at,at+count,x,part.baseline,paint);at+=count;ordinal++;
+        }
+      } else canvas.drawText(part.text,part.x,part.baseline,paint);
+    }
+    int[] pixels=new int[width*height];bitmap.getPixels(pixels,0,width,0,0,width,height);bitmap.recycle();
+    byte[] rgba=new byte[pixels.length*4];
+    for(int i=0;i<pixels.length;i++) {
+      int color=pixels[i];rgba[i*4]=(byte)(color>>16);rgba[i*4+1]=(byte)(color>>8);
+      rgba[i*4+2]=(byte)color;rgba[i*4+3]=(byte)(color>>>24);
+    }
+    return rgba;
   }
 
   static byte[] readAll(InputStream in) throws IOException {

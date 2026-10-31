@@ -45,6 +45,9 @@
 // The D7 engine's features that D5 and extended D6 share: everything but
 // the plain D6 profile, whose score is the whole of its behaviour.
 #define DG_MODERN (!DG_FAMILY_D6)
+// Mutable text page geometry is needed by D10 movie-window controls as well
+// as the D8.5 activities and the extended D6 text engine.
+#define DG_CAP_TEXT_BOX (DG_EXTENDED || DG_D7_UP)
 // The hover cache and member-number arithmetic of D7 and D10, which D8's
 // recovered scripts contradict.
 #define DG_D7_OR_D10 (DG_FAMILY_D7 || DG_FAMILY_D10)

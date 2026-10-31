@@ -253,7 +253,7 @@ pub fn audit(model: &Value, target: Target, selected: Option<Profile>) -> Result
                         let signed = id as i16;
                         if id != 0 && [0x20, 0x40].contains(&b(5)) {
                             palette_fades.push(json!({"movie":name,"frame":number(&frame["number"],index as u64+1),
-                                "behavior":"truecolor-scene-fade-substitute","original_projector_verified":false}));
+                                "behavior":"high-color-palette-transition-omitted","original_projector_verified":false}));
                         }
                         let code = if id == 0 {
                             None
@@ -470,7 +470,7 @@ pub fn audit(model: &Value, target: Target, selected: Option<Profile>) -> Result
         json!({"target":target.name(),"director_versions":versions,"runtime_family":profile.version / 100,
         "movies":movies.len(),"problems":model.get("problems").cloned().unwrap_or(json!([])),
         "findings":findings,"unresolved_member_records":unresolved,"approximation_counts":approximations,
-        "conversion_losses":losses,"ignored_palette_commands":ignored_palettes,"palette_fade_substitutes":palette_fades,"source_pattern_problems":pattern_problems,
+        "conversion_losses":losses,"ignored_palette_commands":ignored_palettes,"palette_transitions":palette_fades,"source_pattern_problems":pattern_problems,
         "scope":"Authored score records and explicit conversion losses; scripts, visibility and reachability are not simulated."}),
     )
 }

@@ -113,9 +113,10 @@ def validate_plan(plan: dict) -> None:
                 raise ValueError("invalid replay command")
             if not (re.fullmatch(r"step \d+ -?\d+ -?\d+ [01]", command)
                     or re.fullmatch(r"text \d+ [\x20-\x7e]{1,20}", command)
-                    or command == "reboot"):
+                    or command in {"reboot", "document cancel"}):
                 raise ValueError(f"Android cannot faithfully replay {command!r}; use stage "
-                                 "pointer actions, text, reboot or explicit android_key actions")
+                                 "pointer actions, text, reboot, document cancel or explicit "
+                                 "android_key actions")
         if "lifecycle" in step and step["lifecycle"] not in {"home", "resume", "reboot", "menu"}:
             raise ValueError("lifecycle must be home, resume, reboot or menu")
         if "android_key" in step:
@@ -323,6 +324,20 @@ class Session:
         if command == "reboot":
             self.launch(reboot=True)
             return self.observe()
+        if command == "document cancel":
+            observation = self.observe()
+            identity = (observation.get("document_id"), observation.get("document_kind"))
+            if not identity[0] or identity[1] not in {1, 2, 4}:
+                raise ValueError("document cancel requires an active Android file or print dialog")
+            for _ in range(4):
+                self.record({"document": "cancel", "id": identity[0], "kind": identity[1],
+                             "transport": "Android KEYCODE_BACK"})
+                self.adb.shell("input", "keyevent", "KEYCODE_BACK")
+                time.sleep(0.25)
+                observation = self.observe()
+                if (observation.get("document_id"), observation.get("document_kind")) != identity:
+                    return self.idle(6)
+            raise ValueError("Android did not close the active document dialog")
         raise ValueError(f"unsupported Android replay command: {command}")
 
     def capture(self, label: str) -> dict:

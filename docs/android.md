@@ -36,6 +36,12 @@ Builds hold a per-edition conversion lock until their asset snapshot is complete
 a concurrent web build or reconversion waits rather than replacing files that
 the APK builder is still reading.
 
+`mise run build-android-all` builds every local port for all three ABIs and
+verifies each native ELF plus its current source receipt. A final pass checks
+all receipts again after the batch. Per-game logs and the static qualification
+summary remain under `build/validation/android-builds/`; this command does not
+install apps or contact a device.
+
 Android staging compacts the shared conversion without re-encoding media.
 Each `<kind>.json` is `{version: 1, blob: "<blob>", entries: {name:
 [offset, length, ...]}}`; offsets address `<blob>.bin`. Names with identical
@@ -90,19 +96,46 @@ saves; uninstalling deletes them. Devices with a 32-bit userland need
 | Right stick | Direction keys some games use |
 | PS, Share, Back, Menu | Menu |
 
-Every device that gives input takes the lowest free of four player slots
-and moves its own cursor (`Pads.java`, the same mapping as the web app's
-`gamepad.js`). A DualShock 4 pairs with Google TV directly; other pads
-should map face buttons, Start and stick the same way. The menu's
-diagnostics show each device's name and last key or axes, which is what a
-new mapping needs. A mouse points and clicks; a keyboard types from
-Director 7 on.
+Controllers, the remote, mouse and touchpad share one game pointer. A new
+controller press or deliberate stick movement takes control; inactive devices'
+releases cannot clear another device's held buttons. There are no player slots.
+
+Physical mice and touchpads use Android's smooth native arrow, text, crosshair
+and wait icons when the game's resolved cursor has that standard role. Authored
+bitmap, masking and inverting cursors retain their software artwork while the
+stage hides Android's cursor with `PointerIcon.TYPE_NULL`. Controller navigation
+also uses one software cursor. The native/software handoff acknowledges hiding
+the Android icon before drawing the software fallback, and removes software
+pixels before enabling a native icon. Menus, text entry, document pickers and
+printing hide the stage cursor while preserving their normal Android pointers.
+Actual PS4 touchpad/projector behavior still requires physical validation.
+
+The bounded Android 14 emulator proof uses an authored source-free fixture and
+standard Android mouse hover events injected through the shell input service.
+It verifies native arrow/text/wait roles, cursor hiding, an authored inverting
+software fallback, controller/mouse handoff and the real document picker. A
+separate check starts with a displayed software cursor, opens the native menu,
+requires the canvas cursor to disappear while the engine clock is held, then
+checks that dismissal restores one cursor. Host regressions also inject failed
+geometry/lock/post operations and surface replacement: a native icon is enabled
+only after a successful current-surface frame post, with cached frames retried
+and stale UI acknowledgements rejected. These checks qualify emulator event
+routing and presentation policy; physical PS4 input and display pacing remain
+unqualified.
+
+```sh
+mise run android-emulator start
+uv run --locked python tools/android/pointer_fixture.py
+uv run --locked python tools/android/pointer_emulator.py \
+  --output build/validation/android-pointer-proof --timeout 180
+mise run android-emulator stop
+```
 
 The menu pauses the game and holds volume, diagnostics, controls and quit.
 An editable field opens a text dialog with the TV keyboard; a game with a
 `key_field` (or Mucklas' name entry) receives typed keys directly instead.
-Saves are written whole to app storage after every commit. The TV has no
-printer: print requests show a notice.
+Saves are written whole to app storage after every commit. Print requests open
+Android's print interface, including Save as PDF when available.
 
 ## Pacing
 
@@ -233,3 +266,33 @@ APK/source/plan identity. Emulator and physical-device baselines remain separate
 Passing an automated route does not establish every activity, controller mapping
 or acoustic output; original-projector comparison and broad hardware
 qualification remain separate claims.
+
+The document bridge uses Android's document picker for FileIO open/save,
+preserves selected URI capabilities privately, and uses PrintManager for
+authored PrintOMatic pages. Löwenzahn 1 prints the recovered chapter text and
+artwork from its packaged print documents. Game time and audio pause during
+these system dialogs. Images retain their original bytes; decoded images are
+limited to 4096 pixels per side and 32 MiB of RGBA, with a 16 MiB input limit.
+Oversized or undecodable choices display an error and permit retry/cancel.
+Selected names and runtime text use UTF-8. CAR input accepts UTF-8 or legacy
+Windows-1252 text; export encodes strictly as Windows-1252 for the original
+desktop format and reports characters that format cannot represent. Raster
+image bytes remain exact even when a selected file has a misleading extension.
+
+A source-free authored fixture exercises the production compiler, interpreter,
+JNI queue, Android document picker and PrintManager without retail media:
+
+```sh
+uv run --locked python tools/android/user_files_fixture.py --jobs 4
+mise run android-emulator start
+uv run --locked python tools/android/user_files_emulator.py \
+  --output build/android-documents-check
+```
+
+The emulator tool requires Poppler's `pdfinfo` and `pdftoppm`. It verifies exact
+CAR bytes, image colors, an actual one-page A4 PDF, modal cancellation and
+process restart. Its dedicated `.validation` app and Download folder keep the
+player's app data separate. Recordings and APK receipts stay under `build/`.
+Bitmap-cast activities in Löwenzahn 6, 7 and Advent have 16 MiB save generations;
+other games retain the 64 KiB default. Valid legacy preference saves migrate
+without changing their file bytes; failed reads never replace the saved image.

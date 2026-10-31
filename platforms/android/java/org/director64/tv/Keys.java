@@ -39,6 +39,14 @@ final class Keys {
     map(KeyEvent.KEYCODE_GRAVE, 50);
     map(KeyEvent.KEYCODE_DEL, 51);
     map(KeyEvent.KEYCODE_ESCAPE, 53);
+    map(KeyEvent.KEYCODE_META_LEFT, 55);
+    map(KeyEvent.KEYCODE_META_RIGHT, 54);
+    map(KeyEvent.KEYCODE_SHIFT_LEFT, 56);
+    map(KeyEvent.KEYCODE_SHIFT_RIGHT, 60);
+    map(KeyEvent.KEYCODE_ALT_LEFT, 58);
+    map(KeyEvent.KEYCODE_ALT_RIGHT, 61);
+    map(KeyEvent.KEYCODE_CTRL_LEFT, 59);
+    map(KeyEvent.KEYCODE_CTRL_RIGHT, 62);
     map(KeyEvent.KEYCODE_NUMPAD_ENTER, 76);
     map(KeyEvent.KEYCODE_MOVE_HOME, 115);
     map(KeyEvent.KEYCODE_PAGE_UP, 116);
@@ -98,12 +106,14 @@ final class Keys {
       if (!ownedElsewhere(device, code)) Native.key(code, character, false);
       return true;
     }
-    if (event.isCtrlPressed() || event.isMetaPressed() || event.isAltPressed()) return false;
     if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
     if (event.getRepeatCount() > 0 || (keys != null && keys.indexOfKey(code) >= 0)) return true;
     int character = SPECIAL.get(key, -1);
     if (character < 0) {
-      int unicode = event.getUnicodeChar();
+      // Director receives the printable character alongside physical modifier
+      // keys. Ctrl must not turn Ctrl+Shift+Q into an ASCII control character.
+      int unicode = event.getUnicodeChar(event.getMetaState()
+          & ~(KeyEvent.META_CTRL_MASK | KeyEvent.META_META_MASK));
       character = unicode > 0 && unicode <= 255 ? unicode : 0;
     }
     if (keys == null) { keys = new SparseIntArray(); HELD.put(device, keys); }

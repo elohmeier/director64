@@ -11,6 +11,7 @@ import {pathToFileURL} from "node:url";
 import {videoProbe} from "./video.mjs";
 import {decodeWav, isOpusSound, readOpusHeader, isOggOpus, oggOpusInfo} from "../site/audio.js";
 import {validateFlashSound} from "../site/flash-audio.js";
+import {formatText} from "../site/rich-text.js";
 import {probeMetrics} from "./metrics.mjs";
 
 const metrics = probeMetrics();
@@ -123,6 +124,21 @@ const module = await createDirector64({
     // No fonts here: text lays out on a nominal fixed advance, wrapped as the
     // page wraps it, so text hit tests (pointToWord, hyperlinks) can be driven.
     layout,
+    richLayout: (text,width,height,formats) => formatText(text,width,formats,
+      (value,style) => value.length*Math.max(1,Math.round((style.size||12)*.55))).boxes,
+    richText: (text,width,height,formats) => {
+      const boxes=formatText(text,width,formats,(value,style)=>value.length*Math.max(1,Math.round((style.size||12)*.55))).boxes;
+      const pixels=new Uint8Array(width*height*4);let run=0;
+      for(let i=0;i<text.length;i++) {
+        while(run+1<formats.length&&formats[run+1].offset<=i)run++;
+        if(/\s/.test(text[i]))continue;
+        const [x,y,w,h]=boxes.subarray(i*4,i*4+4),rgb=formats[run].color;
+        for(let row=Math.max(0,y);row<Math.min(height,y+h-1);row++)for(let col=Math.max(0,x);col<Math.min(width,x+w-1);col++) {
+          const at=(row*width+col)*4;pixels[at]=rgb>>>16;pixels[at+1]=rgb>>>8;pixels[at+2]=rgb;pixels[at+3]=255;
+        }
+      }
+      return pixels;
+    },
     // Nominal glyph coverage exercises live text and compositor paths. This
     // probe is a render-error gate; projector/font pixel comparisons use the
     // browser with its actual fonts and explicit image checkpoints.
@@ -177,6 +193,26 @@ function checkpoint(context) {
   return !error && !alerts;
 }
 function observed(reply) {
+  // Document operations are host I/O, just like sound completion. Expose only
+  // pending-operation metadata; completing one cannot alter arbitrary Lingo.
+  const kind = module._d64_user_request_kind();
+  const userRequest = kind ? {
+    id: module._d64_user_request_id(), kind,
+    name: module.UTF8ToString(module._d64_user_name()),
+    size: module._d64_user_size(),
+  } : null;
+  if (userRequest && (kind === 3 || kind === 4)) {
+    const pointer = module._d64_user_data();
+    const bytes = module.HEAPU8.subarray(pointer, pointer + userRequest.size);
+    userRequest.sha256 = createHash("sha256").update(bytes).digest("hex");
+    if (bytes[0] === 66 && bytes[1] === 77 && bytes.length >= 54) {
+      const dib = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      userRequest.width = dib.getInt32(18, true);
+      userRequest.height = dib.getInt32(22, true);
+    }
+  }
+  reply = reply.split("\n").map(line => line.startsWith("{")
+    ? JSON.stringify({...JSON.parse(line), user_request: userRequest}) : line).join("\n");
   if (!observations) return reply;
   const width = module._d64_stage_width(), height = module._d64_stage_height();
   const pixels = module.HEAPU8.subarray(module._d64_pixels(),
@@ -217,7 +253,15 @@ for await (const line of createInterface({input: process.stdin, crlfDelay: Infin
       throw new Error("runtime lacks per-tick observations; rebuild the web runtime");
     module._d64_probe_trace(1);
   }
-  const reply = module.ccall("d64_rpc", "string", ["string"], [line.trimEnd()]);
+  let rpc = line.trimEnd();
+  if (command === "document cancel" || command === "document complete") {
+    const id = module._d64_user_request_id();
+    const accepted = command === "document cancel"
+      ? module._d64_user_cancel(id) : module._d64_user_complete(id, 1);
+    if (!accepted) throw new Error("no matching player document operation is pending");
+    rpc = "step 1 0 0 0";
+  }
+  const reply = module.ccall("d64_rpc", "string", ["string"], [rpc]);
   const ok = reply !== "" && checkpoint(JSON.stringify(line.trimEnd()));
   metrics.end(started, line.trimEnd(), module);
   if (reply === "") { status = 2; break; }

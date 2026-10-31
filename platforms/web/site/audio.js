@@ -197,7 +197,14 @@ export class AudioEngine {
     this.lookup = lookup;
     this.context = new AudioContext();
     this.master = this.context.createGain();
-    this.master.connect(this.context.destination);
+    // The two-point identity curve is linear throughout [-1,1] and clamps
+    // outside it, as required by WaveShaperNode. Match the native PCM sink
+    // after all voices/gains, without changing authored levels below full scale.
+    this.output = this.context.createWaveShaper();
+    this.output.curve = new Float32Array([-1, 1]);
+    this.output.oversample = "none";
+    this.master.connect(this.output);
+    this.output.connect(this.context.destination);
     this.gains = [];
     this.voices = [];
     for (let i = 0; i < channelCount; i++) {

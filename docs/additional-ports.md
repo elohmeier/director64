@@ -9,7 +9,7 @@ fatal; none has an expected-failure exemption.
 | --- | --- | --- | --- |
 | Findus garden | 6 | Complete | Guardian selection, saves and garden playback pass |
 | Fritz & Fertig | 8.5 | Complete | Player registration, story entry, save/reboot and profile resume pass |
-| Löwenzahn 2, July 1998 | 6 | Complete with substitute fade | Introduction to the wagon passes |
+| Löwenzahn 2, July 1998 | 6 | Complete; high-color palette rule | Introduction to the wagon passes |
 | Löwenzahn 3 | 6 | Complete | Profile selection, preferences and wagon bedroom pass |
 | Löwenzahn 4 | 7 | Complete | Rocket login, profile selection, preferences and wagon exterior |
 | Löwenzahn 5 | 8 | Complete with pinned media workaround | Profile selection, story skip and wagon exterior |
@@ -98,18 +98,36 @@ port definition.
 
 Director field expressions evaluate their text, while assignment/property
 owners remain field references. This fixes serialized player/pet names.
-Text fields honor size and alignment changes; unavailable face changes and
-fixed/adjust text boxes retain the native layout and emit diagnostic traces.
+Text fields retain per-run font, size, face, color, alignment and character
+spacing, including formatting through member chunk edits. Fixed/adjust/scroll
+boxes use host layout for rendering, character positions and hit geometry.
+Source-requested absent Findus fonts retain their names and render through the
+original-player-observed Arial fallback; recovered source resources and policies
+pin that substitute. Runtime font size 0 remains 0 while rendering at 12 points,
+as observed in the selected 8.5 engine. Other unsupported text features remain
+explicit conversion limits.
 Sprite `tell` uses the film's authored `lastChannel`; releasing untouched
 channels does not allocate puppet overrides. Negative ordinary sprite numbers
 cannot become encoded film children. Explicit Flash property calls against
 absent optional source clips return zero and trace the absent target.
 Resetting an unused alert hook to zero is accepted during D8 cleanup.
 
-The Löwenzahn 2 palette fade is a truecolor scene-snapshot substitute through
-black or white, with speed-derived approximate timing. It is recorded under
-`palette_fade_substitutes` and traced as `PALETTE_FADE_TRUECOLOR_SUBSTITUTE`.
-Indexed-color interpolation and original timing have not been verified.
+Transition cast members retain their authored duration, chunk size and area
+flags. Required wipes, center/edge reveals, cover-down, Venetian blinds and
+pattern/pixel/bit dissolves run over time while score/Lingo execution waits;
+audio and the wall clock continue. A skip click completes the reveal and is
+consumed. Original Director7/8.5 window experiments confirm blocking and
+quarter-second timing. Exact dissolve permutation, indexed-color bit planes
+and transparent-padding bounds remain visual qualifications; see
+[validation](validation.md).
+
+High-color playback applies palette selections without inventing full-stage
+black/white fades. The previous scene-snapshot substitute produced flashes that
+Director's documented high-color playback does not show. Source palette flags
+remain in the package and capability report (`palette_transitions`). Indexed
+palette interpolation is explicitly unavailable; none of the selected 8-bit
+port's recovered frames requires it. See the evidence and limits in
+[validation](validation.md).
 Ordinary D6 score tempos of 17/25 FPS now remain distinct from wait opcodes.
 
 Stream packs include the recovered speech/music folders for Löwenzahn 2 and
@@ -127,9 +145,13 @@ bounds, fixing Löwenzahn 8's large dog animation metadata.
 
 Two narrowly pinned source-script patches preserve navigation despite source
 defects: Löwenzahn 7 free play skips indexing an empty task playlist on key
-release; Löwenzahn 6 skips a narration request for `@:snd:s03i01`, absent from
-its recovered disc and casts. The latter stops that channel and emits
-`SOURCE_AUDIO_UNAVAILABLE`; no audio is invented.
+release; Löwenzahn 6 suppresses a stale request for `@:snd:s03i01` at the
+login movie's frame 108. Its shared behavior is identical to Löwenzahn 5's
+tide-game introduction, whose audio belongs to that earlier disc. The pinned
+patch stops its channel and emits `SOURCE_AUDIO_UNAVAILABLE`. Löwenzahn 6's
+actual registration narration, `SOUNDS/INTROCD6.MP3`, is present on its own
+disc and has a separate authored handler at login frame 118; no replacement
+audio is invented or imported from another game.
 
 Löwenzahn 5's damaged `BAUWAGEN/BLEIB.MPG` has SHA-256
 `03fc37a3087c45d803d3e79a60237513487a5c586d5ae136d1d2691b2ff4764e`.
@@ -141,12 +163,19 @@ The converted video is strictly decoded again and must retain dimensions,
 frame rate and all 4,456 frames. This discards damaged data; it is not a
 restoration or a claim of original pixels. Other media still use strict
 conversion. Original retail media is never modified.
+The local-source audit found no clean duplicate in the available images,
+archives or recovered casts. The Mac and Windows video cast entries link to
+the same damaged file. The available Löwenzahn 5 image contains cooked data
+sectors, without the raw-sector correction data; restoring the lost pixels
+requires an authentic clean source.
 
 The additional ScummVM facts consulted at the revision above concern FileXtra
 return codes/listing separators, field value versus reference evaluation,
 score tempos and palette fade flags. Local script/score data and focused
 source-free runtime/converter tests corroborate the implementation choices.
 
-No new original-projector or Android TV validation is claimed. Rendered Wasm
-journeys are implementation regressions, and their timing/memory reports measure
-the host probe. Failed or incomplete journeys cannot be performance baselines.
+Original-projector experiments under Wine qualify the individual behaviors
+identified above; they do not establish complete gameplay parity. Android TV
+validation remains deferred. Rendered Wasm journeys are implementation
+regressions, and their timing/memory reports measure the host probe. Failed or
+incomplete journeys cannot be performance baselines.
