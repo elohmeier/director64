@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#MISE description="Coverage-guided package/image parsing with synthetic seeds and ASan/UBSan"
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+mkdir -p build/validation/native-fuzz/corpus
+cc=${CC:-clang}
+flags=(-std=c17 -O1 -g -fno-omit-frame-pointer -DDIRECTOR64_DIRECTOR_VERSION=6
+       -Iruntime/director -Iruntime/lingo -Iruntime/package -Iplatforms/web)
+python3 - <<'PY'
+from pathlib import Path
+import struct
+root=Path.cwd()
+folder=root/'build/validation/native-fuzz'
+for kind,depth in ((b'FDI1',2),(b'FDI2',4)):
+    data=bytearray(32+4*depth)
+    struct.pack_into('>4sIHH',data,0,kind,len(data),2,2)
+    data[32:]=bytes([255])*4*depth
+    (folder/'corpus'/kind.decode()).write_bytes(b'\0'+data)
+(folder/'seed.c').write_text('#define main contract_main\n#include "'+str(root/'tests/native/test_package.c')+'"\n#undef main\nint main(void){size_t n=build();putchar(1);return fwrite(buffer,1,n,stdout)!=n;}\n')
+PY
+"$cc" "${flags[@]}" build/validation/native-fuzz/seed.c runtime/package/package.c \
+    -o build/validation/native-fuzz/seed
+build/validation/native-fuzz/seed > build/validation/native-fuzz/corpus/package
+"$cc" "${flags[@]}" -fsanitize=fuzzer,address,undefined \
+    tools/validation/fuzz-runtime.c platforms/web/compositor.c runtime/director/director.c \
+    runtime/director/shape.c runtime/lingo/lingo_runtime.c runtime/package/package.c \
+    -lm -o build/validation/native-fuzz/fuzz-runtime
+export ASAN_OPTIONS=halt_on_error=1:detect_leaks=1
+export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+build/validation/native-fuzz/fuzz-runtime build/validation/native-fuzz/corpus \
+    -max_total_time="${FUZZ_SECONDS:-15}" -timeout=5 -rss_limit_mb=1024 \
+    -max_len=65536 -artifact_prefix=build/validation/native-fuzz/ "$@"

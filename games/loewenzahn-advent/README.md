@@ -14,4 +14,8 @@ uv run --locked director64 web --game loewenzahn-advent --serve
 serial. `[player]` saves the `.usr` preferences file. The calendar follows
 the device's date: before December it counts down to the first door.
 
+Verified Joliet stream aliases expose both the authored `SOUNDS/SCHORNSTEIN`
+folder and the disc's primary `SOUNDS/SCHORNST` name, including their original
+filename spellings.
+
 Known gap: the paint box's file dialogs are not ported.

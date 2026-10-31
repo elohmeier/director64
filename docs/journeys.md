@@ -61,6 +61,11 @@ state expectations; startup alone does not establish activity coverage.
 
 ## Correctness and failure evidence
 
+For actual-font images, animated sequences, mixed audio, original-engine
+comparisons, renderer equivalence and Android input replay, use the additional
+layers in [validation.md](validation.md). A passing rendered probe journey alone
+does not establish those results.
+
 Every suite uses the rendered probe: intermediate frames inside a multi-tick
 command render too. Runtime/compositor errors, recovered script alerts,
 unexpected exits, failed checkpoints and timeouts fail the journey. Unlike

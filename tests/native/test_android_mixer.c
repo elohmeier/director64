@@ -134,4 +134,5 @@ int main(void) {
   }
   puts("Android mixer: pending decode excludes global/channel holds, preserves "
        "rates and cancellation");
+  return 0;
 }

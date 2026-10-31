@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "dog-registration-reload-v1",
+  "description": "Opt-in expectations for login-dog-registration's REX save/reload route. Arms only after the named dog was committed on return to the exterior. This route assumes the pet is not renamed before its reload checks; it is not a universal rule for arbitrary profiles.",
+  "rules": [
+    {
+      "id": "saved-dog-name-survives-reboot",
+      "after": {
+        "movie": "VORNE.DXR",
+        "save_generation": {"gte": 8},
+        "/saves/lz8.usr": {"contains": "#name:\"REX\""}
+      },
+      "when": {"movie": "LOGIN.DXR", "frame": 13},
+      "expect": {"/saves/lz8.usr": {"contains": "#name:\"REX\""}}
+    },
+    {
+      "id": "registered-dog-name-restored",
+      "after": {
+        "movie": "VORNE.DXR",
+        "save_generation": {"gte": 8},
+        "/saves/lz8.usr": {"contains": "#name:\"REX\""}
+      },
+      "when": {"movie": "TS2HUNDE.DXR"},
+      "expect": {"globals.gtamagotchi": {"contains": "#name:\"REX\""}}
+    }
+  ]
+}

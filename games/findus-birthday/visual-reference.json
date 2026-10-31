@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "name": "registration-background-reference",
+  "description": "Reach player selection and its name popup through real input; compare static bedroom background regions independently of animation phase.",
+  "steps": [
+    {
+      "idle": 3600,
+      "expect": {
+        "movie": "R0021.DXR",
+        "frame": 470
+      },
+      "label": "player-selection"
+    },
+    {
+      "sprite": 27,
+      "settle": 1800,
+      "expect": {
+        "movie": "R0021.DXR"
+      },
+      "label": "name-popup"
+    }
+  ],
+  "scope_note": "Only the configured background regions are compared; animation phase and full-frame original fidelity are unobserved.",
+  "observations": {
+    "player-selection": {
+      "sequence": {
+        "frames": 1
+      },
+      "regions": [
+        {
+          "name": "bedroom-wall",
+          "rect": [
+            600,
+            0,
+            800,
+            170
+          ],
+          "channel_tolerance": 12,
+          "max_changed_ratio": 0.001
+        }
+      ]
+    },
+    "name-popup": {
+      "sequence": {
+        "frames": 1
+      },
+      "regions": [
+        {
+          "name": "bedroom-wall",
+          "rect": [
+            600,
+            0,
+            800,
+            170
+          ],
+          "channel_tolerance": 12,
+          "max_changed_ratio": 0.001
+        }
+      ]
+    }
+  }
+}

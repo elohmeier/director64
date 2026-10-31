@@ -77,7 +77,10 @@ Every game command takes `--game <slug>` and optionally `--source <id>`.
 | `director64 fuzz` | Randomized input against the web build's probe ([docs/fuzzing.md](docs/fuzzing.md)) |
 | `director64 parity` | Compare two builds state by state |
 | `director64 journey` | Run regression journeys with timing and memory reports (`--game all` for every port) |
-| `director64 reference` | Capture the original projector under Wine (workshop only) |
+| `director64 reference` | Capture original projectors and synthetic experiments under Wine |
+| `director64 visual` | Compare actual browser images, animation and PCM against reviewed local baselines |
+| `director64 metamorphic` | Compare cached/recomposited and batched/split executions, including serviced frames |
+| `director64 android-validate` | Replay input through a separate Android validation APK |
 
 Run them as `uv run --locked director64 ...`. Development checks:
 
@@ -105,6 +108,7 @@ mise run test-journeys         # every port's journeys; needs local web builds a
 - [Android TV player](docs/android.md) and [standalone web app](docs/web.md)
 - [Fuzzing, parity and journeys](docs/fuzzing.md)
 - [Per-game journey coverage and performance gates](docs/journeys.md)
+- [Visual, audio, original-engine and Android regression validation](docs/validation.md)
 - [Game package format](docs/package-format.md)
 - [Catalogued sources](docs/games.md)
 

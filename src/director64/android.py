@@ -26,6 +26,7 @@ from xml.sax.saxutils import escape
 
 from . import web
 from .android_packs import stage_packs
+from .build_lock import conversion
 from .convert import convert, source_digest
 from .project import GameSpec, container_engine
 
@@ -96,7 +97,7 @@ def launcher_title(game: GameSpec) -> str:
 # ---- The engine ----
 
 
-def makefile(game: GameSpec, output: Path, abis: list[str]) -> Path:
+def makefile(game: GameSpec, output: Path, abis: list[str], *, validation: bool = False) -> Path:
     """The game's runtime as make rules: the browser runtime's sources
     (without its Emscripten glue) and flags, with the Android host."""
     root = game.root
@@ -118,6 +119,8 @@ def makefile(game: GameSpec, output: Path, abis: list[str]) -> Path:
         "-ffunction-sections",
         "-fdata-sections",
     ]
+    if validation:
+        flags.append("-DDIRECTOR64_ANDROID_VALIDATION=1")
     flags_text = " ".join(shlex.quote(f) for f in flags)
     rel = output.relative_to(root).as_posix()
     lines = ["NDK_BIN := $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin", ".SUFFIXES:"]
@@ -288,15 +291,22 @@ def version_code() -> int:
     return int(time.time() - 1767225600) // 60
 
 
-def apk_path(game: GameSpec) -> Path:
-    return game.dist / f"director64-{game.slug}.apk"
+def package_name(game: GameSpec, *, validation: bool = False) -> str:
+    return "org.director64.tv." + game.slug.replace("-", "_") + (
+        ".validation" if validation else ""
+    )
 
 
-def apk_receipt_path(game: GameSpec) -> Path:
-    return apk_path(game).with_suffix(".apk.json")
+def apk_path(game: GameSpec, *, validation: bool = False) -> Path:
+    suffix = "-validation" if validation else ""
+    return game.dist / f"director64-{game.slug}{suffix}.apk"
 
 
-def apk_input_digest(game: GameSpec, abis: list[str]) -> str:
+def apk_receipt_path(game: GameSpec, *, validation: bool = False) -> Path:
+    return apk_path(game, validation=validation).with_suffix(".apk.json")
+
+
+def apk_input_digest(game: GameSpec, abis: list[str], *, validation: bool = False) -> str:
     """Inputs to this APK, separate from the reusable converted asset packs."""
     import hashlib
 
@@ -321,6 +331,7 @@ def apk_input_digest(game: GameSpec, abis: list[str]) -> str:
         "profile": web.profile_entry(game),
         "launcher_title": launcher_title(game),
         "converter": source_digest(root),
+        "validation": validation,
     }, sort_keys=True).encode())
     for path in sorted(paths):
         digest.update(path.relative_to(root).as_posix().encode() + b"\0")
@@ -328,16 +339,19 @@ def apk_input_digest(game: GameSpec, abis: list[str]) -> str:
     return digest.hexdigest()
 
 
-def verify_apk(game: GameSpec) -> Path:
+def verify_apk(game: GameSpec, *, validation: bool = False) -> Path:
     """Refuse a stale APK or an artifact left behind by a failed rebuild."""
-    path = apk_path(game)
+    path = apk_path(game, validation=validation)
     try:
-        receipt = json.loads(apk_receipt_path(game).read_text())
+        receipt = json.loads(apk_receipt_path(game, validation=validation).read_text())
+        inputs = (apk_input_digest(game, receipt["abis"], validation=True) if validation
+                  else apk_input_digest(game, receipt["abis"]))
         valid = (
             receipt["source_sha256"] == game.source["sha256"]
             and all(receipt.get(key) == value
                     for key, value in game.image_identity.items())
-            and receipt["inputs"] == apk_input_digest(game, receipt["abis"])
+            and receipt["inputs"] == inputs
+            and bool(receipt.get("validation", False)) == validation
             and receipt["apk_sha256"] == web.sha256(path)
         )
     except (OSError, KeyError, ValueError, TypeError):
@@ -347,14 +361,26 @@ def verify_apk(game: GameSpec) -> Path:
     return path
 
 
-def build(game: GameSpec, jobs: int, abis: list[str], reconvert: bool) -> Path:
+def build(game: GameSpec, jobs: int, abis: list[str], reconvert: bool,
+          *, validation: bool = False) -> Path:
+    # Both conversion and the readers that make the APK snapshot need this
+    # lock: another --reconvert may replace converted/ at any point otherwise.
+    with conversion(game):
+        return _build(game, jobs, abis, reconvert, validation=validation)
+
+
+def _build(game: GameSpec, jobs: int, abis: list[str], reconvert: bool,
+           *, validation: bool = False) -> Path:
     root = game.root
     game.require_port()
-    apk_receipt_path(game).unlink(missing_ok=True)
-    identity = apk_input_digest(game, abis)
+    apk_receipt_path(game, validation=validation).unlink(missing_ok=True)
+    identity = (apk_input_digest(game, abis, validation=True) if validation
+                else apk_input_digest(game, abis))
     work = root / "build/android" / game.slug / game.source["id"]
+    if validation:
+        work = work / "validation"
     data = convert(game, force=reconvert)
-    make = makefile(game, work, abis)
+    make = makefile(game, work, abis, validation=validation)
 
     # Assets: the game under game/, its profile, and the builtin font.
     assets = work / "assets"
@@ -364,14 +390,17 @@ def build(game: GameSpec, jobs: int, abis: list[str], reconvert: bool) -> Path:
     place(data / "game.d64p", assets / "game/game.d64p")
     packed = stage_packs(data, assets / "game")
     port = game.data["port"]
+    title = ("Test: " if validation else "") + launcher_title(game)
     (assets / "game/profile.json").write_text(
         json.dumps(
             {
                 "slug": game.slug,
-                "title": launcher_title(game),
+                "title": title,
                 "library": library(game),
                 "director_version": port["director_version"],
                 "source_sha256": game.source["sha256"],
+                "validation": validation,
+                "validation_build": identity if validation else "",
             },
             indent=2,
         )
@@ -387,12 +416,14 @@ def build(game: GameSpec, jobs: int, abis: list[str], reconvert: bool) -> Path:
     artwork(game, res)
     revision = web.git_revision(root)
     version = revision["commit"][:12] + ("-dirty" if revision["dirty"] else "")
-    (work / "AndroidManifest.xml").write_text(
-        (root / "platforms/android/AndroidManifest.xml")
+    manifest = ((root / "platforms/android/AndroidManifest.xml")
         .read_text()
-        .replace("@TITLE@", escape(launcher_title(game), {'"': "&quot;"}))
-    )
-    package = "org.director64.tv." + game.slug.replace("-", "_")
+        .replace("@TITLE@", escape(title, {'"': "&quot;"})))
+    if validation:
+        manifest = manifest.replace("<application", '<application android:debuggable="true" '
+                                    'android:testOnly="true"', 1)
+    (work / "AndroidManifest.xml").write_text(manifest)
+    package = package_name(game, validation=validation)
     w = work.relative_to(root).as_posix()
     overlay = (
         f"$BUILD_TOOLS/aapt2 compile --dir {w}/res -o {w}/out/game-res.zip\n"
@@ -432,7 +463,7 @@ fi
             name = f"lib{library(game)}.so"
             apk.write(work / "lib" / abi / name, f"lib/{abi}/{name}", zipfile.ZIP_STORED)
     game.dist.mkdir(parents=True, exist_ok=True)
-    apk = apk_path(game)
+    apk = apk_path(game, validation=validation)
     out = apk.relative_to(root).as_posix()
     run_container(
         root,
@@ -444,16 +475,19 @@ $BUILD_TOOLS/apksigner sign --ks /keystore/android.keystore --ks-pass pass:{KEYS
 rm -f {w}/out/aligned.apk {out}.idsig
 """,
     )
-    if apk_input_digest(game, abis) != identity:
+    current = (apk_input_digest(game, abis, validation=True) if validation
+               else apk_input_digest(game, abis))
+    if current != identity:
         raise ValueError("APK inputs changed during build; rebuild before installing")
     receipt = {
         "source_sha256": game.source["sha256"], "abis": abis, "inputs": identity,
         **game.image_identity,
         "apk_sha256": web.sha256(apk), "bytes": apk.stat().st_size,
         "asset_packs": packed,
+        "validation": validation, "package": package,
         "conversion": json.loads((data / "manifest.json").read_text()),
     }
-    apk_receipt_path(game).write_text(json.dumps(receipt, indent=2) + "\n")
+    apk_receipt_path(game, validation=validation).write_text(json.dumps(receipt, indent=2) + "\n")
     return apk
 
 
@@ -472,17 +506,22 @@ def main(argv: list[str]) -> int:
         "--abi", action="append", choices=sorted(ABIS), help="only these ABIs (default: all)"
     )
     b.add_argument("--reconvert", action="store_true", help="convert the disc image again")
+    b.add_argument("--validation", action="store_true",
+                   help="build an isolated test-only APK with read-only state observations")
     i = sub.add_parser("install", help="adb install the game's APK")
     i.add_argument("--game", required=True)
     i.add_argument("--source")
     i.add_argument("--serial", help="adb device serial or host:port")
+    i.add_argument("--validation", action="store_true", help="install the isolated test-only APK")
     args = parser.parse_args(argv)
     game = GameSpec.load(args.game, args.source)
     game.activate()
     if args.action == "build":
-        print(build(game, args.jobs, args.abi or list(ABIS), args.reconvert))
+        print(build(game, args.jobs, args.abi or list(ABIS), args.reconvert,
+                    validation=args.validation))
     elif args.action == "install":
-        apk = verify_apk(game)
+        apk = verify_apk(game, validation=args.validation)
         serial = ["-s", args.serial] if args.serial else []
-        subprocess.run(["adb", *serial, "install", "-r", apk], check=True)
+        subprocess.run(["adb", *serial, "install", "-r", *(["-t"] if args.validation else []),
+                        apk], check=True)
     return 0

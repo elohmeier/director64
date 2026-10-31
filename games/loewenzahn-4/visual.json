@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "name": "rocket-login",
+  "description": "Skip the rocket introduction, select the skeleton profile, enter the wagon exterior and retain preferences.",
+  "covers": [
+    "startup",
+    "navigation",
+    "film-loops",
+    "profile-selection",
+    "sustained-playback",
+    "save"
+  ],
+  "steps": [
+    {
+      "expect": {
+        "movie": "START.DXR"
+      },
+      "label": "launcher"
+    },
+    {
+      "wait": {
+        "movie": "RAKETEN.DXR"
+      },
+      "ticks": 6000,
+      "label": "rocket-intro"
+    },
+    {
+      "idle": 3600,
+      "expect": {
+        "movie": "RAKETEN.DXR"
+      },
+      "label": "login-playback"
+    },
+    {
+      "click": [
+        400,
+        400
+      ],
+      "settle": 120,
+      "expect": {
+        "frame": 5
+      },
+      "label": "login-controls",
+      "when": {
+        "frame": 144
+      }
+    },
+    {
+      "click": [
+        132,
+        220
+      ],
+      "settle": 120,
+      "expect": {
+        "globals.gloginlist": "[#skelett]"
+      },
+      "label": "profile-selected"
+    },
+    {
+      "click": [
+        719,
+        34
+      ],
+      "settle": 3600,
+      "expect": {
+        "movie": "BAUWAGEN__AUSSEN.DXR",
+        "save_generation": {
+          "gte": 1
+        },
+        "/saves/loewe_4.ini": {
+          "contains": "#skelett"
+        }
+      },
+      "label": "wagon-exterior",
+      "observe": {
+        "label": "wagon-entry-transition",
+        "sequence": {
+          "frames": 25,
+          "stride_ticks": 4,
+          "max_blank_frames": 25
+        },
+        "audio": {
+          "seconds": 1.4
+        }
+      }
+    },
+    {
+      "idle": 3600,
+      "expect": {
+        "movie": "BAUWAGEN__AUSSEN.DXR"
+      },
+      "label": "exterior-playback"
+    }
+  ],
+  "based_on": {
+    "journey_file": "journeys.json",
+    "sha256": "d18e28ab7d2e68713f3ce50a85a3b36c2289e4c0f5621163e86cebc5944afe14"
+  },
+  "scope_note": "Input-only regression of this registered route; original fidelity and unvisited activities are not inferred.",
+  "observations": {
+    "exterior-playback": {
+      "sequence": {
+        "frames": 13,
+        "stride_ticks": 5,
+        "max_blank_frames": 0
+      },
+      "audio": {
+        "seconds": 1
+      }
+    }
+  }
+}

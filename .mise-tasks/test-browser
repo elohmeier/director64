@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#MISE description="Source-free Chromium glyph, animation and audible/muted PCM checks"
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+node tools/validation/browser-selftest.mjs build/validation/browser/selftest
+uv run --locked python - <<'PY'
+import json
+from pathlib import Path
+from director64.visual import assess_capture, audio_findings, audio_metrics
+folder=Path('build/validation/browser/selftest')
+report=assess_capture(folder)
+if report['findings']:
+    raise SystemExit('; '.join(report['findings']))
+capture=report['capture']
+audible=capture['checkpoints'][0]['audio']
+muted=capture['muted_audio']
+checks={}
+for name,entry,rules in (
+    ('audible',audible,{'min_rms':.01}),('muted',muted,{'max_rms':.00001})):
+    metrics=audio_metrics(folder/entry['file'],entry['rate'],entry['channels'])
+    findings=audio_findings(metrics,rules)
+    checks[name]={'metrics':metrics,'findings':findings}
+    if findings:raise SystemExit(name+': '+'; '.join(findings))
+(folder/'oracle.json').write_text(json.dumps({'status':'passing','checks':checks},indent=2)+'\n')
+print('browser glyphs/motion and audible-versus-muted PCM passed')
+PY

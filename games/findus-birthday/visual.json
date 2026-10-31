@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "name": "player-registration",
+  "description": "Register a named player, save the profile, enter the next room and keep its animation running.",
+  "covers": [
+    "startup",
+    "film-loops",
+    "profiles",
+    "name-popup",
+    "runtime-text-style",
+    "text-entry",
+    "save",
+    "navigation",
+    "sustained-playback"
+  ],
+  "steps": [
+    {
+      "idle": 3600,
+      "expect": {
+        "movie": "R0021.DXR",
+        "frame": 470
+      },
+      "label": "player-selection"
+    },
+    {
+      "sprite": 27,
+      "settle": 1800,
+      "expect": {
+        "movie": "R0021.DXR"
+      },
+      "label": "name-popup"
+    },
+    {
+      "command": "text 127 ANNA"
+    },
+    {
+      "idle": 600,
+      "label": "name-entered",
+      "observe": {
+        "label": "typed-name-rendering",
+        "sequence": {
+          "frames": 13,
+          "stride_ticks": 5,
+          "max_blank_frames": 0
+        },
+        "regions": [
+          {
+            "name": "name-popup",
+            "rect": [
+              270,
+              160,
+              535,
+              240
+            ],
+            "max_changed_ratio": 0.001
+          }
+        ],
+        "audio": {
+          "seconds": 0.8
+        }
+      }
+    },
+    {
+      "sprite": 126,
+      "settle": 3600,
+      "expect": {
+        "movie": {
+          "in": [
+            "R0031.DXR",
+            "R0031B.DXR"
+          ]
+        },
+        "/saves/info.dat": {
+          "contains": "ANNA"
+        },
+        "save_generation": {
+          "gte": 10
+        }
+      },
+      "label": "named-player-enters-room"
+    },
+    {
+      "idle": 3600,
+      "expect": {
+        "/saves/info.dat": {
+          "contains": "ANNA"
+        }
+      },
+      "label": "room-playback"
+    }
+  ],
+  "based_on": {
+    "journey_file": "journeys.json",
+    "sha256": "d0114c340f3abce1c6f99d2cbc95629bb7850f019703b57ad2d1c8e729819d37"
+  },
+  "scope_note": "Input-only regression of this registered route; original fidelity and unvisited activities are not inferred.",
+  "observations": {
+    "room-playback": {
+      "sequence": {
+        "frames": 13,
+        "stride_ticks": 5,
+        "max_blank_frames": 0
+      },
+      "audio": {
+        "seconds": 1
+      }
+    }
+  }
+}

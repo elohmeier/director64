@@ -1,0 +1,40 @@
+-- Synthetic PCM plus explicit stop controls around each invalid playFile.
+global out
+tone = new(xtra("fileio"))
+tone.createFile("C:\d64-stream-tone.wav")
+tone.openFile("C:\d64-stream-tone.wav", 2)
+header = [82,73,70,70,164,56,1,0,87,65,86,69,102,109,116,32,16,0,0,0,1,0,1,0,64,31,0,0,64,31,0,0,1,0,8,0,100,97,116,97,128,56,1,0]
+binaryHeader = EMPTY
+repeat with byteNumber = 1 to header.count
+  binaryHeader = binaryHeader & numToChar(header[byteNumber])
+end repeat
+tone.writeString(binaryHeader)
+samples = EMPTY
+repeat with sampleNumber = 1 to 1000
+  samples = samples & numToChar(96) & numToChar(160)
+end repeat
+repeat with blockNumber = 1 to 40
+  tone.writeString(samples)
+end repeat
+tone.closeFile()
+out = new(xtra("fileio"))
+out.createFile("C:\stream-empty-control.txt")
+out.openFile("C:\stream-empty-control.txt", 2)
+cases = [["empty-string", EMPTY], ["existing-directory", "C:\"], ["relative-directory", "@:"], ["relative-sounds-directory", "@:Sounds:"], ["absent-directory", "C:\d64-directory-does-not-exist\"], ["absent-file", "C:\d64-file-does-not-exist.wav"]]
+repeat with caseNumber = 1 to cases.count
+  testCase = cases[caseNumber]
+  sound stop 1
+  delay 3
+  out.writeString(string([testCase[1], "stopped-before", soundBusy(1)]) & RETURN)
+  sound playFile 1, "C:\d64-stream-tone.wav"
+  delay 3
+  out.writeString(string([testCase[1], "before", soundBusy(1)]) & RETURN)
+  sound playFile 1, testCase[2]
+  delay 3
+  out.writeString(string([testCase[1], "after", soundBusy(1)]) & RETURN)
+  sound stop 1
+  delay 3
+  out.writeString(string([testCase[1], "stopped-after", soundBusy(1)]) & RETURN)
+end repeat
+sound stop 1
+out.closeFile()

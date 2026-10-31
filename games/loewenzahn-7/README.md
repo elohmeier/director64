@@ -19,3 +19,7 @@ from an independently recovered copy, matched by SHA-256, and holds one
 `[convert]` binds the DirectMedia Xtra's MPEG-1 movies to their disc files
 (converted to VP9) and answers the `getRegOptimal` copy check with its
 serial. `[player]` saves the `.usr` preferences file.
+
+Verified Joliet stream aliases expose both the authored
+`Lexikon/Sounds/Komponisten` folder and its primary disc name
+`LEXIKON/SOUNDS/KOMPONIS`, including their original filename spellings.

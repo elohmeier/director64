@@ -65,6 +65,9 @@ def main(argv=None):
         "--timeout SECONDS --max-slowdown RATIO --max-memory-growth RATIO; "
         "--game all runs all ports",
         "reference": "Adapter options: --replay PATH --output PATH --windows-version VERSION",
+        "visual": "Arguments: capture | compare | approve (local visual/audio evidence)",
+        "metamorphic": "Options: --replay FILE --relation cache|chunks|all --output DIR",
+        "android-validate": "Replay journeys through an isolated Android validation APK",
         "convert": "Options: --force --output DIR (default build/<slug>/<source>/converted)",
         "web": "Options: --reconvert --serve --port N (default 18064) --no-build (docs/web.md)",
     }
@@ -83,6 +86,9 @@ def main(argv=None):
         "parity",
         "journey",
         "reference",
+        "visual",
+        "metamorphic",
+        "android-validate",
     ):
         p = sub.add_parser(name, epilog=help_text.get(name))
         p.add_argument("--game", required=True)
@@ -123,9 +129,11 @@ def main(argv=None):
         game.require_port()
         sys.argv = [f"director64 {args.command}", *remaining]
         if args.command == "convert":
+            from .build_lock import conversion
             from .convert import main as convert
 
-            return convert(remaining)
+            with conversion(game):
+                return convert(remaining)
         if args.command == "web":
             from .web import main as web
 
@@ -142,8 +150,22 @@ def main(argv=None):
             from .journeys import main as journeys
 
             return journeys(game, remaining)
+        if args.command == "visual":
+            from .visual import main as visual
+
+            return visual(game, remaining)
+        if args.command == "metamorphic":
+            from .metamorphic import main as metamorphic
+
+            return metamorphic(game, remaining)
+        if args.command == "android-validate":
+            from .android_validation import main as android_validate
+
+            return android_validate(game, remaining)
         if args.command == "reference":
-            run(sys.executable, game.directory / "host/reference_runner.py", "capture", *remaining)
+            from .reference import main as reference
+
+            return reference(game, remaining)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"director64: {error}\n")
     return 0

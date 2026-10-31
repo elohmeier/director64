@@ -18,7 +18,7 @@ import random
 import re
 from pathlib import Path
 
-from .fuzz import FEATURES, Probe, ProbeFailure, episode_commands
+from .fuzz import Probe, ProbeFailure, episode_commands, game_features
 
 # Fields that describe the runtime rather than the game: the value heap's
 # footprint and the number of live handles change with the value
@@ -50,9 +50,12 @@ class RecordingProbe(Probe):
         if command.split(" ", 1)[0] == "reboot":
             # A fresh runtime numbers its allocations from zero again.
             self.instances = {}
+        # Retain the attempted input even when receive raises. Otherwise the
+        # failing command has no matching timeout entry and parity's strict
+        # zip aborts before the second build can replay it.
+        self.ticks.append(ticks)
         state = super().send(command, ticks)
         self.states.append(self.renumbered(state))
-        self.ticks.append(ticks)
         return state
 
     def renumbered(self, value):
@@ -68,22 +71,11 @@ class RecordingProbe(Probe):
         return value
 
 
-def folded(value):
-    """Text folded to lower case: Lingo compares strings without case, a
-    symbol's identity is case-insensitive, and the two sides may have
-    interned different spellings first (the reference generator folded
-    every symbol; the compiler keeps the authored spelling)."""
-    if isinstance(value, str):
-        return value.lower()
-    if isinstance(value, list):
-        return [folded(v) for v in value]
-    if isinstance(value, dict):
-        return {k: folded(v) for k, v in value.items()}
-    return value
-
-
 def normalized(state: dict) -> dict:
-    result = {k: folded(v) for k, v in state.items() if k not in VOLATILE}
+    # Probe values do not carry enough type information to distinguish a
+    # bare symbol from displayed text. Preserve every character: blanket
+    # case folding hid label, player-name and save-content regressions.
+    result = {k: v for k, v in state.items() if k not in VOLATILE}
     if isinstance(result.get("stack"), list):
         # Older probes printed a frame's self as its handle number.
         result["stack"] = [
@@ -130,8 +122,9 @@ def run_episode(
     movie = rng.choice(movies)
     a = RecordingProbe(side_a, movie, output / f"{seed}-a.stderr", env)
     outcome_a = None
+    boot_a = None
     try:
-        a.receive(timeout=120.0)
+        boot_a = a.renumbered(a.receive(timeout=120.0))
         episode_commands(a, rng, actions, features)
         outcome_a = a.close()
     except ProbeFailure as failure:
@@ -140,17 +133,26 @@ def run_episode(
     b = RecordingProbe(side_b, movie, output / f"{seed}-b.stderr", env)
     outcome_b = None
     divergence = None
+    boot_b = None
+    compared = 0
     try:
-        b.receive(timeout=120.0)
-        for index, (command, ticks) in enumerate(zip(a.commands, a.ticks, strict=True)):
+        boot_b = b.renumbered(b.receive(timeout=120.0))
+        compared += int(boot_a is not None)
+        if boot_a is not None and normalized(boot_a) != normalized(boot_b):
+            divergence = {"index": -1, "command": "boot", "movie": boot_a.get("movie"),
+                          "diff": difference(boot_a, boot_b)}
+        inputs = [] if divergence else zip(a.commands, a.ticks, strict=True)
+        for index, (command, ticks) in enumerate(inputs):
             b.send(command, ticks)
             state = b.states[index]
-            if normalized(state) != normalized(a.states[index]):
+            compared += 1
+            if index >= len(a.states) or normalized(state) != normalized(a.states[index]):
                 divergence = {
                     "index": index,
                     "command": command,
-                    "movie": a.states[index].get("movie"),
-                    "diff": difference(a.states[index], state),
+                    "movie": state.get("movie"),
+                    "diff": (difference(a.states[index], state) if index < len(a.states)
+                             else "  A failed this input; B returned a successful state"),
                 }
                 break
         outcome_b = b.close()
@@ -173,6 +175,7 @@ def run_episode(
             "diff": f"  outcome: A={outcome_a.kind} {outcome_a.error!r} "
             f"B={outcome_b.kind} {outcome_b.error!r}",
         }
+    (output / f"{seed}-commands.txt").write_text("".join(c + "\n" for c in a.commands))
     for path in (output / f"{seed}-a.stderr", output / f"{seed}-b.stderr"):
         if divergence is None:
             path.unlink(missing_ok=True)
@@ -180,7 +183,8 @@ def run_episode(
         "seed": seed,
         "movie": movie,
         "commands": len(a.commands),
-        "states": len(a.states),
+        "states": compared,
+        "boot_compared": boot_a is not None and boot_b is not None,
         "movies_visited": a.movie_trail,
         "outcome": {"kind": outcome_a.kind, "error": outcome_a.error},
         "divergence": divergence,
@@ -222,7 +226,7 @@ def main(game, argv: list[str]) -> int:
     }
     movies = args.movie or [game.data["port"].get("entry_movie", "START")]
     episodes = [
-        run_episode(seed, movies, args.actions, FEATURES, side_a, side_b, output, env)
+        run_episode(seed, movies, args.actions, game_features(game), side_a, side_b, output, env)
         for seed in range(args.seed, args.seed + args.episodes)
     ]
     diverged = [e for e in episodes if e["divergence"]]

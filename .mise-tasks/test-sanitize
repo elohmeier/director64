@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#MISE description="Check runtime ownership, generated rendering and binary decoders with ASan/UBSan"
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+mkdir -p build/sanitize
+cc=${CC:-clang}
+export ASAN_OPTIONS="halt_on_error=1:detect_leaks=1"
+export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
+flags=(-std=c17 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined
+       -Wall -Wextra -Werror -pedantic -DDIRECTOR64_NATIVE_STAGE=1
+       -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1
+       -Iruntime/director -Iruntime/lingo -Iruntime/interaction -Iruntime/storage
+       -Iruntime/package -Iplatforms/web)
+for name in web_metamorphic web_render_cache web_flash_cache web_flash_text_hit web_film_backdrop web_lifecycle; do
+    "$cc" "${flags[@]}" "tests/native/test_$name.c" platforms/web/compositor.c \
+        runtime/director/director.c runtime/director/shape.c runtime/lingo/lingo_runtime.c \
+        runtime/package/package.c -lm -o "build/sanitize/$name"
+    "build/sanitize/$name"
+done

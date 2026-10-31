@@ -5,6 +5,7 @@
 import {existsSync, readFileSync, writeFileSync} from "node:fs";
 import {inflateRawSync} from "node:zlib";
 import {createInterface} from "node:readline";
+import {createHash} from "node:crypto";
 import {join} from "node:path";
 import {pathToFileURL} from "node:url";
 import {videoProbe} from "./video.mjs";
@@ -23,6 +24,13 @@ if (!site || mode !== "rpc" || options.some(option => option !== "--state-only")
 // Render by default: a state-only RPC replay cannot detect compositor errors.
 // The opt-out is explicit for investigations of script-state parity alone.
 const render = !options.includes("--state-only");
+const observations = process.env.DIRECTOR64_PROBE_OBSERVATIONS === "1";
+const cacheOff = process.env.DIRECTOR64_PROBE_CACHE === "off";
+const audioEvents = [];
+const audioEvent = (type, ...args) => {
+  if (observations) audioEvents.push([type, ...args]);
+};
+if (observations && !render) throw new Error("pixel observations require rendering");
 const build = JSON.parse(readFileSync(join(site, "build.json"), "utf8"));
 if (movie.toUpperCase() !== build.game.entry_movie.toUpperCase()) {
   process.stderr.write(`the browser runtime starts at ${build.game.entry_movie} only\n`);
@@ -80,8 +88,12 @@ const {default: createDirector64} = await import(pathToFileURL(join(site, "direc
 const module = await createDirector64({
   director64Host: {
     // The service clock models channel lifetime; this probe emits no sound.
-    soundBreakLoop() {},
+    sound: (...args) => audioEvent("sound", ...args),
+    soundPause: (...args) => audioEvent("pause", ...args),
+    soundBreakLoop: (...args) => audioEvent("breakLoop", ...args),
+    gain: (...args) => audioEvent("gain", ...args),
     flashSound(id, sound) {
+      audioEvent("flash", id, sound);
       if (!sound) return;
       validateFlashSound(sound);
       if (!checkedSounds.has(sound.name)) {
@@ -102,6 +114,7 @@ const module = await createDirector64({
     videoRevision: () => videos.revision(),
     // Use the converted source duration so waits and cues follow real audio.
     stream: (channel, name) => {
+      audioEvent("stream", channel, name);
       if (!name) return 0;
       const entry = streams.get(name.toLowerCase());
       if (!entry) throw new Error(`missing streamed sound ${name}`);
@@ -150,6 +163,11 @@ if (render && typeof module._d64_probe_render !== "function") {
 }
 module._d64_probe_render?.(render ? 1 : 0);
 function checkpoint(context) {
+  if (cacheOff) {
+    if (typeof module._d64_render_cache !== "function")
+      throw new Error("runtime lacks cache comparison support; rebuild the web runtime");
+    module._d64_render_cache(0);
+  }
   if (render) module._d64_render(0, 0, 0);
   const error = module.UTF8ToString(module._d64_error());
   if (error) process.stderr.write(`runtime failure after ${context}: ${error}\n`);
@@ -158,11 +176,29 @@ function checkpoint(context) {
     module.UTF8ToString(module._d64_last_script_error())}\n`);
   return !error && !alerts;
 }
+function observed(reply) {
+  if (!observations) return reply;
+  const width = module._d64_stage_width(), height = module._d64_stage_height();
+  const pixels = module.HEAPU8.subarray(module._d64_pixels(),
+    module._d64_pixels() + width * height * 4);
+  const frameHash = createHash("sha256").update(pixels).digest("hex");
+  const trace = [];
+  if (typeof module._d64_probe_trace_count !== "function")
+    throw new Error("runtime lacks per-tick observations; rebuild the web runtime");
+  const count = module._d64_probe_trace_count(), pointer = module._d64_probe_trace_data();
+  const view = new DataView(module.HEAPU8.buffer);
+  for (let i = 0; i < count; i++)
+    trace.push(view.getBigUint64(pointer + i * 8, true).toString(16).padStart(16, "0"));
+  return reply.split("\n").map(line => line.startsWith("{")
+    ? JSON.stringify({...JSON.parse(line), frame_sha256: frameHash,
+      frame_trace: trace, audio_events: audioEvents})
+    : line).join("\n");
+}
 const boot = module.ccall("d64_boot_rpc", "string", ["number"], [42]);
 const bootOK = checkpoint("boot");
 metrics.end(startup, "boot", module);
 if (!bootOK) process.exit(1);
-await out(boot);
+await out(observed(boot));
 let status = 0;
 for await (const line of createInterface({input: process.stdin, crlfDelay: Infinity})) {
   // The journeys end a session with quit, or with quit-export to keep its
@@ -175,12 +211,18 @@ for await (const line of createInterface({input: process.stdin, crlfDelay: Infin
     break;
   }
   const started = metrics.start(line.trimEnd());
+  audioEvents.length = 0;
+  if (observations) {
+    if (typeof module._d64_probe_trace !== "function")
+      throw new Error("runtime lacks per-tick observations; rebuild the web runtime");
+    module._d64_probe_trace(1);
+  }
   const reply = module.ccall("d64_rpc", "string", ["string"], [line.trimEnd()]);
   const ok = reply !== "" && checkpoint(JSON.stringify(line.trimEnd()));
   metrics.end(started, line.trimEnd(), module);
   if (reply === "") { status = 2; break; }
   if (!ok) { status = 1; break; }
-  await out(reply);
+  await out(observed(reply));
 }
 if (!status && module.UTF8ToString(module._d64_error())) status = 1;
 process.exit(status);

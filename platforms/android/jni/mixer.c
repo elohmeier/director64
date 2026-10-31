@@ -76,6 +76,22 @@ static unsigned job_count;
 static pthread_t worker;
 static bool worker_running, stopping;
 static char failure[512]; // guarded by lock
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+static uint64_t validation_samples, validation_nonzero, validation_clipped;
+static double validation_energy, validation_peak;
+
+void audio_validation_report(char *out, size_t capacity) {
+  pthread_mutex_lock(&lock);
+  snprintf(out, capacity,
+           "{\"samples\":%llu,\"nonzero\":%llu,\"clipped\":%llu,"
+           "\"energy\":%.12g,\"peak\":%.9g,\"rate\":%d,\"channels\":2}",
+           (unsigned long long)validation_samples,
+           (unsigned long long)validation_nonzero,
+           (unsigned long long)validation_clipped,
+           validation_energy, validation_peak, output_rate);
+  pthread_mutex_unlock(&lock);
+}
+#endif
 
 static void fail(const char *reason, const char *name) {
   if (!*failure)
@@ -172,6 +188,24 @@ static aaudio_data_callback_result_t render(AAudioStream *s, void *user, void *d
   pthread_mutex_unlock(&lock);
   for (int32_t i = 0; i < frames * 2; i++)
     out[i] = out[i] > 1.0f ? 1.0f : out[i] < -1.0f ? -1.0f : out[i];
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+  uint64_t nonzero = 0, clipped = 0;
+  double energy = 0, peak = 0;
+  for (int32_t i = 0; i < frames * 2; i++) {
+    double sample = fabs(out[i]);
+    nonzero += sample > 0.00001;
+    clipped += sample >= 1.0;
+    energy += sample * sample;
+    if (sample > peak) peak = sample;
+  }
+  pthread_mutex_lock(&lock);
+  validation_samples += (uint64_t)frames * 2;
+  validation_nonzero += nonzero;
+  validation_clipped += clipped;
+  validation_energy += energy;
+  if (peak > validation_peak) validation_peak = peak;
+  pthread_mutex_unlock(&lock);
+#endif
   return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
@@ -182,23 +216,48 @@ static void failed(AAudioStream *s, void *user, aaudio_result_t error) {
   atomic_store(&disconnected, true);
 }
 
+static void output_failure(const char *reason, aaudio_result_t error) {
+  char detail[48];
+  snprintf(detail, sizeof(detail), "AAudio result %d", error);
+  LOG("%s (%s)", reason, detail);
+  pthread_mutex_lock(&lock);
+  fail(reason, detail);
+  pthread_mutex_unlock(&lock);
+}
+
 static void open_output(void) {
-  AAudioStreamBuilder *builder;
-  if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK)
+  AAudioStreamBuilder *builder = NULL;
+  aaudio_result_t result = AAudio_createStreamBuilder(&builder);
+  if (result != AAUDIO_OK || !builder) {
+    output_failure("could not create audio output", result);
     return;
+  }
   AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
   AAudioStreamBuilder_setChannelCount(builder, 2);
   AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_GAME);
   AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_SONIFICATION);
   AAudioStreamBuilder_setDataCallback(builder, render, NULL);
   AAudioStreamBuilder_setErrorCallback(builder, failed, NULL);
-  if (AAudioStreamBuilder_openStream(builder, &stream) != AAUDIO_OK) {
-    LOG("no audio output");
+  result = AAudioStreamBuilder_openStream(builder, &stream);
+  if (result != AAUDIO_OK || !stream) {
+    output_failure("could not open audio output", result);
+    if (stream) AAudioStream_close(stream);
     stream = NULL;
   } else {
-    output_rate = AAudioStream_getSampleRate(stream);
-    AAudioStream_requestStart(stream);
-    LOG("audio output %d Hz", output_rate);
+    int32_t rate = AAudioStream_getSampleRate(stream);
+    if (rate <= 0) {
+      output_failure("invalid audio output sample rate", rate);
+      AAudioStream_close(stream);
+      stream = NULL;
+    } else {
+      output_rate = rate;
+      result = AAudioStream_requestStart(stream);
+      if (result != AAUDIO_OK) {
+        output_failure("could not start audio output", result);
+        AAudioStream_close(stream);
+        stream = NULL;
+      } else LOG("audio output %d Hz", output_rate);
+    }
   }
   AAudioStreamBuilder_delete(builder);
 }
@@ -382,6 +441,10 @@ static void play_entry(unsigned v, const pack_t *pack, const pack_entry_t *entry
 
 void audio_init(const pack_t *sounds, const pack_t *streams) {
   pthread_mutex_lock(&lock);
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+  validation_samples = validation_nonzero = validation_clipped = 0;
+  validation_energy = validation_peak = 0;
+#endif
   failure[0] = 0;
   atomic_store(&suspended, false);
   suspended_at = suspended_total = 0;

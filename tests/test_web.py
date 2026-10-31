@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import struct
 import zlib
@@ -79,3 +80,57 @@ def test_notices_carry_every_license_text_they_cite():
     assert text.startswith("header\n") and "MIT License" in text
     for path in (root / "licenses").glob("*.txt"):
         assert path.read_text(encoding="utf-8").splitlines()[0] in text
+
+
+def test_runtime_receipt_detects_header_changes_during_compile(tmp_path, monkeypatch):
+    game = replace(GameSpec.load("findus-birthday"), root=tmp_path)
+    header = tmp_path / "runtime/director/fixture.h"
+    header.parent.mkdir(parents=True)
+    header.write_text("before")
+    monkeypatch.setattr(web, "profile_header", lambda game: "synthetic profile")
+    monkeypatch.setattr(web, "compile_command", lambda game, output: ["compiler"])
+    monkeypatch.setattr(web, "emscripten", lambda *args: header.write_text("after"))
+    output = tmp_path / "build/runtime"
+    with pytest.raises(ValueError, match="inputs changed"):
+        web.build_runtime(game, output, "unused")
+    assert not (output / "runtime-inputs.sha256").exists()
+    monkeypatch.setattr(web, "emscripten", lambda *args: None)
+    web.build_runtime(game, output, "unused")
+    receipt = (output / "runtime-inputs.sha256").read_text().strip()
+    assert receipt == web.runtime_inputs(game)
+    header.write_text("next change")
+    assert receipt != web.runtime_inputs(game)
+
+
+def test_web_build_holds_conversion_lock_until_shared_assets_are_consumed(tmp_path, monkeypatch):
+    from director64 import android
+
+    game = replace(GameSpec.load("findus-birthday"), root=tmp_path)
+    observed = []
+
+    def held(stage):
+        with ((game.work / ".conversion.lock").open("a+") as contender,
+              pytest.raises(BlockingIOError)):
+            fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        observed.append(stage)
+
+    def convert(*args):
+        held("conversion")
+        return game.work / "converted"
+
+    def runtime(*args):
+        held("compilation")
+        return []
+
+    def site(*args):
+        held("asset-copy")
+        return game.dist / "web"
+
+    monkeypatch.setattr(android, "convert", convert)
+    monkeypatch.setattr(web, "container_engine", lambda: "unused")
+    monkeypatch.setattr(web, "build_runtime", runtime)
+    monkeypatch.setattr(web, "build_site", site)
+    assert web.build(game) == game.dist / "web"
+    assert observed == ["conversion", "compilation", "asset-copy"]
+    with (game.work / ".conversion.lock").open("a+") as contender:
+        fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)

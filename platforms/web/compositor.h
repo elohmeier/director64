@@ -121,6 +121,7 @@ typedef struct {
   unsigned serial;
   // What the last composite showed; an unchanged stage is not redrawn.
   bool drawn;
+  bool cache_disabled; // Validation: recomposite scenes and derived planes.
   const dg_runtime_t *owner;
   const dg_movie_t *movie;
   unsigned revision;
@@ -151,6 +152,9 @@ typedef struct {
 
 void wc_init(wc_t *, wc_host_t, size_t image_budget);
 void wc_release(wc_t *);
+// Keep immutable decoded assets; bypass scene/derived-plane reuse for an
+// independent rendering comparison without changing playback or trails.
+void wc_cache_enabled(wc_t *, bool enabled);
 // Decodes (or finds) a member's image under an ink. NULL with the runtime
 // failed on an invalid or missing asset.
 // width and height 0 take the stored image's own size (trimmed poses).

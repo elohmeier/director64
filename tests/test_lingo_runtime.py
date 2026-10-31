@@ -59,6 +59,41 @@ def run_d8(tmp_path, source, assertions):
     run_lingo(tmp_path, source, D8_HARNESS + assertions + "\n}\n", version=800)
 
 
+@pytest.mark.parametrize("version, expected", [(600, 0), (850, 1), (1000, 0)])
+def test_versioned_list_guard_allocates_a_channel(tmp_path, version, expected):
+    # Source-free reproduction of a channel allocator guarded by list > 0.
+    # 8.5 expected output was measured by list-relations.lingo under Wine;
+    # the other profiles protect their existing behavior, not original evidence.
+    source = """-- cast: Internal; member: 1; type: MovieScript; name: fixture
+on start
+  global selected
+  available = []
+  repeat with candidate = 1 to 8
+    available.add(candidate)
+  end repeat
+  selected = 0
+  if available > 0 then
+    selected = available[1]
+  end if
+end
+"""
+    run_lingo(tmp_path, source, r"""
+static lv_runtime_t runtime;
+int main(int argc, char **argv) {
+    (void)argc;
+    load_fixture(argv[1]);
+    lv_init(&runtime,(lv_services_t){0},NULL,global_names,global_count,1);
+    assert(lv_start(&runtime,fixture,"start",1,0,NULL));
+    unsigned runs=0;
+    while(runtime.depth && runs++<1000) assert(lv_run(&runtime,100));
+    assert(!runtime.depth && !runtime.failed);
+    int index=lv_global_id(&runtime,"selected");
+    assert(index>=0);
+    assert(lv_number(&runtime,runtime.globals[index])==EXPECTED);
+}
+""".replace("EXPECTED", str(expected)), version=version, extended=version >= 850)
+
+
 def test_control_flow_yields_and_results(tmp_path):
     source = """-- cast: Internal; member: 1; type: MovieScript; name: fixture
 on start

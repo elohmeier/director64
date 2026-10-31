@@ -188,10 +188,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * Returns the running session (see the end of this function).
  */
 export async function play({profile, runtime, game, pads, settings, capturesPads}) {
+  // Opt-in diagnostics use the real browser hosts with an explicitly owned
+  // service clock. A fresh browser context and a separate namespace keep the
+  // player's saves out of regression runs.
+  const controlled = new URLSearchParams(location.search).get("validation") === "1";
   const canvas = $("screen");
   const presenter = new Presenter(canvas, settings.get("scaling"));
   const wake = new WakeLock();
-  const saves = new SaveStore(`director64/${profile.slug}`);
+  const saves = new SaveStore(`${controlled ? "director64-validation" : "director64"}/${profile.slug}`);
   saves.addEventListener("state", (event) => saveStatus(event.detail));
   const durable = await saves.open();
   const stored = durable ? await saves.read() : null;
@@ -649,7 +653,8 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
     if (running) hold("hidden", document.hidden);
   });
 
-  const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+  const seed = controlled ? Number(new URLSearchParams(location.search).get("seed") ?? 42) >>> 0
+    : crypto.getRandomValues(new Uint32Array(1))[0];
   const status = module._d64_boot(seed);
   const error = module.UTF8ToString(module._d64_error());
   if (error) {
@@ -669,10 +674,15 @@ export async function play({profile, runtime, game, pads, settings, capturesPads
   last = performance.now();
   phase = 0;
   present(module._d64_render(mouse.x, mouse.y, 0));
-  requestAnimationFrame(tick);
+  if (!controlled) requestAnimationFrame(tick);
   if (audioLocked) toast(t("audio.locked"), {ms: 6000});
   window.director64 = {...window.director64, module, audio, saves,
     rpc: (command) => module.ccall("d64_rpc", "string", ["string"], [command])};
+  if (controlled) {
+    const {attachValidation} = await import("./validation.js");
+    window.director64.validation = attachValidation({module, audio, videos, present,
+      width: WIDTH, height: HEIGHT, seed});
+  }
 
   // What the page's menu works with.
   return {

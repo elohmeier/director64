@@ -952,6 +952,34 @@ static inline lv_t numeric_binary(lv_runtime_t *r, unsigned op, double x, double
   // A float result stays a float even when it is integral.
   return integral ? lv_num(result) : lv_float(result);
 }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+// Original 8.5.1r104, measured under Wine with the synthetic list-relations
+// probes: first unequal values decide, then list length. A scalar is reused
+// against every element of the other operand; an empty list has no unequal
+// element in that case. ScummVM 41ac2b3's compareArrays differs for this engine.
+static int list_order_d85(lv_runtime_t *r, lv_t a, lv_t b, unsigned depth) {
+  if (depth >= 64) {
+    lv_script_fail(r, "recursive list comparison");
+    return 0;
+  }
+  bool a_list = lv_type(a) == LV_LIST || lv_type(a) == LV_PROPLIST;
+  bool b_list = lv_type(b) == LV_LIST || lv_type(b) == LV_PROPLIST;
+  if (!a_list && !b_list) {
+    if (lv_truth(r, binary_op(r, LB_BIN_LT, a, b))) return -1;
+    if (!r->failed && lv_truth(r, binary_op(r, LB_BIN_GT, a, b))) return 1;
+    return 0;
+  }
+  unsigned na = a_list ? lv_count(r, a) : 0, nb = b_list ? lv_count(r, b) : 0;
+  unsigned count = a_list && b_list ? (na < nb ? na : nb) : (a_list ? na : nb);
+  for (unsigned i = 1; i <= count && !r->failed; i++) {
+    lv_t left = !a_list ? a : lv_at(r, a, lv_type(a) == LV_PROPLIST ? i * 2 : i);
+    lv_t right = !b_list ? b : lv_at(r, b, lv_type(b) == LV_PROPLIST ? i * 2 : i);
+    int order = list_order_d85(r, left, right, depth + 1);
+    if (order || r->failed) return order;
+  }
+  return a_list && b_list ? (na > nb) - (na < nb) : 0;
+}
+#endif
 static lv_t binary_op(lv_runtime_t *r, unsigned op, lv_t a, lv_t b) {
   if (op == LB_BIN_EQ)
     return lv_num(same(r, a, b));
@@ -1055,6 +1083,11 @@ static lv_t binary_op(lv_runtime_t *r, unsigned op, lv_t a, lv_t b) {
   if ((lv_type(a) == LV_LIST || lv_type(b) == LV_LIST ||
        lv_type(a) == LV_PROPLIST || lv_type(b) == LV_PROPLIST) &&
       (op == LB_BIN_LT || op == LB_BIN_GT || op == LB_BIN_LE || op == LB_BIN_GE)) {
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    int order = list_order_d85(r, a, b, 0);
+    return lv_num(op == LB_BIN_LT ? order < 0 : op == LB_BIN_GT ? order > 0
+                  : op == LB_BIN_LE ? order <= 0 : order >= 0);
+#else
     // Two lists compare element by element over the shorter one and hold
     // only if every pair does (ScummVM compareArrays); a property list takes
     // part through its values. Director 6 stopped comparing a list with a
@@ -1072,6 +1105,7 @@ static lv_t binary_op(lv_runtime_t *r, unsigned op, lv_t a, lv_t b) {
       if (!lv_truth(r, binary_op(r, op, left, right))) return lv_num(0);
     }
     return lv_num(1);
+#endif
   }
   if (op == LB_BIN_WITHIN || op == LB_BIN_INTERSECTS) {
     lv_t args[2] = {a, b}, result = {0};

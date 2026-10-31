@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#MISE description="Build every local game web player with source freshness receipts"
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+uv run --locked python - <<'PY'
+import concurrent.futures,json,subprocess,sys,time
+from pathlib import Path
+from director64.project import GameSpec
+output=Path('build/validation/web-builds');output.mkdir(parents=True,exist_ok=True)
+names=[p.parent.name for p in sorted(Path('games').glob('*/game.toml'))
+       if GameSpec.load(p.parent.name).data['status']!='catalogued']
+def build(name):
+    start=time.monotonic()
+    with (output/(name+'.log')).open('w') as log:
+        result=subprocess.run([sys.executable,'-m','director64','web','--game',name],
+                              stdout=log,stderr=log,check=False)
+    report={'game':name,'exit':result.returncode,'seconds':round(time.monotonic()-start,2)}
+    print(json.dumps(report),flush=True)
+    return report
+with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+    results=list(pool.map(build,names))
+(output/'summary.json').write_text(json.dumps(results,indent=2)+'\n')
+raise SystemExit(any(r['exit'] for r in results))
+PY

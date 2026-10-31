@@ -22,6 +22,7 @@ uv run --locked director64 android build --game findus-workshop
 | `--abi ABI` | Only these ABIs (repeatable): `armeabi-v7a`, `arm64-v8a`, `x86_64`; default all |
 | `--reconvert` | Convert the disc image again |
 | `--jobs N` | Parallel native compile jobs |
+| `--validation` | Build a separate test-only APK with read-only runtime observations |
 
 A build converts the disc into `build/<game>/<source>/converted/` (shared
 with the web app, see [architecture.md](architecture.md#conversion)),
@@ -31,6 +32,9 @@ compiles the runtime with the NDK (the web runtime's sources and flags plus
 uncompressed for mapping, while the package and JSON indexes use APK
 compression. Output: `dist/<game>/<source>/director64-<game>.apk` and an
 `.apk.json` receipt (source, ABIs, input digest, APK hash, pack size savings).
+Builds hold a per-edition conversion lock until their asset snapshot is complete;
+a concurrent web build or reconversion waits rather than replacing files that
+the APK builder is still reading.
 
 Android staging compacts the shared conversion without re-encoding media.
 Each `<kind>.json` is `{version: 1, blob: "<blob>", entries: {name:
@@ -156,3 +160,76 @@ execution probe reproduced this failure; the ANGLE backend boots with the same
 host policy. Keep Vulkan enabled to retain that backend. The virtual modem is
 disabled because its `::1` connection fails in an offline container. Emulator
 checks are distinct from validation on the Android TV.
+
+## Automated Android journeys
+
+Build the validation variant to replay gameplay through Android rather than
+the host probe. It uses the separate package
+`org.director64.tv.<slug>.validation`, its own save data and preferences, and
+an APK named `director64-<slug>-validation.apk`. Its manifest is debuggable and
+test-only, and its launcher label starts with `Test:`. Production APKs expose no
+observation receiver. The native game
+thread publishes read-only state snapshots. The runner sends pointer events
+and text through Android's input dispatch and EditText dialog; it cannot
+execute a gameplay RPC or assign runtime state.
+
+With the isolated emulator running:
+
+```sh
+uv run --locked director64 android build --game findus-birthday --abi x86_64 --validation
+uv run --locked director64 android-validate --game findus-birthday --emulator \
+  --exercise-lifecycle --output build/android-validation/birthday
+```
+
+The runner verifies the current APK receipt, installs with `adb install -r -t`,
+and clears only the validation package before each journey. Save-preserving
+reboots within a journey retain that session's data. It verifies the installed
+build identifier as well, including when `--no-install` is used. Existing output
+directories are refused so a later run cannot silently overwrite evidence.
+
+The registered `steps` journeys use their existing stage coordinates and state
+expectations. A legacy Python journey needs a recorded `replay.json` passed with
+`--replay`; raw analog pad samples and standalone probe key commands are refused
+because ADB cannot reproduce their exact timing. A custom `--plan` can include
+`android_key` actions with `source` (`keyboard`, `dpad`, or `gamepad`), an Android
+`KEYCODE_*`, and optional `longpress`, or `lifecycle` actions (`menu`, `home`,
+`resume`, `reboot`). ADB source selection exercises Android dispatch, not the
+mapping of a physical controller. Text replay supports ASCII name characters;
+other keyboard layouts require a physical-input scenario.
+
+`--exercise-lifecycle` appends menu/dismiss and Home/resume checks, including
+whether held game time advances. `--expect-animation` requires motion in a final
+five-frame sequence; `--expect-audio` requires non-silent output during a final
+interval. Enable these output assertions only for a scene expected to animate
+or sound. Custom plans can specify bounded `sequence` observations and `audio`
+rules (`min_rms`, `max_rms`, `min_seconds`, `min_nonzero_samples`,
+`max_clipped_ratio`). Audio counters measure the actual post-mix AAudio callback
+signal, including the native decoder and mixer. They do not record speaker or
+HDMI sound, and the report states that acoustic output was not captured.
+
+Every run retains the input journal, observations, full-screen and normalized
+stage PNGs, sequence samples, process-filtered logcat and pacing reports. Crashes,
+script alerts, missing observations, failed state/output assertions and pacing
+failures produce a failing report. `--timeout` bounds the full journey. A run
+without `--baseline` records visual evidence as unbaselined. Reviewed baselines
+use the shared [visual comparison workflow](validation.md); `--baseline` then
+adds regional image comparisons and difference images. All game-dependent
+evidence remains under ignored `build/`.
+During Home/background checks the screenshot shows Android system UI; these
+checkpoints are marked `system-ui`, and their normalized image is the former
+stage viewport rather than a claim that the game surface remained visible.
+
+For a later physical-device run, select its already connected ADB serial
+explicitly; the runner never discovers or connects a projector by itself:
+
+```sh
+uv run --locked director64 android build --game findus-birthday --abi armeabi-v7a --validation
+uv run --locked director64 android-validate --game findus-birthday --serial <connected-serial> \
+  --exercise-lifecycle --output build/android-validation/physical-birthday
+```
+
+Reports identify the device fingerprint, ABI list, emulator status and exact
+APK/source/plan identity. Emulator and physical-device baselines remain separate.
+Passing an automated route does not establish every activity, controller mapping
+or acoustic output; original-projector comparison and broad hardware
+qualification remain separate claims.

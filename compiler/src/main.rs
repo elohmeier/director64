@@ -335,9 +335,11 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             let mut files = Vec::new();
             let prefer_wav = args.iter().any(|a| a.to_str() == Some("--prefer-wav"));
             let prefer_lossless = args.iter().any(|a| a.to_str() == Some("--prefer-lossless"));
+            let source_map = args.iter().filter_map(|a| a.to_str())
+                .find_map(|a| a.strip_prefix("--source-map="));
             for i in 2..args.len() {
                 let spec = text(i)?;
-                if spec == "--prefer-wav" || spec == "--prefer-lossless" { continue; }
+                if spec == "--prefer-wav" || spec == "--prefer-lossless" || spec.starts_with("--source-map=") { continue; }
                 let (folder, dir) = spec.split_once('=').ok_or("FOLDER=DIR")?;
                 let mut names: Vec<_> = std::fs::read_dir(dir)
                     .map_err(|e| format!("{dir}: {e}"))?
@@ -377,6 +379,7 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
             }
             files.sort_by(|a, b| a.0.cmp(&b.0));
             let (mut blob, mut index) = (Vec::new(), serde_json::Map::new());
+            let mut sources = serde_json::Map::new();
             let mut previous: Vec<u8> = Vec::new();
             for (name, path) in files {
                 let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -384,6 +387,9 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                 // twice; sorted, a name's copies are neighbours.
                 if index.contains_key(&name) {
                     if previous == bytes {
+                        sources.get_mut(&name).and_then(serde_json::Value::as_array_mut)
+                            .ok_or("stream source map mismatch")?
+                            .push(serde_json::json!(path));
                         continue;
                     }
                     return Err(format!("two sound files are both {name}"));
@@ -391,10 +397,15 @@ fn director(args: &[PathBuf]) -> Result<String, String> {
                 previous = bytes.clone();
                 let (stream, ms) = director64_aot::convert::stream::browser_stream(&bytes)
                     .map_err(|e| format!("{}: {e}", path.display()))?;
+                sources.insert(name.clone(), serde_json::json!([path]));
                 index.insert(name, serde_json::json!([blob.len(), stream.len(), ms]));
                 blob.extend(stream);
             }
             std::fs::write(text(1)?, &blob).map_err(|e| e.to_string())?;
+            if let Some(path) = source_map {
+                std::fs::write(path, serde_json::Value::Object(sources).to_string())
+                    .map_err(|e| format!("{path}: {e}"))?;
+            }
             Ok(serde_json::Value::Object(index).to_string())
         }
         // director mpeg-info FILE: bounded MPEG-1 timing and stream metadata.

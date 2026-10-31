@@ -25,7 +25,8 @@ import sys
 import time
 import zlib
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from itertools import product
+from pathlib import Path, PurePosixPath
 
 from .project import GameSpec
 
@@ -42,6 +43,8 @@ GAME_FILES = ("game.d64p", *(f"{kind}.{ext}" for kind in PACKS for ext in ("bin"
 # libwebp lossless method 2 at quality 50: within 5% of its smallest output at
 # a fiftieth of the time.
 WEBP_METHOD, WEBP_QUALITY = 2, 50
+# A malformed or unsupported namespace must not cause exponential conversion.
+MAX_STREAM_PATH_VARIANTS = 256
 # VP9 profile 0 at constrained quality: CRF 30 up to 600 kbit/s, which on
 # Löwenzahn's noisiest MPEG-1 clip scores above VP8 at 900 kbit/s (SSIM 0.960
 # against 0.957) at 61% of its size. One coded frame per input frame (no
@@ -401,6 +404,7 @@ class Converter:
         # Sound streams for playFile, by "folder/stem" in lowercase, with their
         # durations.
         packs["streams"] = {}
+        stream_sources = {}
         if plan.get("streams"):
             # A NAME=FOLDER entry streams FOLDER's files under NAME; a folder
             # the disc does not have streams nothing.
@@ -412,12 +416,23 @@ class Converter:
             if prefer not in (None, "wav", "lossless"):
                 raise ValueError(f"unsupported stream duplicate preference: {prefer}")
             options = [f"--prefer-{prefer}"] if prefer else []
+            source_map = self.work / "streams-sources.json"
+            options.append(f"--source-map={source_map}")
             index = json.loads(self.director("stream-pack", blob, *options, *folders))
+            stream_sources = {
+                name: [Path(p).relative_to(extracted).as_posix() for p in sources]
+                for name, sources in json.loads(source_map.read_text()).items()
+            }
             if prefer:
                 self.report["stream_duplicate_preference"] = prefer
             data = blob.read_bytes()
             packs["streams"] = {name: (data[at:at + length], rest)
                                 for name, (at, length, *rest) in index.items()}
+        policy = json.loads((self.work / "source-policy.json").read_text())
+        self.stream_aliases = verified_stream_aliases(
+            packs["streams"], stream_sources, policy.get("source_path_aliases", {}),
+            plan.get("streams", []), self.game.data["port"]["media_root"])
+        self.report["stream_source_aliases"] = len(self.stream_aliases)
         # Files the runtime reads by their path on the disc.
         packs["data"] = {
             f"{folder}/{p.relative_to(extracted / folder).as_posix()}": p.read_bytes()
@@ -508,18 +523,12 @@ class Converter:
         out.mkdir(parents=True)
         shutil.copyfile(packs["package"], out / "game.d64p")
         for kind in PACKS:
-            index, offset = {}, 0
-            with (out / f"{kind}.bin").open("wb") as blob:
-                for name in sorted(packs[kind]):
-                    entry = packs[kind][name]
-                    data, rest = entry if isinstance(entry, tuple) else (entry, [])
-                    blob.write(data)
-                    index[name] = [offset, len(data), *rest]
-                    offset += len(data)
-            (out / f"{kind}.json").write_text(json.dumps(index, separators=(",", ":")))
+            write_pack(out, kind, packs[kind],
+                       self.stream_aliases if kind == "streams" else {})
         self.report.update(
             images=len(packs["images"]), sounds=len(packs["audio"]),
-            fonts=len(packs["fonts"]), streams=len(packs["streams"]),
+            fonts=len(packs["fonts"]),
+            streams=len(packs["streams"]) + len(self.stream_aliases),
             data_files=len(packs["data"]), package_bytes=(out / "game.d64p").stat().st_size,
         )
         # The scene model and program beside the game, for inspection and the
@@ -529,6 +538,79 @@ class Converter:
         if not program.is_file():
             program = self.work / "aot/program.json"
         shutil.copyfile(program, self.game.work / "program.json")
+
+
+def verified_stream_aliases(streams: dict, sources: dict[str, list[str]],
+                           source_aliases: dict[str, str],
+                           specs: list[str], media_root: str) -> dict[str, str]:
+    """Verified disc names for streams actually imported by selected folders.
+
+    ISO primary filenames are not a predictable truncation of Joliet names.
+    Keep both names within each configured namespace. Windows permits mixing
+    the verified long/short name at each corresponding path component. Stream
+    folders are nonrecursive, like stream-pack.
+    """
+    folders = []
+    for spec in specs:
+        logical, separator, physical = spec.partition("=")
+        folders.append((PurePosixPath(logical),
+                        PurePosixPath(physical if separator else logical)))
+    aliases = {}
+    root = PurePosixPath(media_root.strip("/"))
+    for long_name, short_name in sorted(source_aliases.items()):
+        long, short = PurePosixPath(long_name), PurePosixPath(short_name)
+        if short.suffix.lower() not in {".aif", ".aiff", ".wav", ".mp3", ".swa"}:
+            continue
+        actual = root / short
+        for logical, physical in folders:
+            if actual.parent != physical:
+                continue
+            source = (logical / short.stem).as_posix().lower()
+            if source not in streams or actual.as_posix() not in sources.get(source, []):
+                continue
+            candidates = {
+                long.with_suffix("").as_posix().lower(),
+                (logical / long.stem).as_posix().lower(),
+                (long.parent / short.stem).as_posix().lower(),
+            }
+            long_parts = long.with_suffix("").parts
+            short_parts = short.with_suffix("").parts
+            if len(long_parts) == len(short_parts):
+                choices, variants = [], 1
+                for pair in zip(long_parts, short_parts, strict=True):
+                    names = sorted({part.lower() for part in pair})
+                    choices.append(names)
+                    variants *= len(names)
+                    if variants > MAX_STREAM_PATH_VARIANTS:
+                        raise ValueError(f"verified stream path needs more than "
+                                         f"{MAX_STREAM_PATH_VARIANTS} mixed-name variants: "
+                                         f"{short_name} -> {long_name}")
+                candidates.update("/".join(parts) for parts in product(*choices))
+            for name in sorted(candidates):
+                previous = name if name in streams else aliases.get(name)
+                if previous is not None and streams[previous] != streams[source]:
+                    raise ValueError(f"conflicting verified streamed sound alias: {name} "
+                                     f"({previous}, {source})")
+                if name not in streams:
+                    aliases[name] = source
+    return aliases
+
+
+def write_pack(out: Path, kind: str, entries: dict, aliases: dict[str, str]) -> None:
+    """Write primary payloads once; verified aliases share their indexed range."""
+    index, offset = {}, 0
+    with (out / f"{kind}.bin").open("wb") as blob:
+        for name in sorted(entries):
+            entry = entries[name]
+            data, rest = entry if isinstance(entry, tuple) else (entry, [])
+            blob.write(data)
+            index[name] = [offset, len(data), *rest]
+            offset += len(data)
+    for name, source in sorted(aliases.items()):
+        if source not in index or name in index:
+            raise ValueError(f"invalid {kind} alias: {name} -> {source}")
+        index[name] = index[source]
+    (out / f"{kind}.json").write_text(json.dumps(index, separators=(",", ":")))
 
 
 def validate_encoded_media(kind: str, name: str, data: bytes) -> None:
@@ -731,7 +813,9 @@ def prepared_policy(game: GameSpec, work: Path, extracted: Path) -> Path:
     if game.source["kind"] == "iso9660":
         with game.media.open("rb") as handle:
             aliases = inventory_report(handle).get("aliases", {})
-    root = game.data["port"]["media_root"].strip("/")
+    root = PurePosixPath(game.data["port"]["media_root"].strip("/")).as_posix()
+    if root == ".":
+        root = ""
     prefix = root + "/" if root else ""
     depth = len(root.split("/")) if root else 0
     policy["source_path_aliases"] = {

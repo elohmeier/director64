@@ -8,6 +8,8 @@ import struct
 import subprocess
 import zlib
 from copy import deepcopy
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -125,6 +127,259 @@ def test_stream_duplicates_need_an_explicit_preference_and_root_keys_have_no_sla
     subprocess.run([*command, "--prefer-lossless", f"={folder}"], check=True,
                    capture_output=True)
     assert target.read_bytes() == second
+
+
+@pytest.mark.parametrize(("slug", "folder_name", "logical", "short", "stem"), [
+    ("loewenzahn-8", "DATA/TAMAGOTC/SOUNDS", "tamagotchi/sounds", "tamagotc/sounds", "S5_K_6"),
+    ("loewenzahn-7", "DATA/LEXIKON/SOUNDS/KOMPONIS", "lexikon/sounds/komponisten",
+     "lexikon/sounds/komponis", "BACH"),
+    ("loewenzahn-advent", "DATA/SOUNDS/SCHORNST", "sounds/schornstein",
+     "sounds/schornst", "KILLSTAR"),
+])
+def test_authored_long_and_disc_short_sound_folders_are_both_packaged(
+        tmp_path, slug, folder_name, logical, short, stem):
+    from director64.project import GameSpec, converter
+
+    game = GameSpec.load(slug)
+    aliases = [s for s in game.data["convert"]["streams"] if s.endswith("=" + folder_name)]
+    folder = tmp_path / folder_name
+    folder.mkdir(parents=True)
+    pcm = bytes([64]) * 100
+    fmt = struct.pack("<HHIIHH", 1, 1, 1000, 1000, 1, 8)
+    wave = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+            + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(pcm)) + pcm)
+    (folder / (stem + ".WAV")).write_bytes(wave)
+    output = tmp_path / "streams.bin"
+    sources = tmp_path / "sources.json"
+    result = subprocess.run([
+        *converter(), "director", "stream-pack", output, f"--source-map={sources}",
+        *(name.split("=", 1)[0] + "=" + str(tmp_path / name.split("=", 1)[1])
+          for name in aliases),
+    ], text=True, capture_output=True, check=True)
+    index = json.loads(result.stdout)
+    assert set(index) == {short + "/" + stem.lower()}
+    selected = {k: [str(Path(p).relative_to(tmp_path)) for p in paths]
+                for k, paths in json.loads(sources.read_text()).items()}
+    source_aliases = {logical + "/" + stem + ".WAV":
+                      folder_name.removeprefix("DATA/") + "/" + stem + ".WAV"}
+    packs = {k: (wave, value[2:]) for k, value in index.items()}
+    names = convert.verified_stream_aliases(
+        packs, selected, source_aliases, aliases, game.data["port"]["media_root"])
+    convert.write_pack(tmp_path, "aliased-streams", packs, names)
+    aliased = json.loads((tmp_path / "aliased-streams.json").read_text())
+    assert set(aliased) == {short + "/" + stem.lower(), logical + "/" + stem.lower()}
+    assert len({tuple(value) for value in aliased.values()}) == 1
+    assert {value[2] for value in aliased.values()} == {100}
+    assert (tmp_path / "aliased-streams.bin").read_bytes() == wave
+
+
+def joliet_stream_disc(short_names, long_names, payload, *,
+                       short_folders=None, long_folders=None):
+    """Synthetic primary/Joliet trees sharing the same sound extents."""
+    from director64.iso import SECTOR
+
+    def dual(n, width):
+        return n.to_bytes(width, "little") + n.to_bytes(width, "big")
+
+    def record(name, sector, length, flags=0):
+        data = bytearray(33 + len(name) + (len(name) % 2 == 0))
+        data[0], data[25], data[32] = len(data), flags, len(name)
+        data[2:10], data[10:18] = dual(sector, 4), dual(length, 4)
+        data[28:32] = dual(1, 2)
+        data[33:33 + len(name)] = name
+        return data
+
+    disc = bytearray(128 * SECTOR)
+    for descriptor, start, folders, names, unicode in (
+        (16, 20, short_folders or ["DATA", "LEXIKON", "SOUNDS"], short_names, False),
+        (17, 40, long_folders or ["DATA", "Lexikon", "Sounds"], long_names, True),
+    ):
+        at = descriptor * SECTOR
+        disc[at:at + 7] = bytes([2 if unicode else 1]) + b"CD001\x01"
+        disc[at + 80:at + 88] = dual(128, 4)
+        disc[at + 128:at + 132] = dual(SECTOR, 2)
+        root = record(b"\0", start, SECTOR, 2)
+        disc[at + 156:at + 156 + len(root)] = root
+        if unicode:
+            disc[at + 88:at + 91] = b"%/E"
+        for depth in range(len(folders) + 1):
+            entries = []
+            if depth < len(folders):
+                name = folders[depth].encode("utf-16-be" if unicode else "ascii")
+                entries.append(record(name, start + depth + 1, SECTOR, 2))
+            else:
+                for i, filename in enumerate(names):
+                    name = filename.encode("utf-16-be" if unicode else "ascii")
+                    entries.append(record(name, 100 + i, len(payload)))
+            directory = b"".join(entries)
+            begin = (start + depth) * SECTOR
+            disc[begin:begin + len(directory)] = directory
+    disc[18 * SECTOR:18 * SECTOR + 7] = b"\xffCD001\x01"
+    for i in range(len(short_names)):
+        disc[(100 + i) * SECTOR:(100 + i) * SECTOR + len(payload)] = payload
+    return disc
+
+
+def test_verified_joliet_stream_names_preserve_underscores_and_selected_namespaces(tmp_path):
+    from director64 import iso
+    from director64.project import GameSpec, converter
+
+    pcm = bytes([32, 224]) * 80
+    fmt = struct.pack("<HHIIHH", 1, 1, 1000, 1000, 1, 8)
+    wave = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+            + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(pcm)) + pcm)
+    disc = tmp_path / "synthetic.iso"
+    disc.write_bytes(joliet_stream_disc(
+        ["L2_01_S1.WAV;1", "L4_02S15.WAV;1"],
+        ["L2_01_S_1.wav", "L4_02_S15.wav"], wave))
+    extracted = tmp_path / "extracted"
+    iso.extract(disc, extracted, expected_sha256=iso.file_sha256(disc))
+    game = GameSpec.load("loewenzahn-8")
+    policy = convert.prepared_policy(SimpleNamespace(
+        media=disc, source={"kind": "iso9660"}, directory=game.directory,
+        data=game.data), tmp_path, extracted)
+    aliases = json.loads(policy.read_text())["source_path_aliases"]
+    assert aliases["Lexikon/Sounds/L2_01_S_1.wav"] == "LEXIKON/SOUNDS/L2_01_S1.WAV"
+    spec = next(s for s in game.data["convert"]["streams"] if s.startswith("LEXIKON/SOUNDS="))
+    logical, physical = spec.split("=")
+    output, source_map = tmp_path / "input.bin", tmp_path / "sources.json"
+    result = subprocess.run([
+        *converter(), "director", "stream-pack", output, f"--source-map={source_map}",
+        f"{logical}={extracted / physical}",
+    ], capture_output=True, text=True, check=True)
+    index, data = json.loads(result.stdout), output.read_bytes()
+    packs = {name: (data[at:at + size], rest) for name, (at, size, *rest) in index.items()}
+    sources = {name: [Path(p).relative_to(extracted).as_posix() for p in paths]
+               for name, paths in json.loads(source_map.read_text()).items()}
+    names = convert.verified_stream_aliases(packs, sources, aliases, [spec], "DATA")
+    convert.write_pack(tmp_path, "streams", packs, names)
+    stored = json.loads((tmp_path / "streams.json").read_text())
+    assert stored["lexikon/sounds/l2_01_s_1"] == stored["lexikon/sounds/l2_01_s1"]
+    assert stored["lexikon/sounds/l4_02_s15"] == stored["lexikon/sounds/l4_02s15"]
+    assert (tmp_path / "streams.bin").read_bytes() == data
+    assert not convert.verified_stream_aliases(packs, sources, aliases, [], "DATA")
+    assert not convert.verified_stream_aliases(packs, {}, aliases, [spec], "DATA")
+    assert convert.verified_stream_aliases(packs, sources, aliases, [spec], "/DATA/") == names
+    root_game = SimpleNamespace(media=disc, source={"kind": "iso9660"},
+        directory=game.directory, data={"port": {"media_root": "."}})
+    root_policy = json.loads(convert.prepared_policy(root_game, tmp_path, extracted).read_text())
+    assert root_policy["source_path_aliases"]["DATA/Lexikon/Sounds/L2_01_S_1.wav"] == (
+        "DATA/LEXIKON/SOUNDS/L2_01_S1.WAV")
+
+
+def test_stream_aliases_cannot_cross_folders_or_replace_other_sounds():
+    streams = {"voices/a": (b"voice-a", [100]), "other/b": (b"voice-b", [100])}
+    sources = {"voices/a": ["DATA/VOICES/A.WAV"], "other/b": ["DATA/OTHER/B.WAV"]}
+    specs = ["voices=DATA/VOICES", "other=DATA/OTHER"]
+    aliases = {"Voices/Long_A.wav": "VOICES/A.WAV", "Other/Long_B.wav": "OTHER/B.WAV"}
+    result = convert.verified_stream_aliases(streams, sources, aliases, specs, "DATA")
+    assert result == {"voices/long_a": "voices/a", "other/long_b": "other/b"}
+    with pytest.raises(ValueError, match="conflicting verified streamed sound alias"):
+        convert.verified_stream_aliases(streams, sources,
+            {**aliases, "Voices/Long_A.WAV": "OTHER/B.WAV"}, specs, "DATA")
+    with pytest.raises(ValueError, match="conflicting verified streamed sound alias"):
+        convert.verified_stream_aliases(streams, sources,
+            {"voices/a.wav": "OTHER/B.WAV"}, specs, "DATA")
+
+
+def test_mixed_verified_directory_components_and_filename_share_one_stream(tmp_path):
+    from itertools import product
+
+    from director64 import iso
+    from director64.project import GameSpec, converter
+
+    pcm = bytes([32, 224]) * 80
+    fmt = struct.pack("<HHIIHH", 1, 1, 1000, 1000, 1, 8)
+    wave = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+            + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(pcm)) + pcm)
+    disc = tmp_path / "synthetic.iso"
+    disc.write_bytes(joliet_stream_disc(["S2_INTR1.WAV;1"], ["S2_Intro_Take_1.wav"], wave,
+        short_folders=["DATA", "WIMMELBI", "SOUNDS", "INTROOUT"],
+        long_folders=["DATA", "Wimmelbild", "sounds", "IntroOutro"]))
+    extracted = tmp_path / "extracted"
+    iso.extract(disc, extracted, expected_sha256=iso.file_sha256(disc))
+    game = GameSpec.load("loewenzahn-8")
+    policy = convert.prepared_policy(SimpleNamespace(media=disc,
+        source={"kind": "iso9660"}, directory=game.directory, data=game.data), tmp_path, extracted)
+    aliases = json.loads(policy.read_text())["source_path_aliases"]
+    spec = next(s for s in game.data["convert"]["streams"]
+                if s.startswith("WIMMELBI/SOUNDS/INTROOUT="))
+    logical, physical = spec.split("=")
+    source_map = tmp_path / "sources.json"
+    output = tmp_path / "streams.bin"
+    result = subprocess.run([*converter(), "director", "stream-pack", output,
+        f"--source-map={source_map}", f"{logical}={extracted / physical}"],
+        text=True, capture_output=True, check=True)
+    index = json.loads(result.stdout)
+    sources = {name: [Path(p).relative_to(extracted).as_posix() for p in paths]
+               for name, paths in json.loads(source_map.read_text()).items()}
+    packs = {name: (wave, entry[2:]) for name, entry in index.items()}
+    names = convert.verified_stream_aliases(packs, sources, aliases, [spec], "DATA")
+    convert.write_pack(tmp_path, "streams", packs, names)
+    stored = json.loads((tmp_path / "streams.json").read_text())
+    expected = {"/".join(parts) for parts in product(
+        ["wimmelbi", "wimmelbild"], ["sounds"], ["introout", "introoutro"],
+        ["s2_intr1", "s2_intro_take_1"])}
+    assert set(stored) == expected and len(stored) == 8
+    assert len({tuple(entry) for entry in stored.values()}) == 1
+    assert (tmp_path / "streams.bin").read_bytes() == wave
+
+
+def test_mixed_stream_names_are_bounded_after_case_normalization():
+    parts = ["folder"] * 12
+    short = "/".join(parts + ["VOICE.WAV"])
+    long = "/".join([p.upper() for p in parts] + ["voice.wav"])
+    physical = "/".join(["DATA", *parts])
+    key = "/".join([*parts, "voice"])
+    assert not convert.verified_stream_aliases({key: (b"audio", [100])},
+        {key: ["DATA/" + short]}, {long: short}, [key.rsplit("/", 1)[0] + "=" + physical], "DATA")
+    short = "/".join(["a"] * 9 + ["VOICE.WAV"])
+    long = "/".join(["long_a"] * 9 + ["voice.wav"])
+    key = short.removesuffix(".WAV").lower()
+    with pytest.raises(ValueError, match="more than 256 mixed-name variants"):
+        convert.verified_stream_aliases({key: (b"audio", [100])},
+            {key: ["DATA/" + short]}, {long: short},
+            [key.rsplit("/", 1)[0] + "=DATA/" + short.rsplit("/", 1)[0]], "DATA")
+
+
+def test_stream_aliases_use_actual_preferred_sources_and_ignore_non_sounds(tmp_path):
+    from director64.project import converter
+
+    folder = tmp_path / "sounds"
+    folder.mkdir()
+    pcm = bytes([32]) * 100
+    fmt = struct.pack("<HHIIHH", 1, 1, 1000, 1000, 1, 8)
+    wave = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+            + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(pcm)) + pcm)
+    (folder / "VOICE.WAV").write_bytes(wave)
+    (folder / "VOICE.AIF").write_bytes(wave)
+    (folder / "VOICE.BMP").write_bytes(b"bitmap")
+    sources = tmp_path / "sources.json"
+    subprocess.run([*converter(), "director", "stream-pack", tmp_path / "streams.bin",
+                    "--prefer-wav", f"--source-map={sources}", f"voices={folder}"],
+                   capture_output=True, text=True, check=True)
+    assert json.loads(sources.read_text()) == {"voices/voice": [str(folder / "VOICE.WAV")]}
+    result = convert.verified_stream_aliases({"voices/voice": (wave, [100])},
+        {"voices/voice": ["DATA/VOICES/VOICE.WAV"]},
+        {"Voices/Correct.wav": "VOICES/VOICE.WAV",
+         "Voices/Wrong.wav": "VOICES/VOICE.AIF",
+         "Voices/Bitmap.wav": "VOICES/VOICE.BMP"}, ["voices=DATA/VOICES"], "DATA")
+    assert result == {"voices/correct": "voices/voice"}
+    duplicate = tmp_path / "duplicate"
+    duplicate.mkdir()
+    (duplicate / "VOICE.WAV").write_bytes(wave)
+    subprocess.run([*converter(), "director", "stream-pack", tmp_path / "streams.bin",
+                    "--prefer-wav", f"--source-map={sources}", f"voices={folder}",
+                    f"voices={duplicate}"], capture_output=True, text=True, check=True)
+    assert set(json.loads(sources.read_text())["voices/voice"]) == {
+        str(folder / "VOICE.WAV"), str(duplicate / "VOICE.WAV")}
+
+
+@pytest.mark.parametrize("root", ["", ".", "/"])
+def test_stream_aliases_support_disc_root_namespaces(root):
+    assert convert.verified_stream_aliases({"voice": (b"audio", [100])},
+        {"voice": ["VOICE.WAV"]}, {"Long_Voice.wav": "VOICE.WAV"}, ["="], root) == {
+            "long_voice": "voice"}
 
 
 def test_ivf_without_a_keyframe_is_refused():

@@ -27,6 +27,7 @@ static void plane_evict(wc_t *c, wc_cached_plane_t *plane) {
 #if DG_D10
 static const wc_image_t *plane_find(wc_t *c, unsigned kind, const void *key,
                                     size_t bytes) {
+  if (c->cache_disabled) return NULL;
   for (wc_cached_plane_t *p = c->planes; p; p = p->next)
     if (p->kind == kind && p->key_bytes == bytes &&
         !memcmp(p->key, key, bytes)) {
@@ -43,6 +44,7 @@ static bool evict_oldest(wc_t *);
 static const wc_image_t *plane_keep(wc_t *c, unsigned kind, const void *key,
                                     size_t bytes, size_t replace_prefix,
                                     const wc_image_t *image) {
+  if (c->cache_disabled) return NULL;
   size_t pixels = (size_t)image->width * image->height * sizeof(*image->pixels);
   if (bytes > SIZE_MAX - sizeof(wc_cached_plane_t) ||
       pixels > SIZE_MAX - bytes - sizeof(wc_cached_plane_t))

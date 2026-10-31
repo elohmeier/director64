@@ -2290,6 +2290,7 @@ static void set(lv_runtime_t *r, const char *name, lv_t owner, lv_t value) {
       if (v > 100)
         v = 100;
       s->value.blend = v;
+      s->auto_mask |= DG_BLEND;
       // Recovered scripts use blend 0 to hide, including copy-ink sprites.
       // Score amount/flags subsequently copy back independently.
       s->value.thickness |= DG_HAS_BLEND;

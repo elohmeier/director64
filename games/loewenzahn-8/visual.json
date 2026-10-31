@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "name": "login-dog-registration",
+  "description": "Select a boat profile, skip the intro, open the dog, name it and require registration to persist.",
+  "covers": [
+    "startup",
+    "profile-selection",
+    "preferences",
+    "navigation",
+    "pet-registration",
+    "text-entry",
+    "save",
+    "reboot",
+    "profile-reload"
+  ],
+  "steps": [
+    {
+      "idle": 1800,
+      "expect": {
+        "movie": "LOGIN.DXR",
+        "frame": 13
+      }
+    },
+    {
+      "sprite": 5,
+      "settle": 600,
+      "expect": {
+        "globals.gloginlist": "[#mountain]"
+      },
+      "label": "profile-selected"
+    },
+    {
+      "sprite": 26,
+      "settle": 600,
+      "expect": {
+        "movie": "INTRO.DXR"
+      }
+    },
+    {
+      "click": [
+        400,
+        400
+      ],
+      "settle": 600,
+      "expect": {
+        "movie": "VORNE.DXR",
+        "save_generation": {
+          "gte": 4
+        }
+      },
+      "label": "wagon-exterior"
+    },
+    {
+      "click": [
+        554,
+        54
+      ],
+      "settle": 600,
+      "expect": {
+        "movie": "TAMAGOTC.DXR",
+        "frame": 185
+      },
+      "label": "dog-name-entry"
+    },
+    {
+      "command": "text 33 REX"
+    },
+    {
+      "sprite": 32,
+      "settle": 600,
+      "expect": {
+        "globals.gtamagotchi": {
+          "contains": "#name:\"REX\""
+        }
+      },
+      "label": "dog-registered"
+    },
+    {
+      "idle": 3600,
+      "expect": {
+        "globals.gtamagotchi": {
+          "contains": "#name:\"REX\""
+        },
+        "movie": "VORNE.DXR",
+        "save_generation": {
+          "gte": 8
+        },
+        "/saves/lz8.usr": {
+          "contains": "REX"
+        }
+      },
+      "label": "pet-saved-on-return"
+    },
+    {
+      "command": "reboot"
+    },
+    {
+      "idle": 1800,
+      "expect": {
+        "movie": "LOGIN.DXR",
+        "/saves/lz8.usr": {
+          "contains": "REX"
+        }
+      },
+      "label": "pet-save-reloaded"
+    },
+    {
+      "sprite": 5,
+      "settle": 600
+    },
+    {
+      "sprite": 26,
+      "settle": 600
+    },
+    {
+      "click": [
+        400,
+        400
+      ],
+      "settle": 600,
+      "expect": {
+        "movie": "VORNE.DXR"
+      }
+    },
+    {
+      "click": [
+        554,
+        54
+      ],
+      "settle": 600,
+      "expect": {
+        "movie": "TS2HUNDE.DXR",
+        "globals.gtamagotchi": {
+          "contains": "#name:\"REX\""
+        }
+      },
+      "label": "pet-name-restored",
+      "observe": {
+        "label": "dog-entry-transition",
+        "sequence": {
+          "frames": 25,
+          "stride_ticks": 4,
+          "max_blank_frames": 25
+        },
+        "audio": {
+          "seconds": 1.4
+        }
+      }
+    }
+  ],
+  "based_on": {
+    "journey_file": "journeys.json",
+    "sha256": "d074266fa47cdde4081358bac89966def68fdfa05fa8221297a3cf944163e065"
+  },
+  "scope_note": "Input-only regression of this registered route; original fidelity and unvisited activities are not inferred.",
+  "observations": {
+    "pet-name-restored": {
+      "sequence": {
+        "frames": 13,
+        "stride_ticks": 5,
+        "max_blank_frames": 0
+      },
+      "audio": {
+        "seconds": 1
+      }
+    }
+  }
+}

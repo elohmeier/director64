@@ -36,4 +36,8 @@ void audio_flash_update(uint32_t id,const dg_flash_audio_t *sound);
 void audio_poll(void);
 // Copies the first active playback failure; decoder errors must reach the UI.
 bool audio_error(char *out, size_t capacity);
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+// Counts the actual post-mix AAudio callback signal, not acoustic speaker output.
+void audio_validation_report(char *out, size_t capacity);
+#endif
 #endif

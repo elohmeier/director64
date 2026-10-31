@@ -1,0 +1,21 @@
+-- Synthetic scalar/list relational comparisons; no game media or scripts.
+global out
+out = new(xtra("fileio"))
+out.createFile("C:\list-relations.txt")
+out.openFile("C:\list-relations.txt", 2)
+cases = [[], [1], [1, 2, 3], [0, 1], [-1, 1], [2, 3], [:], [#a:1, #b:2]]
+repeat with caseNumber = 1 to cases.count
+  values = cases[caseNumber]
+  out.writeString(string([caseNumber, values, values > 0, values < 0, values >= 0, values <= 0, 0 > values, 0 < values, values > 3, values < 3, values = 0]) & RETURN)
+end repeat
+channels = []
+repeat with channelNumber = 1 to 8
+  channels.add(channelNumber)
+end repeat
+selected = 0
+if channels > 0 then
+  selected = channels[1]
+end if
+out.writeString("channel-selection=" & string(selected) & RETURN)
+out.writeString("list-list=" & string([[1, 2] > [0, 1], [1, 2] > [0, 3], [] > []]) & RETURN)
+out.closeFile()

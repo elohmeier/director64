@@ -54,6 +54,10 @@ EXPORTS = (
     "d64_image_loads",
     "d64_rpc",
     "d64_probe_render",
+    "d64_probe_trace",
+    "d64_probe_trace_data",
+    "d64_probe_trace_count",
+    "d64_render_cache",
     "d64_text_field",
     "d64_text_field_rect",
     "d64_text_value",
@@ -77,6 +81,7 @@ SITE_FILES = (
     "index.html",
     "app.js",
     "player.js",
+    "validation.js",
     "ui.js",
     "audio.js",
     "packed.js",
@@ -333,11 +338,28 @@ def emscripten(root: Path, engine: str, command: list[str]) -> None:
 
 
 def build_runtime(game: GameSpec, output: Path, engine: str) -> list[str]:
+    identity = runtime_inputs(game)
+    receipt = output / "runtime-inputs.sha256"
+    receipt.unlink(missing_ok=True)
     (output / "gen").mkdir(parents=True, exist_ok=True)
     (output / "gen/game_profile.h").write_text(profile_header(game))
     command = compile_command(game, output)
     emscripten(game.root, engine, command)
+    if runtime_inputs(game) != identity:
+        raise ValueError("runtime inputs changed during compilation; rebuild the web player")
+    receipt.write_text(identity + "\n")
     return command
+
+
+def runtime_inputs(game: GameSpec) -> str:
+    """Content identity including headers, game switches and Emscripten glue."""
+    from .convert import tree_digest
+
+    paths = ["runtime", "platforms/web", "src/director64/web.py",
+             "third_party/libwebp/src", "third_party/fonts/monogram.ttf",
+             f"games/{game.slug}/game.toml", f"games/{game.slug}/host/source-policy.json",
+             f"games/{game.slug}/runtime", f"games/{game.slug}/probe"]
+    return tree_digest(game.root, paths)
 
 
 def web_policy(game: GameSpec) -> dict:
@@ -532,6 +554,10 @@ def write_pack(source: Path, kind: str, assets: Path) -> dict:
 def build_site(game: GameSpec, runtime: Path, converted: Path, command: list[str]) -> Path:
     """The page, the runtime and the converted game as one static site."""
     root = game.root
+    receipt = runtime / "runtime-inputs.sha256"
+    identity = runtime_inputs(game)
+    if not receipt.is_file() or receipt.read_text().strip() != identity:
+        raise ValueError("compiled runtime is stale; rebuild the web player")
     site = site_path(game)
     if site.exists():
         shutil.rmtree(site)
@@ -580,7 +606,9 @@ def build_site(game: GameSpec, runtime: Path, converted: Path, command: list[str
             "wasm_sha256": sha256(site / "director64.wasm"),
             "flags": [a for a in command if a.startswith(("-s", "-O", "-D"))],
             "abi": abi_digest(root).hex(),
+            "inputs_sha256": identity,
         },
+        "player_sha256": {name: sha256(site / name) for name in (*SITE_FILES, "monogram.ttf")},
         "package": {"file": "game.d64p", "sha256": sha256(site / "game.d64p")},
         "packs": packs,
         "conversion": json.loads((converted / "manifest.json").read_text())["converter"],
@@ -616,11 +644,13 @@ def serve(site: Path, port: int) -> None:
 
 def build(game: GameSpec, reconvert: bool = False) -> Path:
     from . import android
+    from .build_lock import conversion
     game.require_port()
-    converted = android.convert(game, game.work / "converted", reconvert)
-    runtime = game.work / "web"
-    command = build_runtime(game, runtime, container_engine())
-    return build_site(game, runtime, converted, command)
+    with conversion(game):
+        converted = android.convert(game, game.work / "converted", reconvert)
+        runtime = game.work / "web"
+        command = build_runtime(game, runtime, container_engine())
+        return build_site(game, runtime, converted, command)
 
 
 def main(game: GameSpec, argv: list[str]) -> int:

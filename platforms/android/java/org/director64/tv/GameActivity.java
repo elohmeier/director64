@@ -3,6 +3,9 @@ package org.director64.tv;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.BroadcastReceiver;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.hardware.input.InputManager;
@@ -29,6 +32,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 import java.io.File;
 import java.io.InputStream;
+import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.charset.Charset;
 import java.util.regex.Pattern;
@@ -65,6 +69,11 @@ public final class GameActivity extends Activity implements InputManager.InputDe
   private AlertDialog dialog, keyEntry;
   private int mouseButtons;
   private String title;
+  private boolean validation;
+  private String validationBuild;
+  private int validationStatus = -1;
+  private String validationError = "";
+  private BroadcastReceiver validationObserver;
 
   /** The stage, letterboxed to 4:3 on the screen. */
   private static final class Stage extends FrameLayout {
@@ -101,6 +110,21 @@ public final class GameActivity extends Activity implements InputManager.InputDe
       throw new IllegalStateException("this APK holds no game profile", error);
     }
     title = profile.optString("title");
+    // Only the separate .validation APK observes runtime state. Production
+    // intents can never enable it, and this transport accepts no game commands.
+    validation = profile.optBoolean("validation", false)
+        && getPackageName().endsWith(".validation")
+        && (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    validationBuild = profile.optString("validation_build");
+    if (validation) {
+      validationObserver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) { observeIntent(intent); }
+      };
+      IntentFilter filter = new IntentFilter(getPackageName() + ".OBSERVE");
+      if (android.os.Build.VERSION.SDK_INT >= 33)
+        registerReceiver(validationObserver, filter, Context.RECEIVER_EXPORTED);
+      else registerReceiver(validationObserver, filter);
+    }
     int version = profile.optInt("director_version");
     // From Director 7 on, scripts receive keys; ten takes German letters.
     keyboardGame = version >= 700;
@@ -156,9 +180,56 @@ public final class GameActivity extends Activity implements InputManager.InputDe
         started = true;
         Native.surface(currentSurface);
         Native.hold(Native.HOLD_PAUSED, paused);
+        observeIntent(getIntent());
       });
     });
     handler.postDelayed(this::tick, 1000);
+  }
+
+  private void observeIntent(Intent intent) {
+    if (!validation || intent == null
+        || !(getPackageName() + ".OBSERVE").equals(intent.getAction())) return;
+    String token = intent.getStringExtra("token");
+    if (token == null || !token.matches("[a-zA-Z0-9_-]{1,80}")) return;
+    observe(token, 0);
+  }
+
+  private void observe(String token, int attempt) {
+    if (!validation || destroyed) return;
+    String snapshot = started ? Native.validationState() : null;
+    if (snapshot == null && validationStatus < 0 && attempt < 200) {
+      handler.postDelayed(() -> observe(token, attempt + 1), 50);
+      return;
+    }
+    try {
+      JSONObject observation = new JSONObject();
+      observation.put("build_id", validationBuild);
+      observation.put("state", snapshot == null ? JSONObject.NULL : new JSONObject(snapshot));
+      String audio = started ? Native.validationAudio() : null;
+      observation.put("audio", audio == null ? JSONObject.NULL : new JSONObject(audio));
+      observation.put("runtime_status", validationStatus);
+      observation.put("runtime_error", validationError);
+      observation.put("uptime_ms", android.os.SystemClock.uptimeMillis());
+      observation.put("text_entry", textDialog != null && textDialog.isShowing());
+      observation.put("dialog", dialog != null && dialog.isShowing());
+      observation.put("has_surface", currentSurface != null);
+      observation.put("paused", paused);
+      int[] location = new int[2];
+      stage.getLocationOnScreen(location);
+      observation.put("surface", new org.json.JSONArray(new int[] {
+          location[0], location[1], stage.getWidth(), stage.getHeight()}));
+      File directory = new File(getFilesDir(), "validation");
+      if (!directory.isDirectory() && !directory.mkdirs())
+        throw new java.io.IOException("cannot create validation directory");
+      File temporary = new File(directory, token + ".tmp");
+      try (FileOutputStream out = new FileOutputStream(temporary)) {
+        out.write(observation.toString().getBytes(StandardCharsets.UTF_8));
+      }
+      if (!temporary.renameTo(new File(directory, token + ".json")))
+        throw new java.io.IOException("cannot publish validation observation");
+    } catch (Exception error) {
+      android.util.Log.e("director64", "validation observation failed", error);
+    }
   }
 
   private void immersive() {
@@ -211,6 +282,7 @@ public final class GameActivity extends Activity implements InputManager.InputDe
     if (started) { Keys.releaseAll(); pads.release(); }
     started = false;
     handler.removeCallbacksAndMessages(null);
+    if (validationObserver != null) unregisterReceiver(validationObserver);
     if (inputs != null) inputs.unregisterInputDeviceListener(this);
     boolean finishing = isFinishing();
     LIFECYCLE.execute(() -> {
@@ -511,6 +583,8 @@ public final class GameActivity extends Activity implements InputManager.InputDe
     String error = new String(message, WINDOWS_1252);
     handler.post(
         () -> {
+          validationStatus = status;
+          validationError = error;
           if (destroyed || isFinishing()) return;
           if (dialog != null && dialog.isShowing()) dialog.dismiss();
           AlertDialog.Builder builder =

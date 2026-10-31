@@ -87,6 +87,23 @@ static host_pad_t pads[PORTS];
 static host_pointer_t mouse = {.current = {.x = WIDTH / 2, .y = HEIGHT / 2}};
 static host_commands_t commands;
 static char input_failure[160], diagnostics[256];
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+// The engine owner publishes observations; the UI never calls the interpreter.
+// This is absent from production libraries and exposes no state-changing RPC.
+static char *validation_snapshot;
+const char *d64_rpc(const char *command);
+
+static void validation_publish(void) {
+  const char *snapshot = d64_rpc("state");
+  if (!snapshot)
+    return;
+  char *copy = strdup(snapshot);
+  pthread_mutex_lock(&state);
+  free(validation_snapshot);
+  validation_snapshot = copy;
+  pthread_mutex_unlock(&state);
+}
+#endif
 static unsigned surface_generation;
 static char save_path[512];
 static jobject asset_manager;
@@ -475,6 +492,9 @@ static void *game(void *arg) {
   pthread_mutex_unlock(&state);
   video_init(&videos);
   unsigned seed = (unsigned)(now() * 1e6) ^ (unsigned)getpid() * 2654435761u;
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+  seed = 42; // Repeatable port observations; original projector seeds are unobserved.
+#endif
   d64_boot(seed);
   const char *failure = d64_error();
   if (*failure) {
@@ -486,6 +506,9 @@ static void *game(void *arg) {
   unsigned window_sequence = 0;
   unsigned steps = 0, renders = 0, printed = 0, injected[3], injections = 0;
   bool redraw = true, held = false;
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+  double observed_at = 0;
+#endif
   for (;;) {
     pthread_mutex_lock(&state);
     while (!quitting && holds && !input_failure[0]) {
@@ -674,6 +697,12 @@ static void *game(void *arg) {
       renders++;
       redraw = false;
     }
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+    if (now() - observed_at >= 0.1) {
+      validation_publish();
+      observed_at = now();
+    }
+#endif
     t = now();
     pthread_mutex_lock(&state);
     bool active_window = !holds && !reset_clock;
@@ -765,6 +794,10 @@ JNIEXPORT void NATIVE(start)(JNIEnv *env, jclass cls, jobject owner,
   entry_sprite = 0;
   pthread_mutex_lock(&state);
   diagnostics[0] = input_failure[0] = 0;
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+  free(validation_snapshot);
+  validation_snapshot = NULL;
+#endif
   memset(&commands, 0, sizeof(commands));
   holds = HOLD_PAUSED | HOLD_SURFACE;
   quitting = false;
@@ -946,4 +979,31 @@ JNIEXPORT jstring NATIVE(diagnostics)(JNIEnv *env, jclass cls) {
   snprintf(copy, sizeof(copy), "%s", diagnostics);
   pthread_mutex_unlock(&state);
   return (*env)->NewStringUTF(env, copy);
+}
+
+JNIEXPORT jstring NATIVE(validationState)(JNIEnv *env, jclass cls) {
+  (void)cls;
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+  pthread_mutex_lock(&state);
+  jstring result = validation_snapshot
+                       ? (*env)->NewStringUTF(env, validation_snapshot)
+                       : NULL;
+  pthread_mutex_unlock(&state);
+  return result;
+#else
+  (void)env;
+  return NULL;
+#endif
+}
+
+JNIEXPORT jstring NATIVE(validationAudio)(JNIEnv *env, jclass cls) {
+  (void)cls;
+#ifdef DIRECTOR64_ANDROID_VALIDATION
+  char snapshot[512];
+  audio_validation_report(snapshot, sizeof(snapshot));
+  return (*env)->NewStringUTF(env, snapshot);
+#else
+  (void)env;
+  return NULL;
+#endif
 }

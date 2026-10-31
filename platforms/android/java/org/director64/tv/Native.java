@@ -38,4 +38,10 @@ final class Native {
   static native void volume(float level);
 
   static native String diagnostics();
+
+  /** A worker-published observation in the isolated validation build; null in production. */
+  static native String validationState();
+
+  /** Signal counters from the AAudio callback; null in production. */
+  static native String validationAudio();
 }

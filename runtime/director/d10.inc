@@ -2049,6 +2049,16 @@ static bool d10_call(dg_runtime_t *d, const char *name, unsigned argc,
     // The authored path ends "...\voc\NAME.aif"; the converted stream is the
     // virtual "folder/stem" wav64. Never interpret the path as a host path.
     const char *path = lv_cstr(r, a[1]);
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+    // LZ8 clears a heading name on a repeated page, then still calls
+    // playFile("@:Sounds:" & EMPTY). Original 8.5.1r104 under Wine leaves
+    // existing playback alone for an empty filename or a directory path
+    // (stream-empty[-control].lingo). Keep named missing-media diagnostics.
+    size_t path_length = strlen(path);
+    if (!path_length || path[path_length - 1] == ':' ||
+        path[path_length - 1] == '/' || path[path_length - 1] == '\\')
+      return true;
+#endif
     char virtual_name[192];
 #ifdef DIRECTOR64_STREAM_PATHS
 #define STREAM_TEXT(x) #x

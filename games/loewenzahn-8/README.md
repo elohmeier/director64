@@ -14,5 +14,16 @@ uv run --locked director64 web --game loewenzahn-8 --serve
 serial. `[player]` saves the `.usr` preferences file, which the game writes
 through the vList Xtra.
 
-Known gap: the Tamagotchi dog's animations are linked Shockwave movies
-played inside a sprite, which draw nothing yet.
+The `login-dog-registration` journey exercises registration, the save on
+return, reboot and restored dog state. The opt-in [invariant model](invariants.json)
+adds conditional checks for this named route; see the
+[model invocation](../../docs/fuzzing.md#conditional-game-models).
+
+Pet reminders use the authored `Tamagotchi/sounds` folder name even after the
+player leaves the activity. The stream pack preserves verified Joliet names
+and the disc's primary names, including `TAMAGOTC/SOUNDS`. This also preserves
+the underscore spelling of the dog-word and sailing narration filenames;
+longer fuzz replays caught both folder and filename lookup failures.
+
+The dog's linked Shockwave animations still need scene-by-scene original-engine
+comparison. The registered route establishes entry and saved state.

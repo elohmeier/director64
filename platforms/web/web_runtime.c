@@ -50,7 +50,38 @@ static wc_t compositor;
 static web_host_t host;
 static bool booted;
 static bool probe_render;
+static bool probe_trace;
+static uint64_t *probe_frames;
+static unsigned probe_frame_count, probe_frame_capacity;
 EMSCRIPTEN_KEEPALIVE void d64_probe_render(int enabled) { probe_render = enabled != 0; }
+// Opt-in per-service-frame checksums catch transient corruption that heals
+// before a multi-tick input command returns. No storage is kept in play mode.
+EMSCRIPTEN_KEEPALIVE void d64_probe_trace(int enabled) {
+  probe_trace = enabled != 0;
+  probe_frame_count = 0;
+  if (!enabled) { free(probe_frames); probe_frames = NULL; probe_frame_capacity = 0; }
+}
+EMSCRIPTEN_KEEPALIVE const uint64_t *d64_probe_trace_data(void) { return probe_frames; }
+EMSCRIPTEN_KEEPALIVE unsigned d64_probe_trace_count(void) { return probe_frame_count; }
+static void probe_sample(void) {
+  if (!probe_trace) return;
+  if (probe_frame_count == probe_frame_capacity) {
+    unsigned capacity = probe_frame_capacity ? probe_frame_capacity * 2 : 64;
+    if (capacity > 100000) capacity = 100000;
+    if (probe_frame_count == capacity) { lv_fail(&values, "probe frame trace limit exceeded"); return; }
+    uint64_t *frames = realloc(probe_frames, capacity * sizeof(*frames));
+    if (!frames) { lv_fail(&values, "probe frame trace allocation failed"); return; }
+    probe_frames = frames; probe_frame_capacity = capacity;
+  }
+  uint64_t hash = UINT64_C(14695981039346656037);
+  for (size_t i = 0; i < (size_t)WC_WIDTH * WC_HEIGHT; i++) {
+    hash ^= compositor.pixels[i]; hash *= UINT64_C(1099511628211);
+  }
+  probe_frames[probe_frame_count++] = hash;
+}
+EMSCRIPTEN_KEEPALIVE void d64_render_cache(int enabled) {
+  wc_cache_enabled(&compositor, enabled != 0);
+}
 static unsigned seed;
 static float served_gain[DG_SOUND_CHANNELS];
 // The 128 KiB save image, erased. The host fills it from durable storage
@@ -872,8 +903,10 @@ static void quoted(const char *text) {
 // The names the games' state lines use for this runtime's services.
 #define busy sound_busy
 #define native_cursor_bitmap(v, m, mask, out) wc_cursor_bitmap(&compositor, v, m, mask, out)
+#define state raw_state
 #include "state_keys.inc"
 #include "state.inc"
+#undef state
 #undef busy
 #undef native_cursor_bitmap
 #undef printf
@@ -881,7 +914,7 @@ static void quoted(const char *text) {
 #undef puts
 #undef fflush
 #else
-static void state(void) {
+static void raw_state(void) {
   static char text[16384];
   emit("{\"movie\":");
   quoted(director.movie ? director.movie->code->name : "");
@@ -953,25 +986,7 @@ static void state(void) {
   emit("},\"save_generation\":%u}\n", game_save_generation());
 }
 #endif
-static void point(unsigned sprite) {
-  int l, t, r, b;
-  dg_bounds(&director, sprite, &l, &t, &r, &b);
-  int cx = (l + r) / 2, cy = (t + b) / 2;
-  if (cx >= 8 && cx < 630 && cy >= 8 && cy < 470 &&
-      dg_mouse_hit(&director, cx, cy) == sprite) {
-    emit("{\"point\":[%d,%d],\"error\":\"\"}\n", cx, cy);
-    return;
-  }
-  for (int spacing = 8; spacing >= 1; spacing /= 8)
-    for (int yy = t; yy < b; yy += spacing)
-      for (int xx = l; xx < r; xx += spacing)
-        if (xx >= 8 && xx < 630 && yy >= 8 && yy < 470 &&
-            dg_mouse_hit(&director, xx, yy) == sprite) {
-          emit("{\"point\":[%d,%d],\"error\":\"\"}\n", xx, yy);
-          return;
-        }
-  emit("{\"point\":null,\"error\":\"\"}\n");
-}
+#include "probe_state.inc"
 // Runs one protocol command and returns everything it printed: ENTER lines
 // for movies it entered, then the resulting state (or point) as one JSON line.
 // An empty command boots with the given seed and reports the first state.
@@ -1086,7 +1101,7 @@ EMSCRIPTEN_KEEPALIVE const char *d64_rpc(const char *command) {
       pointer_update(&pointer, &director, &sample);
       const input_state_t *in = &pointer_driver(&pointer)->input;
       bool ok = step(in->x / INPUT_ONE, in->y / INPUT_ONE, !!(in->held & INPUT_A));
-      if (probe_render) d64_render(0, 0, 0);
+      if (probe_render) { d64_render(0, 0, 0); probe_sample(); }
       if (!ok || values.failed) break;
     }
   } else if (sscanf(command, "point %u", &sprite) == 1 && sprite > 0 &&
@@ -1097,7 +1112,7 @@ EMSCRIPTEN_KEEPALIVE const char *d64_rpc(const char *command) {
              ticks <= 100000) {
     for (unsigned i = 0; i < ticks && !values.failed && !director.quit; i++) {
       bool ok = step(x, y, (unsigned)down);
-      if (probe_render) d64_render(0, 0, 0);
+      if (probe_render) { d64_render(0, 0, 0); probe_sample(); }
       if (!ok || values.failed) break;
     }
 #if DG_CAP_KEYBOARD

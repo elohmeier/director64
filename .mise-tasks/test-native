@@ -19,6 +19,24 @@ for budget in default override; do
     compile "runtime_budget_$budget" "${options[@]}" tests/native/test_runtime_budget.c
 done
 compile lingo tests/native/test_lingo.c runtime/lingo/lingo_runtime.c
+compile director_d85_blend -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 \
+    -DDIRECTOR64_D85=1 tests/native/test_director_d85_blend.c \
+    runtime/director/director.c runtime/lingo/lingo_runtime.c
+compile lingo_d85_order -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 \
+    -DDIRECTOR64_D85=1 tests/native/test_lingo_d85_order.c runtime/lingo/lingo_runtime.c
+for paths in fallback virtual; do
+    options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1)
+    if [ "$paths" = virtual ]; then
+        options+=(-DDIRECTOR64_STREAM_PATHS=1 -DDIRECTOR64_MEDIA_ROOT=DATA)
+    fi
+    compile "stream_empty_d85_$paths" "${options[@]}" tests/native/test_stream_empty.c \
+        runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
+for stage in 0 1; do
+    compile "probe_state_$stage" -DDIRECTOR64_NATIVE_STAGE="$stage" \
+        -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -Iplatforms/web \
+        tests/native/test_probe_state.c runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
 for profile in 5 6 6e 7 8 10 85; do
     version="$profile"
     options=()
@@ -46,6 +64,12 @@ for host in video mixer; do
         -Itests/native/android_stubs -ffunction-sections -fdata-sections -Wl,--gc-sections \
         -pthread "tests/native/test_android_$host.c"
 done
+compile android_validation_audio -DDIRECTOR64_DIRECTOR_VERSION=5 -Iplatforms/web \
+    -Itests/native/android_stubs -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -pthread tests/native/test_android_validation_audio.c
+compile android_audio_output -DDIRECTOR64_DIRECTOR_VERSION=5 -Iplatforms/web \
+    -Itests/native/android_stubs -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -pthread tests/native/test_android_audio_output.c
 for profile in d5 d10 d85; do
     options=(-DDIRECTOR64_NATIVE_STAGE=1)
     if [ "$profile" = d5 ]; then
@@ -151,6 +175,10 @@ compile flash_audio_hosts -Iplatforms/web -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIR
 # D5/D6/D8 contract; test_director_d10.c covers the versioned behavior instead.
 compile director_d10_frame_events -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_director_d6_frame_events.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile web_compositor -Iplatforms/web tests/native/test_web_compositor.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+compile d7_blend_matte -DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1 \
+    -DDIRECTOR64_FULL_ENGINE=1 -DDIRECTOR64_NATIVE_STAGE=1 -Iplatforms/web \
+    tests/native/test_d7_blend_matte.c platforms/web/compositor.c \
+    runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
 compile shape_palette_d6_plain -Iplatforms/web tests/native/test_shape_palette.c platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
 for profile in 5 6 7 8 10 85; do
     palette_options=(-DDIRECTOR64_DIRECTOR_VERSION="$profile")
@@ -197,6 +225,9 @@ for profile in d10 d85; do
     fi
     compile "web_render_cache_$profile" "${options[@]}" -Iplatforms/web \
         tests/native/test_web_render_cache.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+    compile "web_metamorphic_$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_web_metamorphic.c platforms/web/compositor.c \
         runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
     compile "web_flash_text_hit_$profile" "${options[@]}" -Iplatforms/web \
         tests/native/test_web_flash_text_hit.c platforms/web/compositor.c \

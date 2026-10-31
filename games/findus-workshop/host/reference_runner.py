@@ -19,11 +19,13 @@ import sys
 import time
 import uuid
 from datetime import UTC, datetime
+from itertools import product
 from pathlib import Path
 
 SCHEMA = 1
 IDENTIFIER = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,95}\Z")
 INTERRUPT_ERRORS = (subprocess.TimeoutExpired, KeyboardInterrupt)
+MAX_DISC_PATH_VARIANTS = 256
 
 
 def digest(path: Path) -> str:
@@ -35,7 +37,7 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def read_replay(path: Path) -> dict:
+def read_replay(path: Path, stage: tuple[int, int] = (640, 480)) -> dict:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or set(value) != {
         "schema_version",
@@ -83,13 +85,16 @@ def read_replay(path: Path) -> dict:
         if kind == "pointer":
             if any(type(action.get(k)) is not int for k in ("x", "y")):
                 raise ValueError("pointer x/y must be integers")
-            if not 0 <= action["x"] < 640 or not 0 <= action["y"] < 480:
-                raise ValueError("pointer must remain within 640x480")
+            if not 0 <= action["x"] < stage[0] or not 0 <= action["y"] < stage[1]:
+                raise ValueError(f"pointer must remain within {stage[0]}x{stage[1]}")
         elif kind in {"button_down", "button_up"}:
             if action.get("button") not in ("left", "right"):
                 raise ValueError("button must be left or right")
         elif kind == "key":
-            if action.get("key") not in ("Return", "Escape", "space", "Tab"):
+            key = action.get("key")
+            if not isinstance(key, str) or not (key in (
+                "Return", "Escape", "space", "Tab", "BackSpace", "Left", "Right", "Up", "Down"
+            ) or re.fullmatch(r"[a-zA-Z0-9]", key)):
                 raise ValueError("unsupported key")
         elif kind == "checkpoint":
             identifier = action.get("id", "")
@@ -114,19 +119,47 @@ def command(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
 def capture(args: argparse.Namespace) -> int:
     # Host-only import: the isolated Python 3.11 container runs _capture, and
     # deliberately has no access to the repository's host conversion package.
-    from director64.iso import extract
+    from director64.media import extract_source
     from director64.project import GameSpec
+    from director64.reference import layout_for
 
-    game_spec = GameSpec.load("findus-workshop")
+    game_spec = GameSpec.load(args.game, args.edition)
     game_spec.activate()
-    replay_path = (args.replay or game_spec.directory / "tests/reference/boot.json").resolve()
-    replay = read_replay(replay_path)
-    source = (args.source or game_spec.work / "extracted").resolve(strict=True)
+    source = (args.source or game_spec.work / "extracted").resolve()
     iso = (args.iso or game_spec.media).resolve(strict=True)
-    extract(iso, source, expected_sha256=game_spec.image["sha256"])
-    for relative in ("ANNAT/PETT16.EXE", "ANNAT/DATA/FILEIO.DLL", "POFMEDIA/GINTRO.DXR"):
-        if not (source / relative).is_file():
-            raise ValueError(f"original source file missing: {relative}")
+    if iso != game_spec.media.resolve():
+        raise ValueError("--iso must identify the selected, hash-pinned game image")
+    extract_source(game_spec, source)
+    inventory = None
+    if game_spec.source["kind"] == "iso9660":
+        from director64.iso import inventory_report
+
+        with iso.open("rb") as handle:
+            inventory = inventory_report(handle)
+    layout = layout_for(game_spec, source, iso=iso, windows_version=args.windows_version,
+                        inventory=inventory)
+    experiment_source = None
+    if args.experiment:
+        if not IDENTIFIER.fullmatch(args.experiment):
+            raise ValueError("experiment must name a tools/reference synthetic Lingo probe")
+        probe = game_spec.root / "tools/reference" / (args.experiment + ".lingo")
+        experiment_source = probe.read_text(encoding="ascii")
+        match = re.search(r'out\.createFile\("C:\\([a-z-]+\.txt)"\)', experiment_source)
+        if not match or "out.closeFile()" not in experiment_source:
+            raise ValueError("experiment must write and close a named synthetic C:\\ result")
+        layout["experiment"] = {"name": args.experiment, "result": match[1],
+                                "source_sha256": digest(probe)}
+    if inventory:
+        layout["aliases"] = inventory.get("aliases", {})
+    replay_path = (args.replay or game_spec.directory / "tests/reference/boot.json").resolve()
+    if not args.replay and not replay_path.is_file():
+        replay_path = game_spec.work / "reference" / "inputs" / "boot.json"
+        replay_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(replay_path, {
+            "schema_version": 1, "id": f"{game_spec.slug}-boot", "clock": "host_monotonic_ms",
+            "duration_ms": 15_000, "actions": [
+                {"at_ms": 10_000, "type": "checkpoint", "id": "boot"}]})
+    replay = read_replay(replay_path, tuple(layout["stage"]))
     output = (
         args.output
         or game_spec.work
@@ -140,6 +173,11 @@ def capture(args: argparse.Namespace) -> int:
         )
     output.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(replay_path, output / "replay.json")
+    write_json(output / "layout.json", layout)
+    if layout.get("optical_drive"):
+        prepare_optical_source(source, output / "disc", layout)
+    if experiment_source is not None:
+        (output / "experiment.lingo").write_text(experiment_source, encoding="ascii")
     runner_directory = output / "runner"
     runner_directory.mkdir()
     shutil.copyfile(Path(__file__), runner_directory / "reference_runner.py")
@@ -162,10 +200,14 @@ def capture(args: argparse.Namespace) -> int:
             "image_id": image["Id"],
             "image_name": args.image,
             "script_sha256": digest(runner_directory / "reference_runner.py"),
+            "container_init": True,
             "windows_version": args.windows_version,
-            "display": {"width": 640, "height": 480, "depth": 24},
+            "display": {"width": layout["stage"][0], "height": layout["stage"][1], "depth": 24},
         },
         "source": {"iso_sha256": digest(iso), "files": source_hashes},
+        "game": game_spec.slug,
+        "declared_director_version": game_spec.data["port"]["director_version"],
+        "layout": layout,
         "replay": {"id": replay["id"], "sha256": digest(replay_path)},
         "limitations": [
             "Wine is not qualified as equivalent to the original supported Windows runtime.",
@@ -180,6 +222,7 @@ def capture(args: argparse.Namespace) -> int:
         (os.environ.get("DOCKER") or "docker"),
         "run",
         "--rm",
+        "--init",
         "--name",
         container,
         "--network",
@@ -206,16 +249,22 @@ def capture(args: argparse.Namespace) -> int:
         "PULSE_SINK=reference",
         "--env",
         "PULSE_SOURCE=reference.monitor",
+        "--env",
+        "OMP_NUM_THREADS=1",
+        "--env",
+        "MAGICK_THREAD_LIMIT=1",
         "--volume",
         f"{source}:/media/findus:ro",
         "--volume",
         f"{runner_directory}:/runner:ro",
         "--volume",
         f"{output}:/session",
-        image["Id"],
-        "--windows-version",
-        args.windows_version,
     ]
+    if layout.get("optical_drive"):
+        argv += ["--volume", f"{output / 'disc'}:/media/disc:ro"]
+        if layout["optical_drive"]["raw_image"]:
+            argv += ["--volume", f"{iso}:/media/original.iso:ro"]
+    argv += [image["Id"], "--windows-version", args.windows_version]
     try:
         with (output / "container.log").open("w") as log:
             result = subprocess.run(
@@ -246,6 +295,10 @@ def capture(args: argparse.Namespace) -> int:
             },
         )
     print(output / "capture.json")
+    if args.experiment and not result.returncode:
+        from director64.reference import compare_experiment
+
+        return compare_experiment(game_spec, args.experiment, output)
     return result.returncode
 
 
@@ -266,6 +319,138 @@ def visible_windows() -> list[dict]:
     return windows
 
 
+def loaded_modules() -> dict:
+    """Hash mapped playback engines as well as their thin launcher."""
+    modules = {}
+    for process in Path("/proc").glob("[0-9]*"):
+        try:
+            maps = (process / "maps").read_text()
+        except (OSError, UnicodeError):
+            continue
+        if not any(name in maps.lower() for name in ("dirapi.dll", "iml32.dll")):
+            continue
+        for row in maps.splitlines():
+            fields = row.split(None, 5)
+            if len(fields) != 6:
+                continue
+            path = Path(fields[5])
+            if (path.name.lower() not in ("dirapi.dll", "iml32.dll", "proj.dll")
+                    and path.suffix.lower() != ".exe"):
+                continue
+            if str(path) in modules or not path.is_file():
+                continue
+            data = path.read_bytes()
+            strings = [s.decode("utf-16le") for s in re.findall(rb"(?:[\x20-\x7e]\x00){5,}", data)]
+            versions = [strings[i + 1] for i, s in enumerate(strings[:-1]) if s == "FileVersion"]
+            modules[str(path)] = {"sha256": digest(path), "file_versions": sorted(set(versions))}
+    return modules
+
+
+def install_aliases(root: Path, aliases: dict) -> None:
+    """Present verified long/short component combinations inside a private copy."""
+    root = root.resolve()
+    for long_name, short_name in sorted(aliases.items()):
+        parts = Path(long_name).parts
+        short_parts = Path(short_name).parts
+        if (not parts or not short_parts
+                or Path(long_name).is_absolute() or Path(short_name).is_absolute()
+                or ".." in parts or ".." in short_parts
+                or any(c in name for name in (long_name, short_name) for c in ("\\", ":", "\0"))):
+            raise ValueError("disc alias escapes installed source")
+        source = root / short_name
+        if not source.resolve().is_relative_to(root):
+            raise ValueError("disc alias source escapes installed source")
+        if not source.is_file():
+            raise ValueError(f"disc alias source is absent: {short_name}")
+        candidates = [parts]
+        if len(parts) == len(short_parts):
+            choices, variants = [], 1
+            for pair in zip(parts, short_parts, strict=True):
+                names = {}
+                for name in pair:
+                    names.setdefault(name.casefold(), name)
+                choices.append(tuple(names.values()))
+                variants *= len(names)
+                if variants > MAX_DISC_PATH_VARIANTS:
+                    raise ValueError(f"disc alias needs more than {MAX_DISC_PATH_VARIANTS} "
+                                     f"mixed-name variants: {short_name} -> {long_name}")
+            candidates = product(*choices)
+        source_hash = None
+        for candidate in candidates:
+            parent = root
+            for name in candidate[:-1]:
+                matches = [p for p in parent.iterdir() if p.name.casefold() == name.casefold()]
+                if len(matches) > 1:
+                    raise ValueError(f"conflicting disc alias parents: {parent / name}")
+                parent = matches[0] if matches else parent / name
+                if not parent.resolve().is_relative_to(root):
+                    raise ValueError("disc alias parent escapes installed source")
+                if matches and not parent.is_dir():
+                    raise ValueError(f"conflicting disc alias parent: {parent}")
+                parent.mkdir(exist_ok=True)
+            matches = [p for p in parent.iterdir()
+                       if p.name.casefold() == candidate[-1].casefold()]
+            for target in matches:
+                if not target.resolve().is_relative_to(root):
+                    raise ValueError("disc alias target escapes installed source")
+                if not target.is_file() or target.stat().st_size != source.stat().st_size:
+                    raise ValueError(f"conflicting disc alias target: {target} -> {source}")
+                if not target.samefile(source):
+                    if source_hash is None:
+                        source_hash = digest(source)
+                    if digest(target) != source_hash:
+                        raise ValueError(f"conflicting disc alias target: {target} -> {source}")
+            if not matches:
+                (parent / candidate[-1]).symlink_to(os.path.relpath(source, parent))
+
+
+def prepare_optical_source(source: Path, output: Path, layout: dict) -> None:
+    """A private CD namespace; the container mounts this copy read-only."""
+    optical = layout["optical_drive"]
+    if (not re.fullmatch(r"[D-Y]", optical.get("letter", ""))
+            or not re.fullmatch(r"[0-9a-f]{8}", optical.get("serial_hex", ""))
+            or optical.get("type") != "cdrom"
+            or optical.get("serial_algorithm") != "wine-8.0-iso9660-descriptor-checksum"
+            or type(optical.get("raw_image")) is not bool
+            or not isinstance(optical.get("label"), str)
+            or not optical["label"]
+            or any(ord(c) < 32 for c in optical["label"])):
+        raise ValueError("invalid source-derived optical drive metadata")
+    shutil.copytree(source, output)
+    install_aliases(output, layout.get("aliases", {}))
+    (output / ".windows-label").write_text(optical["label"] + "\n", encoding="utf-8")
+    (output / ".windows-serial").write_text(optical["serial_hex"] + "\n", encoding="ascii")
+
+
+def map_optical_drive(dosdevices: Path, optical: dict, *, mount: Path = Path("/media/disc"),
+                      image: Path = Path("/media/original.iso")) -> None:
+    """Map only the declared optical letter inside a private Wine prefix."""
+    letter = optical.get("letter", "")
+    if not re.fullmatch(r"[D-Y]", letter) or type(optical.get("raw_image")) is not bool:
+        raise ValueError("invalid optical drive mapping")
+    if not mount.is_dir() or (optical["raw_image"] and not image.is_file()):
+        raise ValueError("original optical drive backing is absent")
+    for name, target in ((letter.lower() + ":", mount),
+                         (letter.lower() + "::", image if optical["raw_image"] else None)):
+        link = dosdevices / name
+        if link.exists() or link.is_symlink():
+            if not link.is_symlink():
+                raise ValueError(f"optical mapping would replace a non-link: {link}")
+            link.unlink()
+        if target:
+            link.symlink_to(target)
+
+
+def installed_file(root: Path, name: str) -> Path:
+    path = root
+    for part in Path(name).parts:
+        matches = [p for p in path.iterdir() if p.name.casefold() == part.casefold()]
+        path = matches[0] if matches else path / part
+        if part != Path(name).parts[-1]:
+            path.mkdir(exist_ok=True)
+    return path
+
+
 def stop(process: subprocess.Popen, graceful: bool = False) -> None:
     if process.poll() is not None:
         return
@@ -279,7 +464,9 @@ def stop(process: subprocess.Popen, graceful: bool = False) -> None:
 
 def container_capture(args: argparse.Namespace) -> int:
     session = Path("/session")
-    replay = read_replay(session / "replay.json")
+    layout = json.loads((session / "layout.json").read_text())
+    width, height = layout["stage"]
+    replay = read_replay(session / "replay.json", (width, height))
     processes = []
     logs = []
     checkpoints = []
@@ -301,7 +488,8 @@ def container_capture(args: argparse.Namespace) -> int:
     try:
         for directory in ("runtime", "cache", "config"):
             (session / directory).mkdir(mode=0o700)
-        launch(["Xvfb", ":99", "-screen", "0", "640x480x24", "-nolisten", "tcp"], "xvfb.log")
+        launch(["Xvfb", ":99", "-screen", "0", f"{width}x{height}x24", "-nolisten", "tcp"],
+               "xvfb.log")
         deadline = time.monotonic() + 10
         while not Path("/tmp/.X11-unix/X99").exists():
             if time.monotonic() > deadline:
@@ -323,14 +511,40 @@ def container_capture(args: argparse.Namespace) -> int:
             ],
             timeout=30,
         )
-        game = session / "wine" / "drive_c" / "Findus"
-        game.mkdir()
-        shutil.copy2("/media/findus/ANNAT/PETT16.EXE", game / "Findus.exe")
-        shutil.copytree("/media/findus/ANNAT/DATA", game / "DATA")
+        installed = session / "wine" / "drive_c" / "Original"
+        if layout["install"] == "workshop":
+            installed.mkdir()
+            shutil.copy2("/media/findus/ANNAT/PETT16.EXE", installed / "Findus.exe")
+            shutil.copytree("/media/findus/ANNAT/DATA", installed / "DATA")
+        else:
+            shutil.copytree("/media/findus", installed)
+            install_aliases(installed, layout.get("aliases", {}))
+        game = installed / layout["cwd"]
+        for name, content in layout["files"].items():
+            target = installed_file(game, name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="cp1252")
+        if layout.get("experiment"):
+            body = (session / "experiment.lingo").read_text(encoding="ascii")
+            close = body.rfind("out.closeFile()")
+            body = (body[:close] + 'out.writeString("DIRECTOR64_PROBE_COMPLETE" & RETURN)\n'
+                    + body[close:])
+            installed_file(game, "LINGO.INI").write_bytes(
+                ("on startup\n" + body + "\nend\n").replace("\n", "\r").encode("ascii"))
+        fonts = session / "wine" / "drive_c" / "windows" / "Fonts"
+        for path in installed.rglob("*"):
+            if path.is_file() and path.suffix.lower() in {".ttf", ".otf"}:
+                shutil.copy2(path, fonts / path.name)
         result["initial_save_hashes"] = {
             path.name: digest(path) for path in sorted((game / "DATA").glob("*.TXT"))
         }
-        (session / "wine" / "dosdevices" / "d:").symlink_to("/media/findus")
+        if layout.get("optical_drive"):
+            optical = layout["optical_drive"]
+            map_optical_drive(session / "wine/dosdevices", optical)
+            command(["wine", "reg", "add", r"HKLM\Software\Wine\Drives", "/v",
+                     optical["letter"].lower() + ":", "/d", "cdrom", "/f"], timeout=30)
+        else:
+            (session / "wine" / "dosdevices" / "d:").symlink_to("/media/findus")
         pulse = launch(
             [
                 "pulseaudio",
@@ -362,6 +576,23 @@ def container_capture(args: argparse.Namespace) -> int:
             ],
             timeout=30,
         )
+        if layout.get("optical_drive"):
+            # Re-enumerate private-prefix devices after setting their type and
+            # raw image mapping. No retail process has been launched yet.
+            stopped_server = subprocess.run(["wineserver", "-k"], timeout=15,
+                                            capture_output=True, text=True, check=False)
+            # Wine's idle server may already have exited after the registry
+            # clients. Exit 1 with no diagnostics means there is no server.
+            if stopped_server.returncode not in {0, 1} or stopped_server.stderr.strip():
+                raise RuntimeError("private Wine server could not restart: "
+                                   + stopped_server.stderr.strip())
+            command(["wineserver", "-w"], timeout=15)
+            command(["wineboot", "-u"], timeout=90)
+            volume = command(["wine", "cmd", "/c", "vol", optical["letter"] + ":"], timeout=30)
+            result["optical_drive"] = {**optical, "volume_information": volume.stdout.strip(),
+                                       "server_stop_code": stopped_server.returncode,
+                                       "namespace_readonly": True,
+                                       "raw_image_readonly": optical["raw_image"]}
         recorder = launch(
             [
                 "ffmpeg",
@@ -374,7 +605,7 @@ def container_capture(args: argparse.Namespace) -> int:
                 "-f",
                 "x11grab",
                 "-video_size",
-                "640x480",
+                f"{width}x{height}",
                 "-framerate",
                 "30",
                 "-i",
@@ -391,6 +622,8 @@ def container_capture(args: argparse.Namespace) -> int:
                 "reference.monitor",
                 "-c:v",
                 "ffv1",
+                "-threads",
+                "2",
                 "-level",
                 "3",
                 "-pix_fmt",
@@ -404,7 +637,8 @@ def container_capture(args: argparse.Namespace) -> int:
         time.sleep(0.5)
         if recorder.poll() is not None:
             raise RuntimeError("lossless recorder failed to start; inspect ffmpeg.log")
-        launch(["wine", r"C:\Findus\Findus.exe"], "wine.log", cwd=game)
+        launcher = "C:\\Original\\" + layout["launcher"].replace("/", "\\")
+        launch(["wine", launcher], "wine.log", cwd=game)
         epoch = time.monotonic()
         result["tools"] = {
             name: command(argv).stdout.splitlines()[0]
@@ -444,6 +678,7 @@ def container_capture(args: argparse.Namespace) -> int:
                         "semantic_status": "unobserved",
                     }
                 )
+                result["loaded_modules"] = {**result.get("loaded_modules", {}), **loaded_modules()}
             performed.append({**action, "actual_at_ms": actual})
         delay = epoch + replay["duration_ms"] / 1000 - time.monotonic()
         if delay > 0:
@@ -468,8 +703,8 @@ def container_capture(args: argparse.Namespace) -> int:
         )
         video = next(item for item in probe["streams"] if item["codec_type"] == "video")
         audio = next(item for item in probe["streams"] if item["codec_type"] == "audio")
-        if (video["codec_name"], video["width"], video["height"]) != ("ffv1", 640, 480):
-            raise RuntimeError("capture must contain lossless 640x480 FFV1 video")
+        if (video["codec_name"], video["width"], video["height"]) != ("ffv1", width, height):
+            raise RuntimeError(f"capture must contain lossless {width}x{height} FFV1 video")
         if audio["codec_name"] != "pcm_s16le" or int(video["nb_read_frames"]) < 1:
             raise RuntimeError("capture must contain decoded video and PCM audio")
         command(
@@ -487,6 +722,17 @@ def container_capture(args: argparse.Namespace) -> int:
             ]
         )
         write_json(session / "media.json", probe)
+        if layout.get("experiment"):
+            observed = session / "wine/drive_c" / layout["experiment"]["result"]
+            if not observed.is_file():
+                raise RuntimeError("original engine produced no synthetic experiment result")
+            contents = observed.read_text(encoding="ascii")
+            if "DIRECTOR64_PROBE_COMPLETE" not in contents:
+                raise RuntimeError("original synthetic experiment did not complete")
+            (session / "experiment-result.txt").write_text(
+                contents.replace("DIRECTOR64_PROBE_COMPLETE\n", ""), encoding="ascii")
+            result["experiment_complete"] = True
+            result["experiment"] = layout["experiment"]
         result.update(
             {
                 "capture_complete": True,
@@ -507,7 +753,7 @@ def container_capture(args: argparse.Namespace) -> int:
             log.close()
         result["checkpoints"] = checkpoints
         result["actions"] = performed
-        data = session / "wine" / "drive_c" / "Findus" / "DATA"
+        data = session / "wine" / "drive_c" / "Original" / "DATA"
         result["final_save_hashes"] = {
             path.name: digest(path) for path in sorted(data.glob("*.TXT"))
         }
@@ -524,6 +770,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="operation", required=True)
     host = sub.add_parser("capture", help="run a new capture with a fresh private Wine prefix")
+    host.add_argument("--game", default="findus-workshop")
+    host.add_argument("--edition")
+    host.add_argument("--experiment", help="run tools/reference/<name>.lingo at startup")
     host.add_argument("--source", type=Path)
     host.add_argument("--iso", type=Path)
     host.add_argument("--replay", type=Path)

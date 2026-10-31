@@ -1,0 +1,13 @@
+-- Synthetic follow-up: first unequal element, scalar broadcast and empty tails.
+global out
+out = new(xtra("fileio"))
+out.createFile("C:\list-relations-extra.txt")
+out.openFile("C:\list-relations-extra.txt", 2)
+pairs = [["single-high", [7], 3], ["zero-negative", [0, -1], 0], ["zero-zero", [0, 0], 0], ["broadcast-up", [1, 2], 1], ["broadcast-down", [1, -1], 1], ["shorter-left", [1, 2], [1, 2, 99]], ["shorter-right", [1, 2, 99], [1, 2]], ["empty-left", [], [99]], ["empty-right", [99], []], ["property-values", [#z:-1, #a:7], 0], ["property-right", 0, [#z:-1, #a:7]], ["property-pairs", [#z:1, #a:2], [#x:0, #y:99]], ["nested-first", [[1, 2], 0], [[0, 99], 9]], ["nested-broadcast", [[0, 1]], 0], ["nested-negative", [[0, -1]], 0], ["empty-nested", [[]], 0]]
+repeat with pairNumber = 1 to pairs.count
+  pairData = pairs[pairNumber]
+  leftValue = pairData[2]
+  rightValue = pairData[3]
+  out.writeString(string([pairData[1], leftValue, rightValue, leftValue > rightValue, leftValue < rightValue, leftValue >= rightValue, leftValue <= rightValue, leftValue = rightValue]) & RETURN)
+end repeat
+out.closeFile()

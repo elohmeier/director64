@@ -46,3 +46,13 @@ jobs:
           uv run --locked pytest -q
           node --test tests/node/*.test.mjs
           .mise-tasks/test-native
+          .mise-tasks/test-android-host
+      - name: Runtime sanitizers and renderer equivalence
+        run: |
+          CC=clang .mise-tasks/test-sanitize
+          CC=clang .mise-tasks/test-mutations
+          CC=clang FUZZ_SECONDS=15 .mise-tasks/fuzz-native
+      - name: Browser rendering and audible output contracts
+        run: |
+          npx playwright install --with-deps chromium
+          .mise-tasks/test-browser

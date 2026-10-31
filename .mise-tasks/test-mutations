@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Prove visual/input regressions are detected by isolated faulty builds"
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+uv run --locked python tools/validation/mutations.py

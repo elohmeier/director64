@@ -67,6 +67,13 @@ bool wc_decode(const uint8_t *data, uint32_t length, unsigned width,
 #endif
   if (rich) follow = ink == 36;
   *follow_alpha = follow;
+#if DG_FAMILY_D7
+  // Multi-bit Director 7 Blend retains the bitmap's exterior matte. Keeping
+  // the whole rectangle turns LZ4's cropped star overlay into a white band.
+  // One-bit Blend remains rectangular. Behavioral reference: clean ScummVM
+  // 41ac2b31847622d0662d22c03fe6979e3b43cfbc, channel.cpp getMask (no code copied).
+  if (!rich && ink == 32 && data[19] > 1) ink = 8;
+#endif
   bool tiled = bitmap_needs_tiles(width, height);
   for (unsigned y = 0; y < height; y++)
     for (unsigned x = 0; x < width; x++) {
@@ -132,6 +139,13 @@ void wc_release(wc_t *c) {
     free(c->texts[i].runs);
   }
   memset(c->texts, 0, sizeof(c->texts));
+}
+void wc_cache_enabled(wc_t *c, bool enabled) {
+  c->cache_disabled = !enabled;
+  while (c->planes) plane_evict(c, c->planes);
+  // Preserve retained scene/fade history: a validation switch must not erase
+  // the previous frame needed by palette transitions and trails.
+  c->revision = UINT32_MAX;
 }
 // Least recently used, never an image the composite in progress has drawn.
 static bool evict_oldest(wc_t *c) {
@@ -2119,7 +2133,7 @@ bool wc_render_pointers(wc_t *c, dg_runtime_t *d, const wc_pointer_t *pointers,
   externals = externals * 31 + (d->ticks < d->alert_until);
   externals = externals * 31 + d->native_dialog;
 #endif
-  bool same_scene = c->drawn && c->owner == d && c->movie == d->movie &&
+  bool same_scene = !c->cache_disabled && c->drawn && c->owner == d && c->movie == d->movie &&
       c->revision == d->visual_revision && c->background == background &&
       c->externals == externals;
   if (!fade_changed && same_scene && dg_cursor_equal(c->cursor, cursor) && c->pointer_count == count &&
