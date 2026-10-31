@@ -70,8 +70,33 @@ def relative(path: str) -> str:
     return value.as_posix()
 
 
+def compatibility_plan(value: dict) -> dict:
+    """Validate a declared private-reference workaround, never an implicit patch."""
+    if (not isinstance(value, dict) or set(value) != {"id", "reason", "patches"}
+            or not isinstance(value["id"], str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,95}", value["id"])
+            or not isinstance(value["reason"], str) or not value["reason"].strip()
+            or not isinstance(value["patches"], list) or not 1 <= len(value["patches"]) <= 8):
+        raise ValueError("invalid reference compatibility recipe")
+    paths = set()
+    for patch in value["patches"]:
+        if (not isinstance(patch, dict)
+                or set(patch) != {"path", "source_sha256", "export", "return_u32"}
+                or not all(isinstance(patch[k], str) for k in ("path", "source_sha256", "export"))
+                or Path(relative(patch["path"])).suffix.lower() != ".dll"
+                or not re.fullmatch(r"[a-f0-9]{64}", patch["source_sha256"])
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", patch["export"])
+                or type(patch["return_u32"]) is not int
+                or not 0 <= patch["return_u32"] <= 0xffffffff
+                or patch["path"].casefold() in paths):
+            raise ValueError("invalid reference compatibility DLL patch")
+        paths.add(patch["path"].casefold())
+    return value
+
+
 def layout_for(game, source: Path, *, iso: Path | None = None,
-               windows_version: str = "win95", inventory: dict | None = None) -> dict:
+               windows_version: str = "win95", inventory: dict | None = None,
+               unmodified: bool = False) -> dict:
     from .web import native_stage
 
     stage = [800, 600] if native_stage(game) else [640, 480]
@@ -86,7 +111,7 @@ def layout_for(game, source: Path, *, iso: Path | None = None,
     if recipe is not None:
         required = {"schema_version", "source_sha256", "launcher", "cwd"}
         if (not isinstance(recipe, dict) or not required <= set(recipe)
-                or set(recipe) - required - {"optical_drive"}
+                or set(recipe) - required - {"optical_drive", "compatibility"}
                 or recipe["schema_version"] != 1
                 or recipe["source_sha256"] != game.source["sha256"]):
             raise ValueError("original reference layout must match the selected source")
@@ -112,6 +137,8 @@ def layout_for(game, source: Path, *, iso: Path | None = None,
     result = {"stage": stage, "install": "disc-copy",
             "launcher": candidates[0].relative_to(source).as_posix(),
             "cwd": root, "files": files}
+    if recipe and "compatibility" in recipe and not unmodified:
+        result["compatibility"] = compatibility_plan(recipe["compatibility"])
     if recipe and "optical_drive" in recipe:
         settings = recipe["optical_drive"]
         if (not isinstance(settings, dict) or set(settings) - {"letter", "raw_image"}

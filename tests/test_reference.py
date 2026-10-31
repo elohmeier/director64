@@ -8,7 +8,14 @@ from itertools import product
 import pytest
 
 from director64.project import GameSpec
-from director64.reference import layout_for, optical_metadata, parse_precision, relative, runner
+from director64.reference import (
+    compatibility_plan,
+    layout_for,
+    optical_metadata,
+    parse_precision,
+    relative,
+    runner,
+)
 
 
 def test_birthday_original_layout_uses_actual_launcher_and_debug_ini(tmp_path):
@@ -20,6 +27,41 @@ def test_birthday_original_layout_uses_actual_launcher_and_debug_ini(tmp_path):
     assert layout["cwd"] == "SPIEL"
     assert "CheckCopyProtection=0\r\n" in layout["files"]["pf3.ini"]
     assert layout["files"]["projector.ini"] == layout["files"]["pf3.ini"]
+    assert "compatibility" not in layout
+
+
+def test_lz4_reference_uses_declared_workaround_and_can_run_unmodified(tmp_path):
+    original = GameSpec.load("loewenzahn-4")
+    recipe = json.loads((original.directory / "host/reference.json").read_text())
+    recipe.pop("optical_drive")
+    game = replace(original, root=tmp_path)
+    host = game.directory / "host"
+    host.mkdir(parents=True)
+    (host / "source-policy.json").write_text('{"native_stage":true}')
+    (host / "reference.json").write_text(json.dumps(recipe))
+    launcher = tmp_path / recipe["launcher"]
+    launcher.parent.mkdir(parents=True)
+    launcher.write_bytes(b"synthetic unchanged projector")
+    layout = layout_for(game, tmp_path)
+    assert layout["compatibility"]["id"] == "lz4-optgraph-cd-audio"
+    assert layout["compatibility"]["patches"][0]["return_u32"] == 13665984
+    unmodified = layout_for(game, tmp_path, unmodified=True)
+    assert "compatibility" not in unmodified
+    assert layout | {"compatibility": None} == unmodified | {"compatibility": None}
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("path", "../retail/optgraph.dll"), ("path", "C:/optgraph.dll"),
+    ("path", "LOEWE4.EXE"), ("source_sha256", "unverified"), ("return_u32", True),
+    ("return_u32", 1 << 32), ("export", "initdisplay;other"),
+])
+def test_compatibility_recipe_cannot_widen_the_private_dll_patch(field, value):
+    plan = {"id": "test-protection", "reason": "source-free test", "patches": [{
+        "path": "XTRAS/OPTGRAPH.DLL", "source_sha256": "a" * 64,
+        "export": "initdisplay", "return_u32": 13665984}]}
+    plan["patches"][0][field] = value
+    with pytest.raises(ValueError):
+        compatibility_plan(plan)
 
 
 def test_original_inputs_allow_large_stage_and_normal_typing_without_shell_commands(tmp_path):

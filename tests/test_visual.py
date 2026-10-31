@@ -347,7 +347,9 @@ def test_original_import_binds_actual_reference_artifacts_and_reviewed_mapping(t
         compare_capture(port, baseline, tmp_path / "tampered-comparison")
 
 
-@pytest.mark.parametrize("fault", ["source", "experiment", "png", "replay", "modules", "mapping"])
+@pytest.mark.parametrize("fault", ["source", "experiment", "png", "replay", "modules", "mapping",
+                                  "compatibility-kind", "compatibility-layout",
+                                  "compatibility-capture", "modified-flag"])
 def test_original_import_rejects_unrelated_or_unverified_evidence(tmp_path, fault):
     from director64.visual import import_original_reference
 
@@ -364,6 +366,14 @@ def test_original_import_rejects_unrelated_or_unverified_evidence(tmp_path, faul
         original["loaded_modules"] = {}
     if fault == "mapping":
         mapping["port_plan_sha256"] = "d" * 64
+    if fault == "compatibility-kind":
+        provenance["kind"] = "compatibility-reference-capture"
+    if fault == "compatibility-layout":
+        provenance["layout"]["compatibility"] = {"id": "test-protection-bypass"}
+    if fault == "compatibility-capture":
+        original["compatibility"] = {"patches": [{"export": "initdisplay"}]}
+    if fault == "modified-flag":
+        provenance["original_game_unmodified"] = False
     (reference / "provenance.json").write_text(json.dumps(provenance))
     (reference / "capture.json").write_text(json.dumps(original))
     alignment.write_text(json.dumps(mapping))

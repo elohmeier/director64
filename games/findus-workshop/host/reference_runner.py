@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import time
@@ -31,6 +32,111 @@ MAX_DISC_PATH_VARIANTS = 256
 def digest(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def patch_pe32_return(path: Path, expected_sha256: str, export: str, value: int) -> dict:
+    """Patch one pinned private DLL export; never locate code by guessed offsets."""
+    if (not isinstance(expected_sha256, str) or not isinstance(export, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", export)
+            or type(value) is not int or not 0 <= value <= 0xffffffff):
+        raise ValueError("invalid compatibility patch specification")
+    original = path.read_bytes()
+    before = hashlib.sha256(original).hexdigest()
+    if before != expected_sha256:
+        raise ValueError(f"compatibility DLL source hash differs: {path.name}")
+
+    def span(offset: int, size: int) -> bytes:
+        if offset < 0 or size < 0 or offset + size > len(original):
+            raise ValueError("truncated PE32 compatibility DLL")
+        return original[offset:offset + size]
+
+    def u16(offset: int) -> int:
+        return struct.unpack("<H", span(offset, 2))[0]
+
+    def u32(offset: int) -> int:
+        return struct.unpack("<I", span(offset, 4))[0]
+
+    if span(0, 2) != b"MZ":
+        raise ValueError("compatibility target is not a PE32 DLL")
+    pe = u32(0x3c)
+    if span(pe, 4) != b"PE\0\0" or u16(pe + 4) != 0x14c:
+        raise ValueError("compatibility patch requires an i386 PE32 DLL")
+    count, optional_size = u16(pe + 6), u16(pe + 20)
+    optional = pe + 24
+    if (not 0 < count <= 96 or optional_size < 104 or u16(optional) != 0x10b
+            or not u16(pe + 22) & 0x2000 or u32(optional + 92) < 1):
+        raise ValueError("compatibility patch requires an i386 PE32 DLL export table")
+    span(optional, optional_size + count * 40)
+    sections = []
+    for index in range(count):
+        entry = optional + optional_size + index * 40
+        sections.append((u32(entry + 12), u32(entry + 8), u32(entry + 20),
+                         u32(entry + 16), u32(entry + 36)))
+
+    def offset(rva: int, size: int, *, executable: bool = False) -> int:
+        matches = [s for s in sections if s[0] <= rva < s[0] + max(s[1], s[3])]
+        if len(matches) != 1:
+            raise ValueError("unmapped or ambiguous compatibility export RVA")
+        address, _, raw, length, flags = matches[0]
+        delta = rva - address
+        if delta + size > length or executable and not flags & 0x20000000:
+            raise ValueError("compatibility export is not backed by executable file bytes")
+        span(raw + delta, size)
+        return raw + delta
+
+    directory_rva, directory_size = u32(optional + 96), u32(optional + 100)
+    if not directory_rva or directory_size < 40:
+        raise ValueError("compatibility DLL has no export directory")
+    directory = offset(directory_rva, 40)
+    functions, names = u32(directory + 20), u32(directory + 24)
+    if not 0 < names <= functions <= 65536:
+        raise ValueError("invalid compatibility DLL export counts")
+    function_table = offset(u32(directory + 28), functions * 4)
+    name_table = offset(u32(directory + 32), names * 4)
+    ordinal_table = offset(u32(directory + 36), names * 2)
+    found = []
+    for index in range(names):
+        name_rva = u32(name_table + index * 4)
+        start = offset(name_rva, 1)
+        end = original.find(b"\0", start, min(len(original), start + 256))
+        if end < 0:
+            raise ValueError("unterminated compatibility export name")
+        offset(name_rva, end - start + 1)
+        if original[start:end] == export.encode("ascii"):
+            ordinal = u16(ordinal_table + index * 2)
+            if ordinal >= functions:
+                raise ValueError("invalid compatibility export ordinal")
+            found.append(u32(function_table + ordinal * 4))
+    if len(found) != 1:
+        raise ValueError(f"compatibility DLL needs exactly one {export} export")
+    rva = found[0]
+    if directory_rva <= rva < directory_rva + directory_size:
+        raise ValueError("forwarded compatibility exports cannot be patched")
+    replacement = b"\xb8" + struct.pack("<I", value) + b"\xc3"
+    at = offset(rva, len(replacement), executable=True)
+    patched = original[:at] + replacement + original[at + len(replacement):]
+    path.write_bytes(patched)
+    return {"before_sha256": before, "after_sha256": hashlib.sha256(patched).hexdigest(),
+            "export": export, "rva": rva, "file_offset": at, "return_u32": value,
+            "bytes_changed": sum(a != b for a, b in zip(original, patched, strict=True))}
+
+
+def apply_compatibility(installed: Path, plan: dict) -> dict:
+    """Modify only the installed private copy and record every resulting hash."""
+    records = []
+    root = installed.resolve()
+    for patch in plan["patches"]:
+        name = patch["path"]
+        path = root / name
+        if (Path(name).is_absolute() or ".." in Path(name).parts
+                or not path.resolve().is_relative_to(root)):
+            raise ValueError("compatibility patch escapes private installation")
+        record = patch_pe32_return(path, patch["source_sha256"], patch["export"],
+                                   patch["return_u32"])
+        records.append({"path": name, **record})
+    return {"id": plan["id"], "reason": plan["reason"], "patches": records,
+            "original_game_unmodified": False}
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -137,7 +243,7 @@ def capture(args: argparse.Namespace) -> int:
         with iso.open("rb") as handle:
             inventory = inventory_report(handle)
     layout = layout_for(game_spec, source, iso=iso, windows_version=args.windows_version,
-                        inventory=inventory)
+                        inventory=inventory, unmodified=args.unmodified)
     experiment_source = None
     if args.experiment:
         if not IDENTIFIER.fullmatch(args.experiment):
@@ -191,7 +297,9 @@ def capture(args: argparse.Namespace) -> int:
     }
     metadata = {
         "schema_version": SCHEMA,
-        "kind": "original-reference-capture",
+        "kind": ("compatibility-reference-capture" if layout.get("compatibility")
+                 else "original-reference-capture"),
+        "original_game_unmodified": not bool(layout.get("compatibility")),
         "run_id": output.name,
         "created_utc": datetime.now(UTC).isoformat(),
         "runner": {
@@ -216,6 +324,10 @@ def capture(args: argparse.Namespace) -> int:
             "No scene tolerance or fidelity claim is derived from successful media capture.",
         ],
     }
+    if layout.get("compatibility"):
+        metadata["limitations"].append(
+            "The private installation uses a declared protection compatibility patch; "
+            "this is not an unmodified original-game capture.")
     write_json(output / "provenance.json", metadata)
     container = "director64-reference-" + uuid.uuid4().hex[:12]
     argv = [
@@ -519,6 +631,9 @@ def container_capture(args: argparse.Namespace) -> int:
         else:
             shutil.copytree("/media/findus", installed)
             install_aliases(installed, layout.get("aliases", {}))
+        if layout.get("compatibility"):
+            result["compatibility"] = apply_compatibility(installed, layout["compatibility"])
+            write_json(session / "compatibility.json", result["compatibility"])
         game = installed / layout["cwd"]
         for name, content in layout["files"].items():
             target = installed_file(game, name)
@@ -773,6 +888,8 @@ def main() -> int:
     host.add_argument("--game", default="findus-workshop")
     host.add_argument("--edition")
     host.add_argument("--experiment", help="run tools/reference/<name>.lingo at startup")
+    host.add_argument("--unmodified", action="store_true",
+                      help="disable declared private-copy compatibility patches")
     host.add_argument("--source", type=Path)
     host.add_argument("--iso", type=Path)
     host.add_argument("--replay", type=Path)

@@ -515,6 +515,10 @@ def import_original_reference(
         raise ValueError("original import needs completed original and port captures")
     if metadata.get("layout", {}).get("experiment") or metadata.get("experiment"):
         raise ValueError("synthetic projector experiments are not retail gameplay references")
+    if (metadata.get("original_game_unmodified") is False
+            or metadata.get("layout", {}).get("compatibility")
+            or original.get("compatibility")):
+        raise ValueError("modified compatibility captures are not unmodified original references")
     if metadata.get("runner", {}).get("name") != "wine-xvfb":
         raise ValueError("this importer supports verified Wine-runner artifact layouts only")
     source = port.get("provenance", {})

@@ -64,7 +64,8 @@ def main(argv=None):
         "journey": "Arguments: [NAME] --list --output DIR --baseline DIR --repeat N "
         "--timeout SECONDS --max-slowdown RATIO --max-memory-growth RATIO; "
         "--game all runs all ports",
-        "reference": "Adapter options: --replay PATH --output PATH --windows-version VERSION",
+        "reference": "Adapter options: --replay PATH --output PATH --windows-version VERSION "
+        "--experiment NAME --unmodified",
         "visual": "Arguments: capture | compare | approve (local visual/audio evidence)",
         "metamorphic": "Options: --replay FILE --relation cache|chunks|all --output DIR",
         "android-validate": "Replay journeys through an isolated Android validation APK",

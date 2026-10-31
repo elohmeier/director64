@@ -242,13 +242,37 @@ These facilities follow [Wine 8's mount-manager behavior](https://github.com/win
 The container uses an init process to reap Wine descendants rather than exhausting
 its process budget with zombies.
 
-Löwenzahn 4 now gets past its initial insert-CD dialog with verified Win32
-observations: optical drive type 5, label `LOEWE4`, serial `7b6951f9` and filesystem
-`CDFS`. The unchanged original then reaches `CHECKW`'s `CopyProtect` screen:
-member 11 requires `getRegOptimal()` to return the string `13665984`. That handler
-calls the original `OPTGRAPH.DLL` through `GLU32`; its failing return/loader status
-has not been observed. No retail protection check was patched. The original
-night-transition comparison remains unqualified behind this barrier.
+Löwenzahn 4's disc discovery works with optical drive type 5, label `LOEWE4`,
+serial `7b6951f9` and filesystem `CDFS`. Its separate `OPTGRAPH:initdisplay`
+protection check still returns **5** through both a native probe and original
+`GLU32`: Wine cannot satisfy `IOCTL_CDROM_READ_Q_CHANNEL` and reports
+`MCI_MODE_NOT_READY`. This check reads the disc label, a `ZDAT` file and CD track
+information; it does not read the volume serial. The selected cooked ISO has no
+audio-track TOC from which to reproduce the physical-disc check.
+
+The LZ4 reference recipe therefore applies a six-byte return stub only to
+`initdisplay` in the private installed `OPTGRAPH.DLL`. It returns `13665984`, the
+value required by the recovered `CHECKW` handler and the existing port patch.
+The patch verifies the complete source DLL hash, locates the export through
+the PE32 tables and checks executable file bounds before writing. Source media,
+movies and playback DLLs remain unchanged. Every capture records its patch
+offset and before/after hashes in `compatibility.json` and `capture.json`.
+
+```sh
+uv run --locked director64 reference --game loewenzahn-4 --windows-version win95
+# Reproduce the original failing check without the private-copy workaround:
+uv run --locked director64 reference --game loewenzahn-4 --windows-version win95 --unmodified
+```
+
+These runs are labelled `compatibility-reference-capture`, not unmodified
+original-game evidence. `visual import-original` rejects modified captures,
+including records relabelled as original while retaining modification markers.
+The unchanged original comparison and native hardware qualification remain
+separate from this compatibility run.
+
+The observed Wine runs still report missing 32-bit GStreamer base plugins and
+show a black intro-video panel. The gameplay check skips that intro before
+selecting a profile and entering the wagon exterior.
 
 The optional source-free Win32 drive probe records API results and raw-read
 availability in `C:\director64-drive-probe.txt` inside a private Wine prefix.
@@ -267,6 +291,14 @@ lld-link /entry:mainCRTStartup /subsystem:console /nodefaultlib /machine:x86 \
 
 Run this generated executable only in the isolated reference environment. It
 observes drive APIs and writes its own result file; it does not modify the game.
+
+`tools/reference/optgraph-probe.c` directly observes the protection DLL. Build it
+with the commands above, substituting `optgraph-probe` for `drive-probe`, then
+run it in a fresh copy of the private Wine prefix with the same read-only disc
+mount. It writes `C:\director64-optgraph-probe.txt`, including DLL/export load
+errors, the returned value and a completion marker. The unmodified DLL returns
+`5`; the declared compatibility copy returns `13665984`. The probe itself never
+patches the DLL or substitutes CD information.
 
 ## Android and bug reports
 
