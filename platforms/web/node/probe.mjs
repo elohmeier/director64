@@ -27,6 +27,11 @@ if (!site || mode !== "rpc" || options.some(option => option !== "--state-only")
 const render = !options.includes("--state-only");
 const observations = process.env.DIRECTOR64_PROBE_OBSERVATIONS === "1";
 const cacheOff = process.env.DIRECTOR64_PROBE_CACHE === "off";
+const clipOff = process.env.DIRECTOR64_PROBE_CLIP === "off";
+const imageBudget = Number(process.env.DIRECTOR64_PROBE_IMAGE_BUDGET ?? 0);
+if (!Number.isInteger(imageBudget) || imageBudget < 0 ||
+    (imageBudget && (imageBudget < 1024*1024 || imageBudget > 512*1024*1024)))
+  throw new Error("invalid probe image budget (1..512 MiB)");
 const audioEvents = [];
 const audioEvent = (type, ...args) => {
   if (observations) audioEvents.push([type, ...args]);
@@ -179,6 +184,13 @@ if (render && typeof module._d64_probe_render !== "function") {
 }
 module._d64_probe_render?.(render ? 1 : 0);
 function checkpoint(context) {
+  if (imageBudget && !module._d64_render_budget?.(imageBudget))
+    throw new Error("runtime lacks image-budget profiling; rebuild the web runtime");
+  if (clipOff) {
+    if (typeof module._d64_render_clip !== "function")
+      throw new Error("runtime lacks clipping comparison support; rebuild the web runtime");
+    module._d64_render_clip(0);
+  }
   if (cacheOff) {
     if (typeof module._d64_render_cache !== "function")
       throw new Error("runtime lacks cache comparison support; rebuild the web runtime");
@@ -230,6 +242,8 @@ function observed(reply) {
       frame_trace: trace, audio_events: audioEvents})
     : line).join("\n");
 }
+if(process.env.DIRECTOR64_PROBE_METRICS) module._d64_render_work_reset?.();
+if(clipOff) module._d64_render_clip?.(0);
 const boot = module.ccall("d64_boot_rpc", "string", ["number"], [42]);
 const bootOK = checkpoint("boot");
 metrics.end(startup, "boot", module);
@@ -246,7 +260,7 @@ for await (const line of createInterface({input: process.stdin, crlfDelay: Infin
         module.HEAPU8.slice(module._d64_flash(), module._d64_flash() + module._d64_flash_bytes()));
     break;
   }
-  const started = metrics.start(line.trimEnd());
+  const started = metrics.start(line.trimEnd(), module);
   audioEvents.length = 0;
   if (observations) {
     if (typeof module._d64_probe_trace !== "function")

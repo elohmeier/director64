@@ -2,6 +2,23 @@
   "schema_version": 1,
   "journeys": [
     {
+      "name": "rainy-opening",
+      "description": "Let the publisher reel finish, then sustain the rainy login scene with all four ghost films.",
+      "covers": ["startup", "native-films", "soft-masks", "sustained-playback", "render-work"],
+      "steps": [
+        {
+          "idle": 3600,
+          "expect": {"movie": "LOGIN.DXR"},
+          "label": "rain-and-ghosts"
+        },
+        {
+          "idle": 600,
+          "expect": {"movie": "LOGIN.DXR"},
+          "label": "opening-sustained"
+        }
+      ]
+    },
+    {
       "name": "player-yard",
       "description": "Skip the publisher reel, create a player, play the story into the yard and keep the scene running.",
       "covers": [

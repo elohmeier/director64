@@ -54,6 +54,9 @@ static web_host_t host;
 static bool booted;
 static bool probe_render;
 static bool probe_trace;
+#ifdef __EMSCRIPTEN__
+static bool profile_render;
+#endif
 static uint64_t *probe_frames;
 static unsigned probe_frame_count, probe_frame_capacity;
 EMSCRIPTEN_KEEPALIVE void d64_probe_render(int enabled) { probe_render = enabled != 0; }
@@ -84,6 +87,21 @@ static void probe_sample(void) {
 }
 EMSCRIPTEN_KEEPALIVE void d64_render_cache(int enabled) {
   wc_cache_enabled(&compositor, enabled != 0);
+}
+EMSCRIPTEN_KEEPALIVE void d64_render_clip(int enabled) {
+  if(compositor.film_clip_disabled != (enabled==0)) {
+    compositor.film_clip_disabled=enabled==0;compositor.drawn=false;
+  }
+}
+EMSCRIPTEN_KEEPALIVE void d64_render_work_reset(void) {
+  memset(&compositor.work,0,sizeof(compositor.work));
+#ifdef __EMSCRIPTEN__
+  profile_render=true;
+#endif
+}
+EMSCRIPTEN_KEEPALIVE int d64_render_budget(unsigned bytes) {
+  if(bytes<1024u*1024u || bytes>512u*1024u*1024u)return 0;
+  compositor.image_budget=bytes;return 1;
 }
 static unsigned seed;
 static float served_gain[DG_SOUND_CHANNELS];
@@ -913,9 +931,22 @@ EMSCRIPTEN_KEEPALIVE uint32_t *d64_render(int x, int y, int pointer_shown) {
   if (!booted || values.failed)
     return NULL;
   unsigned externals = host.video_revision ? host.video_revision(host.ctx) : 0;
-  return wc_render(&compositor, &director, x, y, pointer_shown != 0, externals)
-             ? compositor.pixels
-             : NULL;
+#ifdef __EMSCRIPTEN__
+  double started=profile_render?emscripten_get_now():0;
+#endif
+  bool changed=wc_render(&compositor, &director, x, y, pointer_shown != 0, externals);
+#ifdef __EMSCRIPTEN__
+  if(profile_render && changed) {
+    uint64_t elapsed=(uint64_t)((emscripten_get_now()-started)*1000);
+    compositor.work.render_us+=elapsed;
+    if(elapsed>compositor.work.peak_render_us) {
+      compositor.work.peak_render_us=elapsed;compositor.work.peak_render_frame=director.frame;
+      snprintf(compositor.work.peak_render_movie,sizeof(compositor.work.peak_render_movie),
+               "%s",director.movie?director.movie->code->name:"");
+    }
+  }
+#endif
+  return changed?compositor.pixels:NULL;
 }
 // The print document the game asked for (1-16: book BAS then REZ, chapters
 // 1 to 8), while its page is up; 0 otherwise. The web page opens the
@@ -990,6 +1021,34 @@ static void quoted_bytes(const void *bytes,size_t length) {
   d64_json_quote(bytes,length,json_emit,NULL);
 }
 static void quoted(const char *text) { quoted_bytes(text,strlen(text)); }
+EMSCRIPTEN_KEEPALIVE const char *d64_render_work_json(void) {
+  const wc_work_t *w=&compositor.work;
+  output_length=0;output[0]=0;
+  emit("{\"version\":1,\"stage_pixels\":%u,\"image_budget\":%llu,\"frames\":%llu,\"scene_frames\":%llu,"
+       "\"bitmap_calls\":%llu,\"bitmap_pixels\":%llu,\"inverse_pixels\":%llu,"
+       "\"translated_pixels\":%llu,\"translated_bounds_pixels\":%llu,"
+       "\"peak_frame_pixels\":%llu,\"peak_frame_inverse_pixels\":%llu,"
+       "\"peak_frame_loads\":%u,\"peak_frame_evictions\":%u,"
+       "\"peak_frame_pressure_evictions\":%u,\"peak_cache_pressure_run\":%u,"
+       "\"peak_image_bytes\":%llu,"
+       "\"render_us\":%llu,\"peak_render_us\":%llu,\"peak_render_frame\":%u,\"peak_render_movie\":",
+       WC_WIDTH*WC_HEIGHT,(unsigned long long)compositor.image_budget,
+       (unsigned long long)w->frames,(unsigned long long)w->scene_frames,
+       (unsigned long long)w->bitmap_calls,(unsigned long long)w->bitmap_pixels,
+       (unsigned long long)w->inverse_pixels,(unsigned long long)w->translated_pixels,
+       (unsigned long long)w->translated_bounds_pixels,(unsigned long long)w->peak_frame_pixels,
+       (unsigned long long)w->peak_frame_inverse_pixels,w->peak_frame_loads,w->peak_frame_evictions,
+       w->peak_frame_pressure_evictions,w->peak_cache_pressure_run,
+       (unsigned long long)w->peak_image_bytes,(unsigned long long)w->render_us,
+       (unsigned long long)w->peak_render_us,w->peak_render_frame);
+  quoted(w->peak_render_movie);
+  emit(",\"worst_inverse\":{\"pixels\":%llu,\"sampled_pixels\":%llu,"
+       "\"channel\":%u,\"member\":%u,\"frame\":%u,\"movie\":",
+       (unsigned long long)w->worst_inverse_pixels,(unsigned long long)w->worst_inverse_samples,
+       w->worst_channel,w->worst_member,w->worst_frame);
+  quoted(w->worst_movie);emit("}}");
+  return output;
+}
 #ifdef DIRECTOR64_GAME_PROBE
 // The game's own state line (games/<slug>/probe/state.inc), printed through
 // this runtime's output buffer.

@@ -86,6 +86,23 @@ typedef struct {
 
 enum { WC_IMAGE_SLOTS = 512, WC_TEXT_SLOTS = 32, WC_CURSOR_SLOTS = 16 };
 
+// Deterministic raster work, independent of host CPU speed. Counters are
+// updated per row/draw, outside the arithmetic for individual pixels.
+typedef struct {
+  uint64_t frames, scene_frames, bitmap_calls, bitmap_pixels, inverse_pixels;
+  uint64_t translated_pixels, translated_bounds_pixels;
+  uint64_t peak_frame_pixels, peak_frame_inverse_pixels;
+  uint64_t worst_inverse_pixels, worst_inverse_samples;
+  unsigned worst_channel, worst_member, worst_frame;
+  char worst_movie[40];
+  unsigned peak_frame_loads, peak_frame_evictions;
+  unsigned peak_frame_pressure_evictions, peak_cache_pressure_run;
+  size_t peak_image_bytes;
+  uint64_t render_us, peak_render_us;
+  unsigned peak_render_frame;
+  char peak_render_movie[40];
+} wc_work_t;
+
 // A colour run of a text box: from character `offset` on, colour `rgb`
 // (the compositor's pixel colour).
 typedef struct {
@@ -126,6 +143,7 @@ typedef struct {
   // What the last composite showed; an unchanged stage is not redrawn.
   bool drawn;
   bool cache_disabled; // Validation: recomposite scenes and derived planes.
+  bool film_clip_disabled; // Validation: retain the original full-wrapper scan.
   const dg_runtime_t *owner;
   const dg_movie_t *movie;
   unsigned revision;
@@ -139,6 +157,10 @@ typedef struct {
   // Counters for the page's diagnostics.
   unsigned loads, evictions, renders, scene_renders, plane_hits, plane_builds;
   unsigned prefix_hits, prefix_builds;
+  wc_work_t work;
+  uint64_t frame_pixels, frame_inverse_pixels;
+  unsigned work_channel;
+  unsigned pressure_evictions, cache_pressure_run;
   // The last composited scene without its cursors, and the snapshot of it a
   // script kept as a member's image (`member.image = (the stage).image`).
   uint32_t scene[WC_WIDTH * WC_HEIGHT];

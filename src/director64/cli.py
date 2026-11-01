@@ -67,7 +67,7 @@ def main(argv=None):
         "reference": "Adapter options: --replay PATH --output PATH --windows-version VERSION "
         "--experiment NAME --unmodified",
         "visual": "Arguments: capture | compare | approve (local visual/audio evidence)",
-        "metamorphic": "Options: --replay FILE --relation cache|chunks|all --output DIR",
+        "metamorphic": "Options: --replay FILE --relation cache|chunks|clip|all --output DIR",
         "android-validate": "Replay journeys through an isolated Android validation APK",
         "convert": "Options: --force --output DIR (default build/<slug>/<source>/converted)",
         "web": "Options: --reconvert --serve --port N (default 18064) --no-build (docs/web.md)",

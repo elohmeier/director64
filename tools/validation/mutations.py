@@ -37,6 +37,10 @@ def main() -> int:
         {"id": "opaque-popup", "test": "tests/native/test_director_d85_blend.c",
          "source": "runtime/director/director.c", "compositor": False,
          "replace": [("s->auto_mask |= DG_BLEND;", "")]},
+        {"id": "full-film-scan", "test": "tests/native/test_web_film_work.c",
+         "source": "platforms/web/compositor.c", "compositor": True,
+         "replace": [("if(!c->film_clip_disabled) {cl=tl;ct=tt;cr=tr;cb=tb;}",
+                      "if(false) {cl=tl;ct=tt;cr=tr;cb=tb;}")]},
     ]
     results = []
     for case in cases:

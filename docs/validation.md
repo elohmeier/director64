@@ -30,8 +30,9 @@ rich-text sections, so those readers start with valid structured inputs.
 Crashes retain the reproducer under `build/validation/native-fuzz/`.
 
 `test-mutations` compiles isolated source copies with deliberately broken stage
-bounds, scene-cache invalidation and popup blend ownership. The unmodified
-control must pass and each faulty copy must fail. The working tree is unchanged.
+bounds, scene-cache invalidation, popup blend ownership and film clipping. The
+unmodified control must pass and each faulty copy must fail. The working tree is
+unchanged.
 
 `test-browser` loads a real font in Chromium, captures moving glyph pixels and
 checks the actual Web Audio mix against a deliberately muted signal. It uses
@@ -69,6 +70,47 @@ folder name after the player left the activity. The package only exposed its
 shortened disc name. Both names are now packaged; source review found and fixed
 the same mismatch for Löwenzahn 7 composer clips and Advent chimney cues.
 Synthetic packing tests check all three folder pairs against the real manifests.
+
+## Performance without a projector
+
+```sh
+mise run test-performance
+mise run test-performance --no-build --output build/validation/performance/current
+# Optional regression comparison: use a previous run on this same host.
+mise run test-performance --baseline build/validation/performance/previous
+```
+
+This builds all 20 local ports and runs every registered rendered journey with
+Android's 96 MiB image-cache budget. It rejects missing games, missing counters,
+state-only runs, stale builds and changes to the harness or input plans during a
+run. Reports retain the movie, frame, channel and member responsible for wasted
+inverse mapping, plus the most expensive host-rendered frames. Local discs are
+required; no device is contacted.
+
+Deterministic work gates catch algorithmic regressions even when a desktop is
+fast: over 16 stage equivalents of bitmap scans per redraw, over eight inverse
+mapping equivalents, or an individual inverse draw scanning more than four times
+its sampled pixels while wasting over a quarter of the stage. Cache churn fails
+after three consecutive scene redraws with over 32 capacity evictions each.
+Normal replacement and one-time cold-scene turnover remain visible in the report
+without being mistaken for sustained cache thrashing. Host timings rank hotspots;
+the optional baseline gate compares time and memory on the same host. Neither
+predicts Android frame rates.
+
+Ghosts' ordinary `rainy-opening` route waits through the publisher reel and then
+sustains the login scene with rain and all four ghosts. The former renderer
+inverse-mapped each small child over its large film container. Integer translation
+stacks now restrict scanning to the translated child bounds, intersected with
+every ancestor viewport, while preserving the original mask, ink and sampling
+arithmetic. Other transforms retain the general path. Synthetic pixel tests
+compare both paths across inks, masks, stage edges, nesting and transform
+fallbacks; the film-clipping mutation must fail the work oracle even with correct
+pixels. `--relation clip` below also compares both paths on real game inputs.
+
+These checks cover the registered routes and renderer costs. Extend journeys to
+reach newly discovered problem scenes. Node uses nominal glyphs and records audio
+callbacks; browser visual/audio tests and eventual TV pacing checks provide
+separate evidence.
 
 ## Browser images, sequences and PCM
 
@@ -153,8 +195,9 @@ uv run --locked director64 metamorphic --game findus-birthday \
 
 `cache` compares retained scene/derived-plane reuse with recomposition.
 Immutable decoded assets remain cached in both runs. `chunks` compares a batched
-held input with one service tick at a time, preserving key edges. Both compare
-state, ordered audio host callbacks, every serviced frame's 64-bit checksum and
+held input with one service tick at a time, preserving key edges. `clip` compares
+tight translated-film bounds with the original full-container traversal. All
+compare state, ordered audio host callbacks, every serviced frame's 64-bit checksum and
 the final RGBA SHA-256. They retain the first divergence and inputs even if later
 shutdown fails. Instance identities are canonicalized at shared observation
 boundaries so extra intermediate observations do not create false differences.

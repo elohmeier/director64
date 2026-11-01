@@ -113,11 +113,13 @@ def compare_session(game, commands: list[str], output: Path, relation: str,
     a = b = None
     try:
         a = ComparisonProbe(probe_path(game), game.data["port"]["entry_movie"],
-                            output / "a.stderr", environment | {"DIRECTOR64_PROBE_CACHE": "on"},
+                            output / "a.stderr", environment | {"DIRECTOR64_PROBE_CACHE": "on",
+                                                               "DIRECTOR64_PROBE_CLIP": "on"},
                             timeout=timeout)
         b = ComparisonProbe(probe_path(game), game.data["port"]["entry_movie"],
                             output / "b.stderr", environment | {
-                                "DIRECTOR64_PROBE_CACHE": "off" if relation == "cache" else "on"},
+                                "DIRECTOR64_PROBE_CACHE": "off" if relation == "cache" else "on",
+                                "DIRECTOR64_PROBE_CLIP": "off" if relation == "clip" else "on"},
                             timeout=timeout)
         initial_a, initial_b = a.renumbered(a.receive(120)), b.renumbered(b.receive(120))
         if normalized(initial_a) != normalized(initial_b):
@@ -157,7 +159,7 @@ def compare_session(game, commands: list[str], output: Path, relation: str,
 def main(game, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--replay", type=Path, required=True)
-    parser.add_argument("--relation", choices=("cache", "chunks", "all"), default="all")
+    parser.add_argument("--relation", choices=("cache", "chunks", "clip", "all"), default="all")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--timeout", type=float, default=600,
                         help="total seconds per equivalence session (default 600)")
@@ -169,7 +171,7 @@ def main(game, argv: list[str]) -> int:
         raise ValueError("equivalence evidence must stay under ignored build/")
     commands = sessions(args.replay)
     output.mkdir(parents=True, exist_ok=True)
-    relations = ("cache", "chunks") if args.relation == "all" else (args.relation,)
+    relations = ("cache", "chunks", "clip") if args.relation == "all" else (args.relation,)
     results = [compare_session(game, stream, output / relation / str(index + 1),
                                relation, args.timeout)
                for relation in relations for index, stream in enumerate(commands)]

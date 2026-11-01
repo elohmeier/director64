@@ -171,6 +171,7 @@ static bool evict_oldest(wc_t *c) {
     return false;
   if (derived) plane_evict(c, derived);
   else evict(c, oldest);
+  c->pressure_evictions++;
   return true;
 }
 
@@ -501,6 +502,36 @@ static void film_destination_bounds(const wc_t *c, int *l, int *t, int *r, int *
   if (*r > WC_WIDTH) *r = WC_WIDTH;
   if (*b > WC_HEIGHT) *b = WC_HEIGHT;
 }
+// Integer translations preserve the child raster. Clip its destination bounds
+// before entering the pixel loop, while keeping the original inverse mapping
+// and destination-dependent ink/mask arithmetic for every retained pixel.
+static bool film_translated_bounds(const wc_t *c, int l, int t, int r, int b,
+                                   int *cl, int *ct, int *cr, int *cb) {
+  if (!c->film_transform_count) return false;
+  // A one-pixel guard retains boundary samples despite float round-off. Very
+  // large coordinates keep the general path rather than assuming precision.
+  int64_t left=(int64_t)l-1, top=(int64_t)t-1, right=(int64_t)r+1, bottom=(int64_t)b+1;
+  for (unsigned i=c->film_transform_count;i-- > 0;) {
+    const dg_film_transform_t *f=&c->film_transform[i];
+    if (!dg_film_transform_raster_aligned(f) ||
+        fabsf(f->left)>65536 || fabsf(f->top)>65536 ||
+        fabsf(f->quad[0])>65536 || fabsf(f->quad[1])>65536 ||
+        !(f->width>0 && f->width<=16384 && f->height>0 && f->height<=16384))
+      return false;
+    int64_t x=(int64_t)f->quad[0]-(int64_t)f->left;
+    int64_t y=(int64_t)f->quad[1]-(int64_t)f->top;
+    left+=x;right+=x;top+=y;bottom+=y;
+    if (left<(int64_t)f->quad[0]) left=(int64_t)f->quad[0];
+    if (top<(int64_t)f->quad[1]) top=(int64_t)f->quad[1];
+    if (right>(int64_t)f->quad[4]) right=(int64_t)f->quad[4];
+    if (bottom>(int64_t)f->quad[5]) bottom=(int64_t)f->quad[5];
+  }
+  *cl=left<0?0:left>WC_WIDTH?WC_WIDTH:(int)left;
+  *ct=top<0?0:top>WC_HEIGHT?WC_HEIGHT:(int)top;
+  *cr=right<0?0:right>WC_WIDTH?WC_WIDTH:(int)right;
+  *cb=bottom<0?0:bottom>WC_HEIGHT?WC_HEIGHT:(int)bottom;
+  return true;
+}
 #endif
 
 // ---- Drawing ----
@@ -535,6 +566,33 @@ static inline void arithmetic(uint32_t *d, uint32_t s, unsigned ink, unsigned co
 }
 #endif
 
+#if DG_D10
+static uint64_t rect_pixels(int l,int t,int r,int b) {
+  return r>l && b>t ? (uint64_t)(r-l)*(unsigned)(b-t) : 0;
+}
+#endif
+static void bitmap_work(wc_t *c,dg_runtime_t *d,const dg_sprite_t *sprite,
+                         uint64_t pixels,uint64_t samples,bool inverse,
+                         bool translated,uint64_t bounds) {
+  c->work.bitmap_calls++;
+  c->work.bitmap_pixels+=pixels;c->frame_pixels+=pixels;
+  if(inverse) {
+    c->work.inverse_pixels+=pixels;c->frame_inverse_pixels+=pixels;
+    uint64_t waste=pixels>samples?pixels-samples:0;
+    uint64_t previous=c->work.worst_inverse_pixels>c->work.worst_inverse_samples?
+        c->work.worst_inverse_pixels-c->work.worst_inverse_samples:0;
+    if(waste>previous) {
+      c->work.worst_inverse_pixels=pixels;c->work.worst_inverse_samples=samples;
+      c->work.worst_channel=c->work_channel;c->work.worst_member=sprite->value.member;
+      c->work.worst_frame=d->frame;
+      snprintf(c->work.worst_movie,sizeof(c->work.worst_movie),"%s",d->movie->code->name);
+    }
+  }
+  if(translated) {
+    c->work.translated_pixels+=pixels;c->work.translated_bounds_pixels+=bounds;
+  }
+}
+
 static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
                         const wc_image_t *image, int l, int t, int r, int b,
                         unsigned ink, unsigned opacity, int ox, int oy) {
@@ -559,8 +617,18 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
 #endif
   int cl = l < 0 ? 0 : l, ct = t < 0 ? 0 : t;
   int cr = r > WC_WIDTH ? WC_WIDTH : r, cb = b > WC_HEIGHT ? WC_HEIGHT : b;
+  bool translated=false,inverse=transformed;
+  uint64_t translated_bounds=0,scanned=0;
+  unsigned sampled=0;
 #if DG_D10
+  inverse|=c->film_transform_count!=0 || image->linked_member!=NULL;
   film_destination_bounds(c, &cl, &ct, &cr, &cb);
+  int tl,tt,tr,tb;
+  translated=film_translated_bounds(c,l,t,r,b,&tl,&tt,&tr,&tb);
+  if(translated) {
+    translated_bounds=rect_pixels(tl,tt,tr,tb);
+    if(!c->film_clip_disabled) {cl=tl;ct=tt;cr=tr;cb=tb;}
+  }
 #endif
   unsigned w = image->source_width ? image->source_width : image->width;
   unsigned h = image->source_height ? image->source_height : image->height;
@@ -608,6 +676,7 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
           (int64_t)sy >= (int64_t)source_y + image->cover_b)
         continue;
       sy -= (unsigned)source_y;
+      scanned+=(unsigned)(last-first);
       uint32_t *row = &target(c)[y * WC_WIDTH];
       const uint32_t *source = &image->pixels[(size_t)sy * stride];
       for (int x = first; x < last; x++) {
@@ -622,6 +691,7 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
           blend(&row[x], pixel & 0xffffffu, coverage * opacity / 100);
       }
     }
+    bitmap_work(c,d,s,scanned,scanned,inverse,translated,translated_bounds);
     return;
   }
   // Keep the original float expression and sampling phase, but evaluate it
@@ -660,6 +730,7 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
       if ((int64_t)row_source < (int64_t)source_y + image->cover_t ||
           (int64_t)row_source >= (int64_t)source_y + image->cover_b) continue;
     }
+    if(cr>cl)scanned+=(unsigned)(cr-cl);
     uint32_t *row = &target(c)[y * WC_WIDTH];
     for (int x = cl; x < cr; x++) {
       unsigned sx = mapped ? columns[x] : 0, sy = row_source;
@@ -697,6 +768,7 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
           (int64_t)sx >= (int64_t)source_x + image->width ||
           (int64_t)sy >= (int64_t)source_y + image->height) continue;
       sx -= (unsigned)source_x; sy -= (unsigned)source_y;
+      sampled++;
       uint32_t pixel = image->pixels[(size_t)sy * stride + sx];
       unsigned coverage = image->coverage ? image->coverage[(size_t)sy * stride + sx]
                           : image->force_opaque ? 255 : pixel >> 24;
@@ -729,6 +801,7 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
       blend(&row[x], pixel & 0xffffffu, coverage * opacity / 100);
     }
   }
+  bitmap_work(c,d,s,scanned,sampled,inverse,translated,translated_bounds);
 }
 
 static bool text_is_utf8(const char *text) {
@@ -2390,6 +2463,7 @@ static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy, bool retained) 
 #endif
   lv_runtime_t *values = d->values;
   const uint16_t *order;
+  unsigned work_channel=c->work_channel;
   unsigned count = dg_draw_order(d, &order);
   unsigned first = 0;
 #if DG_D10
@@ -2425,6 +2499,7 @@ static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy, bool retained) 
         continue;
       const dg_sprite_t *s = pass < d->trail_count ? &d->trails[pass].sprite
                                                    : &d->sprites[i];
+      c->work_channel=i;
       draw_sprite(c, d, i, s, ox, oy);
     }
 #if DG_D10
@@ -2435,6 +2510,7 @@ static void draw_scene(wc_t *c, dg_runtime_t *d, int ox, int oy, bool retained) 
 #if DG_D10
   free(prefix.data);
 #endif
+  c->work_channel=work_channel;
 }
 
 // ---- Pointer ----
@@ -2657,10 +2733,16 @@ bool wc_render(wc_t *c, dg_runtime_t *d, int pointer_x, int pointer_y,
     return false;
   c->serial++;
   c->renders++;
+  c->frame_pixels=c->frame_inverse_pixels=0;
+  unsigned work_loads=c->loads,work_evictions=c->evictions;
+  unsigned work_pressure=c->pressure_evictions,work_scenes=c->scene_renders;
+  bool same_movie=c->owner==d && c->movie==d->movie;
+  c->work.frames++;
   if (same_scene || (c->transition_next && !transition_new && d->transition_active)) {
     memcpy(target(c), c->scene, sizeof(c->pixels));
   } else {
     c->scene_renders++;
+    c->work.scene_frames++;
 #if DG_D5
   if (d->native_dialog && d->suspended_stage) {
     // The source dialog window (416x240) over the suspended stage.
@@ -2753,6 +2835,20 @@ bool wc_render(wc_t *c, dg_runtime_t *d, int pointer_x, int pointer_y,
   c->pointer_shown = pointer_shown;
   c->background = background;
   c->externals = externals;
+  if(c->frame_pixels>c->work.peak_frame_pixels)c->work.peak_frame_pixels=c->frame_pixels;
+  if(c->frame_inverse_pixels>c->work.peak_frame_inverse_pixels)
+    c->work.peak_frame_inverse_pixels=c->frame_inverse_pixels;
+  if(c->loads-work_loads>c->work.peak_frame_loads)c->work.peak_frame_loads=c->loads-work_loads;
+  if(c->evictions-work_evictions>c->work.peak_frame_evictions)
+    c->work.peak_frame_evictions=c->evictions-work_evictions;
+  unsigned pressure=c->pressure_evictions-work_pressure;
+  if(pressure>c->work.peak_frame_pressure_evictions)c->work.peak_frame_pressure_evictions=pressure;
+  if(c->scene_renders!=work_scenes) {
+    c->cache_pressure_run=pressure>32?(same_movie?c->cache_pressure_run+1:1):0;
+    if(c->cache_pressure_run>c->work.peak_cache_pressure_run)
+      c->work.peak_cache_pressure_run=c->cache_pressure_run;
+  }
+  if(c->image_bytes>c->work.peak_image_bytes)c->work.peak_image_bytes=c->image_bytes;
   return true;
 }
 

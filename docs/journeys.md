@@ -32,7 +32,7 @@ regressions; none is an original-projector comparison or Android TV result.
 | Willy Werkel cars | `full_journey` | Player creation/reload; part collection and dragging; car save, rename, reboot/load; certificate and native print request/cancel |
 | Findus Christmas | `full_journey` | All 24 calendar doors and returns; day 16 drag/removal |
 | Findus Mucklas | `full_journey` with activity; `train-station-soak` | Player creation/reload; clock victory, inventory reward/reload; ten simulated minutes in the reported train-station slowdown scene |
-| Findus ghosts | `player-yard` | Publisher skip, name entry, player save, story to yard, sustained scene playback |
+| Findus ghosts | `rainy-opening`, `player-yard` | Natural publisher reel and sustained rain/ghost films; publisher skip, name entry, player save, story to yard |
 | Findus circus | `player-yard` | Clown selection, keyboard name entry, save, story to yard, sustained scene playback |
 | Findus birthday | `player-registration` | Bedroom film loops, name entry, saved registration, room entry and sustained playback |
 | Löwenzahn 1 | `full_journey` | Both complete intro clips, volume slider and retained settings, all nine menus/first topics and panorama returns |
@@ -54,7 +54,7 @@ The six additional experimental adapters register these routes:
 | Löwenzahn 4 | `rocket-login` | Rocket intro, skeleton profile, saved preferences and wagon exterior |
 | Löwenzahn 5 | `opening-login` | Device checks, snail profile, opening story skip and wagon exterior |
 
-The suite registers 23 default journeys across 20 games. The compatibility
+The suite registers 24 default journeys across 20 games. The compatibility
 workarounds and conversion limits are documented in
 [additional-ports.md](additional-ports.md). Each route includes concrete
 state expectations; startup alone does not establish activity coverage.
@@ -93,9 +93,16 @@ output, so choose distinct directories when preserving evidence or baselines.
 
 ## Performance gates
 
-A run without a baseline records measurements and marks its performance
-gate `unbaselined`. Its passing status establishes only the configured
-correctness checks. To compare a passing port before and after a change:
+A rendered journey also checks deterministic bitmap scans, inverse-mapping waste
+and sustained image-cache pressure whenever its runtime supplies work counters.
+These gates do not need a timing baseline. `mise run test-performance` builds all
+20 ports, requires counters and complete rendered coverage, applies Android's
+image-cache budget and verifies final source freshness. See
+[performance without a projector](validation.md#performance-without-a-projector)
+for the limits and evidence scope.
+
+A run without a timing baseline records measurements and marks its timing
+gate `unbaselined`. To compare a passing port before and after a change:
 
 ```sh
 uv run --locked director64 journey --game findus-workshop \

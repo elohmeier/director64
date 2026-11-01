@@ -10,11 +10,12 @@ export function probeMetrics(directory = process.env.DIRECTOR64_PROBE_METRICS) {
   const file = join(directory, `${process.pid}.jsonl`);
   let index = 0;
   return {
-    start(command) {
+    start(command, module) {
       // Write the attempted input before executing it: a killed or hung
       // runtime must retain the command that never produced a sample.
       if (command !== undefined)
         appendFileSync(join(directory, `${process.pid}.commands.txt`), command + "\n");
+      module?._d64_render_work_reset?.();
       return {time: performance.now(), cpu: process.cpuUsage()};
     },
     end(start, command, module) {
@@ -29,6 +30,8 @@ export function probeMetrics(directory = process.env.DIRECTOR64_PROBE_METRICS) {
         movie: module._d64_movie ? module.UTF8ToString(module._d64_movie()) : "",
         frame: module._d64_frame?.() ?? 0,
         script_errors: module._d64_script_errors?.() ?? 0,
+        render_work: module._d64_render_work_json
+          ? JSON.parse(module.UTF8ToString(module._d64_render_work_json())) : null,
       }) + "\n");
     },
   };

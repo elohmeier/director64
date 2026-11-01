@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .fuzz import Probe, ProbeFailure
 from .project import GameSpec, repository
+from .render_work import summarize as summarize_render_work
 
 
 def plans(game: GameSpec) -> list[dict]:
@@ -185,6 +186,7 @@ def performance(directory: Path) -> dict:
         "peak_rss_bytes": max(s["peak_rss_bytes"] for s in samples),
         "wasm_bytes": max(s["wasm_bytes"] for s in samples),
         "script_errors": max(s["script_errors"] for s in samples), "scenes": scenes,
+        "render_work": summarize_render_work(samples),
     }
 
 
@@ -324,6 +326,12 @@ def run_case(game, plan, output, timeout, baseline, slowdown, memory_growth):
         report["performance"] = performance(metrics)
         if report["performance"]["script_errors"]:
             report.update(status="failed", error="recovered script alerts in probe metrics")
+        work = report["performance"]["render_work"]
+        report["render_work_gate"] = "passing" if work["available"] else "unavailable"
+        if work["findings"]:
+            report.update(status="failed", render_work_gate="failed",
+                          error="renderer work budget exceeded",
+                          render_work_findings=work["findings"])
     except (OSError, ValueError) as error:
         report.update(status="failed", metrics_error=str(error))
     if baseline and report["status"] == "passing":

@@ -14,7 +14,7 @@ flags=(-std=c17 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined
 "$cc" "${flags[@]}" tests/native/test_lingo_encoding.c runtime/lingo/lingo_runtime.c \
     -lm -o build/sanitize/lingo_encoding
 build/sanitize/lingo_encoding
-for name in web_metamorphic web_render_cache web_flash_cache web_flash_text_hit web_film_backdrop web_lifecycle windows; do
+for name in web_metamorphic web_render_cache web_flash_cache web_flash_text_hit web_film_backdrop web_film_work web_lifecycle windows; do
     "$cc" "${flags[@]}" "tests/native/test_$name.c" platforms/web/compositor.c \
         runtime/director/director.c runtime/director/shape.c runtime/lingo/lingo_runtime.c \
         runtime/package/package.c -lm -o "build/sanitize/$name"

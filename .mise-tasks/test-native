@@ -314,6 +314,9 @@ for profile in d10 d85; do
     compile "web_film_frames_$profile" "${options[@]}" -Iplatforms/web \
         tests/native/test_web_film_frames.c platforms/web/compositor.c \
         runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+    compile "web_film_work_$profile" "${options[@]}" -Iplatforms/web \
+        tests/native/test_web_film_work.c platforms/web/compositor.c \
+        runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
     if [ "$profile" = d85 ]; then
         compile web_film_backdrop_d85 "${options[@]}" -Iplatforms/web \
             tests/native/test_web_film_backdrop.c platforms/web/compositor.c \
