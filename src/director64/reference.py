@@ -95,6 +95,32 @@ def compatibility_plan(value: dict) -> dict:
     return value
 
 
+def prerequisites(source: Path, value: list) -> list[dict]:
+    """Original-disc installers the projector needs in its private prefix
+    (Ghosts' launcher requires Shockwave 8.5), pinned and run silently."""
+    if not isinstance(value, list) or not 1 <= len(value) <= 4:
+        raise ValueError("reference prerequisites must be a short list")
+    result = []
+    for item in value:
+        if (not isinstance(item, dict) or set(item) != {"path", "sha256", "arguments"}
+                or not isinstance(item["path"], str)
+                or not re.fullmatch(r"[a-f0-9]{64}", str(item["sha256"]))
+                or not isinstance(item["arguments"], list) or len(item["arguments"]) > 8
+                or not all(isinstance(a, str) and re.fullmatch(r"[/A-Za-z0-9=._-]{1,64}", a)
+                           for a in item["arguments"])):
+            raise ValueError("invalid reference prerequisite")
+        path = source / relative(item["path"])
+        if (path.suffix.lower() != ".exe" or not path.is_file()
+                or not path.resolve().is_relative_to(source.resolve())):
+            raise ValueError(f"reference prerequisite is missing: {item['path']}")
+        with path.open("rb") as handle:
+            if hashlib.file_digest(handle, "sha256").hexdigest() != item["sha256"]:
+                raise ValueError(f"reference prerequisite hash differs: {item['path']}")
+        result.append({"path": path.relative_to(source).as_posix(),
+                       "arguments": item["arguments"]})
+    return result
+
+
 def pe32_gui_launcher(path: Path) -> bool:
     """Recognize the bounded headers of an original x86 GUI executable."""
     size = path.stat().st_size
@@ -137,7 +163,7 @@ def layout_for(game, source: Path, *, iso: Path | None = None,
         required = {"schema_version", "source_sha256", "launcher", "cwd"}
         if (not isinstance(recipe, dict) or not required <= set(recipe)
                 or set(recipe) - required - {"optical_drive", "compatibility", "memory_report_mib",
-                                            "launcher_sha256"}
+                                            "launcher_sha256", "prerequisites"}
                 or recipe["schema_version"] != 1
                 or recipe["source_sha256"] != game.source["sha256"]):
             raise ValueError("original reference layout must match the selected source")
@@ -174,6 +200,8 @@ def layout_for(game, source: Path, *, iso: Path | None = None,
     result = {"stage": stage, "install": "disc-copy",
             "launcher": candidates[0].relative_to(source).as_posix(),
             "cwd": root, "files": files}
+    if recipe and "prerequisites" in recipe:
+        result["prerequisites"] = prerequisites(source, recipe["prerequisites"])
     if recipe and "memory_report_mib" in recipe:
         value = recipe["memory_report_mib"]
         if type(value) is not int or not 16 <= value <= 1024:

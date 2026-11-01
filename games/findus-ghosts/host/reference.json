@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_sha256": "05d7ad48350100e96d1deadb10f0dfd5f099dc19d7b63180647ca756239ed41b",
+  "launcher": "PFSTART.EXE",
+  "launcher_sha256": "cbb59daf19eeed1cb29e9319434d3486d7d58acc8a1c656820f9968da3a189c3",
+  "cwd": ".",
+  "prerequisites": [
+    {
+      "path": "EXTENSIO/FLASHSHO.EXE",
+      "sha256": "62c32749b0149e3e1f8db26ad6fc4e81e5cb6b5b00be86e16526136ecc9171fa",
+      "arguments": [
+        "/s"
+      ]
+    }
+  ]
+}

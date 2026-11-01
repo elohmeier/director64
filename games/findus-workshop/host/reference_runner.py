@@ -375,6 +375,10 @@ def capture(args: argparse.Namespace) -> int:
         metadata["limitations"].append(
             "The private installation uses a declared protection compatibility patch; "
             "this is not an unmodified original-game capture.")
+    if layout.get("prerequisites"):
+        metadata["limitations"].append(
+            "Pinned original-disc installers ran first in a prefix on a 1.5 GiB tmpfs, "
+            "discarded after the capture.")
     write_json(output / "provenance.json", metadata)
     container = "director64-reference-" + uuid.uuid4().hex[:12]
     argv = [
@@ -421,6 +425,11 @@ def capture(args: argparse.Namespace) -> int:
     ]
     if layout.get("memory_report_mib") is not None:
         argv += ["--volume", f"{output / 'legacy-meminfo'}:/proc/meminfo:ro"]
+    if layout.get("prerequisites"):
+        # Legacy installers keep free space in 32 bits: a multi-terabyte host
+        # disk wraps to "not enough space". The prefix lives on a small tmpfs.
+        argv += ["--tmpfs", f"/prefix:rw,exec,size=1536m,uid={os.getuid()},"
+                            f"gid={os.getgid()},mode=0700"]
     if layout.get("optical_drive"):
         argv += ["--volume", f"{output / 'disc'}:/media/disc:ro"]
         if layout["optical_drive"]["raw_image"]:
@@ -667,6 +676,9 @@ def container_capture(args: argparse.Namespace) -> int:
     try:
         for directory in ("runtime", "cache", "config"):
             (session / directory).mkdir(mode=0o700)
+        if layout.get("prerequisites"):
+            Path("/prefix/wine").mkdir()
+            (session / "wine").symlink_to("/prefix/wine")
         launch(["Xvfb", ":99", "-screen", "0", f"{width}x{height}x24", "-nolisten", "tcp"],
                "xvfb.log")
         deadline = time.monotonic() + 10
@@ -714,6 +726,18 @@ def container_capture(args: argparse.Namespace) -> int:
         for path in installed.rglob("*"):
             if path.is_file() and path.suffix.lower() in {".ttf", ".otf"}:
                 shutil.copy2(path, fonts / path.name)
+        for item in layout.get("prerequisites", []):
+            # A pinned original installer, before any retail launch.
+            installer = "C:\\Original\\" + item["path"].replace("/", "\\")
+            completed = subprocess.run(["wine", installer, *item["arguments"]], timeout=300,
+                                       capture_output=True, text=True, check=False)
+            # Self-extracting installers return before their child finishes.
+            waited = subprocess.run(["wineserver", "-w"], timeout=300, check=False)
+            with (session / "prerequisites.log").open("a") as log:
+                log.write(f"{installer} {item['arguments']}: exit {completed.returncode}, "
+                          f"wineserver {waited.returncode}\n{completed.stdout}{completed.stderr}\n")
+            result.setdefault("prerequisites", []).append(
+                {**item, "exit_code": completed.returncode})
         result["initial_save_hashes"] = {
             path.name: digest(path) for path in sorted((game / "DATA").glob("*.TXT"))
         }
