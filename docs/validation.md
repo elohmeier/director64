@@ -269,15 +269,25 @@ uv run --locked director64 compare --game findus-ghosts \
   --original build/findus-ghosts/<source>/reference/<capture> --start 60
 ```
 
+`--journey NAME` runs a registered journey on the port, converts its recorded
+input into the original runner's replay (pointer moves and button edges at
+the same ticks; text entry typed as letters just before the TV dialog would
+deliver it) and captures the original with it; `--journey all` does this for
+every journey of the game. `--original CAPTURE` reuses a capture whose replay
+is identical.
+
 Both sides start without saves; differing saves change what scenes show, so a
 device with player data is not comparable. The original runs in real time and
 the two clocks start at different moments, so the tool samples both at
-`--fps` (5), finds the global time offset over the whole recording, and compares
+`--fps` (5), estimates the time offset over the whole recording and then per
+movie (input resynchronizes the two: Birthday's original trails by 10 s before
+the first click and 1.4 s after it), and compares
 each port frame with every original frame within `--window` seconds (1.5),
 keeping each pixel's closest match. Animation phase, rain and timing jitter
 drop out; content the original never shows there does not. A 4×4 block that
 differs by more than `--tolerance` (48) in at least `--persist` (80%) of a
-movie's frames is persistent. `--start` skips seconds of replay in the
+movie's frames is persistent; a movie sampled fewer than 10 times (a
+launcher, the original still starting) is reported as `too-few-frames`. `--start` skips seconds of replay in the
 analysis, not in the offset search.
 
 Output under `build/<game>/<source>/compare/`: `report.json` with the offset
@@ -291,7 +301,11 @@ expected to differ.
 The recorder omits the host pointer (`-draw_mouse 0`); a capture that
 still shows it reports the pointer as a small persistent region, which is a
 convenient sensitivity check. Ghosts' opening and login scene match apart from
-a 4-pixel edge sliver (2026-11-01). Source-free tests cover offset recovery,
+a 4-pixel edge sliver, and `player-yard` (publisher reel, login, typed name,
+story, yard) shows no persistent difference (2026-11-01). A second launch with
+a saved player is not comparable yet: the runner cannot restart the original
+within one capture. Birthday's `player-registration` (typed name, both
+bedroom scenes) shows none either. Source-free tests cover offset recovery,
 phase jitter and a missing static object (`tests/test_compare.py`).
 
 ## Original Director evidence

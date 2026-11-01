@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 from collections import deque
 from datetime import UTC, datetime
@@ -37,6 +38,7 @@ from .visual import write_png
 from .web import probe_path
 
 BLOCK = 4  # Persistence is judged per 4x4 block, ignoring isolated pixels.
+MIN_FRAMES = 10  # Fewer sampled frames of a movie give no verdict.
 
 
 def ticks_at(ms: float) -> int:
@@ -66,37 +68,110 @@ def original_frames(capture: Path, fps: float, width: int, height: int,
     return frames.reshape(-1, height, width, 3)
 
 
-def port_frames(game, replay: dict, fps: float, scratch: Path,
+STEP = re.compile(r"step (\d+) (-?\d+) (-?\d+) ([01])\Z")
+# Macintosh virtual key codes of typed letters (platforms/web/keyboard.inc).
+LETTERS = (0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13,
+           7, 16, 6)
+
+
+def replay_commands(replay: dict) -> list[str]:
+    """A timed original-projector replay as probe commands."""
+    commands, x, y, down, tick = [], 0, 0, 0, 0
+    for action in replay["actions"]:
+        due = ticks_at(action["at_ms"])
+        if due > tick:
+            commands.append(f"step {due - tick} {x} {y} {down}")
+            tick = due
+        if action["type"] == "pointer":
+            x, y = action["x"], action["y"]
+        elif action["type"] in ("button_down", "button_up") and action["button"] == "left":
+            down = int(action["type"] == "button_down")
+        elif action["type"] == "key":
+            key = action["key"]
+            if len(key) != 1 or not key.isascii() or not key.isalpha():
+                raise ValueError(f"the comparison cannot replay key {key!r} yet")
+            code = LETTERS[ord(key.upper()) - ord("A")]
+            commands += [f"key {code} {ord(key)} 1", f"key {code} {ord(key)} 0"]
+    end = ticks_at(replay["duration_ms"])
+    if end > tick:
+        commands.append(f"step {end - tick} {x} {y} {down}")
+    return commands
+
+
+def journey_replay(name: str, record: dict) -> tuple[dict, list[str]]:
+    """A port journey's recorded probe commands and the same input as a timed
+    original-projector replay. Text entry, which the TV's dialog delivers to
+    the field at once, becomes letters typed just before that moment."""
+    actions, x, y, down, tick = [], None, None, 0, 0
+    for command in record["commands"]:
+        step = STEP.match(command)
+        if step:
+            ticks, nx, ny, ndown = (int(v) for v in step.groups())
+            at = round(tick * 1000 / 60)
+            if (nx, ny) != (x, y):
+                actions.append({"at_ms": at, "type": "pointer", "x": nx, "y": ny})
+                x, y = nx, ny
+            if ndown != down:
+                kind = "button_down" if ndown else "button_up"
+                actions.append({"at_ms": at, "type": kind, "button": "left"})
+                down = ndown
+            tick += ticks
+        elif command.startswith("text "):
+            text = command.split(" ", 2)[2]
+            if not text.isascii() or not text.isalnum():
+                raise ValueError(f"cannot type {text!r} into the original")
+            at = round(tick * 1000 / 60)
+            for i, character in enumerate(text):
+                actions.append({"at_ms": max(0, at - 150 * (len(text) - i)), "type": "key",
+                                "key": character})
+        else:
+            raise ValueError(f"journey command has no original equivalent: {command}")
+    states = record["states"]
+    for checkpoint in record["checkpoints"]:
+        at = round(states[checkpoint["state"]]["tick"] * 1000 / 60)
+        actions.append({"at_ms": at, "type": "checkpoint", "id": checkpoint["label"]})
+    actions.sort(key=lambda a: a["at_ms"])
+    duration = round(tick * 1000 / 60) + 1000
+    if duration > 600_000:
+        raise ValueError("the journey exceeds the original runner's ten-minute limit")
+    replay = {"schema_version": 1, "id": re.sub(r"[^A-Za-z0-9_-]", "-", name)[:48],
+              "clock": "host_monotonic_ms", "duration_ms": duration, "actions": actions}
+    return replay, [*record["commands"], f"step 60 {x or 0} {y or 0} 0"]
+
+
+def port_frames(game, commands: list[str], duration_ms: int, fps: float, scratch: Path,
                 timeout: float) -> tuple[np.ndarray, list[dict]]:
-    """Render REPLAY in the web probe, capturing the stage every 1/FPS s."""
+    """Run COMMANDS in the web probe, capturing the stage every 1/FPS s. Steps
+    are split at sample ticks; a split step is the same input."""
     frames_dir = scratch / "port"
     frames_dir.mkdir()
     env = os.environ | {"DIRECTOR64_PROBE_CAPTURE": str(frames_dir)}
     probe = Probe(probe_path(game), game.data["port"]["entry_movie"],
                   scratch / "probe.stderr", env, timeout=timeout)
     state = probe.receive(timeout=300)  # the boot state precedes any command
-    events = deque(a for a in replay["actions"] if a["type"] != "checkpoint")
-    if any(a["type"] == "key" for a in events):
-        raise ValueError("key actions are not supported by the comparison yet")
-    x, y, down, tick = 0, 0, 0, 0
-    samples = []
-    count = int(replay["duration_ms"] * fps / 1000)
+    pending = deque(commands)
+    tick, samples = 0, []
+    count = int(duration_ms * fps / 1000)
     try:
         for index in range(count):
             target = ticks_at(index * 1000 / fps)
-            while True:
-                due = ticks_at(events[0]["at_ms"]) if events else None
-                stop = target if due is None or due > target else due
-                if stop > tick:
-                    probe.send(f"step {stop - tick} {x} {y} {down}", stop - tick)
-                    tick = stop
-                if due is None or due > target:
+            while pending:
+                step = STEP.match(pending[0])
+                if not step:
+                    probe.send(pending.popleft())
+                    continue
+                ticks, x, y, down = (int(v) for v in step.groups())
+                if tick + ticks <= target:
+                    pending.popleft()
+                elif tick < target:
+                    pending[0] = f"step {tick + ticks - target} {x} {y} {down}"
+                    ticks = target - tick
+                else:
                     break
-                event = events.popleft()
-                if event["type"] == "pointer":
-                    x, y = event["x"], event["y"]
-                elif event["type"] in ("button_down", "button_up") and event["button"] == "left":
-                    down = int(event["type"] == "button_down")
+                state = probe.send(f"step {ticks} {x} {y} {down}", ticks)
+                tick += ticks
+            if tick < target:
+                break  # the commands end before the recording does
             state = probe.send(f"capture {index:05}.rgba")
             sprites = probe.send("sprites").get("sprites", [])
             samples.append({"index": index, "tick": tick, "movie": state.get("movie"),
@@ -117,18 +192,20 @@ def small(frames: np.ndarray) -> np.ndarray:
     return grey.reshape(n, h // 8, 8, w // 8, 8).mean(axis=(2, 4))
 
 
-def best_offset(port: np.ndarray, original: np.ndarray, first: int, search: range) -> int:
+def best_offset(port: np.ndarray, original: np.ndarray, indices: range | list[int],
+                search: range) -> int:
     """Frames to add to a port index to reach its original counterpart: the
     offset whose single frames match best (a window would tie neighbours)."""
     p, o = small(port), small(original)
+    indices = list(indices)
     best, score = 0, float("inf")
     for offset in search:
         errors = []
-        for i in range(first, len(p), 2):
+        for i in indices[::2]:
             if not 0 <= i + offset < len(o):
                 continue
             errors.append(np.abs(o[i + offset] - p[i]).mean())
-        if len(errors) >= max(5, (len(p) - first) // 8) and np.median(errors) < score:
+        if len(errors) >= max(2, len(indices) // 8) and np.median(errors) < score:
             best, score = offset, float(np.median(errors))
     if score == float("inf"):
         raise ValueError("the recordings do not overlap; lengthen the replay or --search")
@@ -196,21 +273,34 @@ def panel(port: np.ndarray, original: np.ndarray, persistent: np.ndarray,
 
 
 def compare(game, capture: Path, output: Path, *, fps: float, window: float,
-            tolerance: int, persist: float, start: float, timeout: float) -> dict:
+            tolerance: int, persist: float, start: float, timeout: float,
+            commands: list[str] | None = None) -> dict:
     replay = json.loads((capture / "replay.json").read_text())
     scratch = output / "frames"
     scratch.mkdir(parents=True)
-    port, samples = port_frames(game, replay, fps, scratch, timeout)
+    port, samples = port_frames(game, commands or replay_commands(replay),
+                                replay["duration_ms"], fps, scratch, timeout)
     height, width = port.shape[1:3]
     original = original_frames(capture, fps, width, height, scratch)
     reach = round(window * fps)
     first = round(start * fps)
-    # The whole recording pins the offset: looping scenes alone are ambiguous.
-    offset = best_offset(port, original, 0, range(-round(5 * fps), round(30 * fps)))
+    # The whole recording pins a first estimate (looping scenes alone are
+    # ambiguous). Input-driven games then resynchronize at every click, so each
+    # movie gets its own offset near that estimate.
+    offset = best_offset(port, original, range(len(port)),
+                         range(-round(5 * fps), round(30 * fps)))
+    segments: dict[str, list[int]] = {}
+    for sample in samples:
+        segments.setdefault(sample["movie"], []).append(sample["index"])
+    offsets = {name: best_offset(port, original, indices,
+                                 range(offset - round(15 * fps), offset + round(15 * fps) + 1))
+               if len(indices) >= MIN_FRAMES else offset
+               for name, indices in segments.items()}
     movies: dict[str, dict] = {}
     for sample in samples[first:]:
         i = sample["index"]
-        lo, hi = i + offset - reach, i + offset + reach + 1
+        offset_i = offsets[sample["movie"]]
+        lo, hi = i + offset_i - reach, i + offset_i + reach + 1
         if lo < 0 or hi > len(original):
             continue
         difference, best = closest(port[i], original[lo:hi])
@@ -227,6 +317,12 @@ def compare(game, capture: Path, output: Path, *, fps: float, window: float,
               "fps": fps, "window_s": window, "tolerance": tolerance, "persist": persist,
               "offset_s": offset / fps, "movies": []}
     for name, movie in movies.items():
+        if movie["frames"] < MIN_FRAMES:
+            # A movie seen for a moment (a launcher, the original still
+            # starting) cannot show persistence.
+            report["movies"].append({"movie": name, "frames": movie["frames"],
+                                     "status": "too-few-frames", "regions": []})
+            continue
         persistent_blocks = movie["counts"] >= max(1, persist * movie["frames"])
         found = regions(persistent_blocks, minimum=4)
         # The sample showing the most difference represents the movie.
@@ -238,7 +334,8 @@ def compare(game, capture: Path, output: Path, *, fps: float, window: float,
         stem = name.replace("/", "_")
         overview = panel(port[index], original[match], persistent, None)
         write_png(output / f"{stem}.png", overview.shape[1], overview.shape[0], rgba(overview))
-        entry = {"movie": name, "frames": movie["frames"],
+        entry = {"movie": name, "frames": movie["frames"], "status": "compared",
+                 "offset_s": offsets[name] / fps,
                  "persistent_fraction": round(float(persistent_blocks.mean()), 4),
                  "representative": {"port_tick": sample["tick"], "port_frame": sample["frame"],
                                     "original_s": match / fps},
@@ -259,9 +356,12 @@ def compare(game, capture: Path, output: Path, *, fps: float, window: float,
 def main(game, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="director64 compare", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--original", type=Path, help="an existing reference capture directory")
+    source = parser.add_mutually_exclusive_group()
     source.add_argument("--replay", type=Path, help="capture the original with this replay first")
+    source.add_argument("--journey", help="run this registered journey on the port, then "
+                        "capture the original with the same input")
+    parser.add_argument("--original", type=Path,
+                        help="reuse this reference capture (made with the same replay)")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--fps", type=float, default=5)
     parser.add_argument("--window", type=float, default=1.5,
@@ -272,20 +372,64 @@ def main(game, argv: list[str]) -> int:
     parser.add_argument("--start", type=float, default=0, help="seconds of replay to skip")
     parser.add_argument("--timeout", type=float, default=1800)
     args = parser.parse_args(argv)
-    capture = (args.original or run_original(game, args.replay)).resolve()
-    if not (capture / "original.mkv").is_file():
-        raise ValueError(f"no original recording in {capture}")
+    if not (args.replay or args.journey or args.original):
+        parser.error("choose --replay, --journey or --original")
     output = (args.output or game.work / "compare" /
               datetime.now(UTC).strftime("%Y%m%dT%H%M%S")).resolve()
     if not output.is_relative_to(game.root / "build"):
         raise ValueError("comparisons contain game imagery; keep them under build/")
     output.mkdir(parents=True, exist_ok=False)
-    report = compare(game, capture, output, fps=args.fps, window=args.window,
-                     tolerance=args.tolerance, persist=args.persist, start=args.start,
-                     timeout=args.timeout)
-    print(f"offset {report['offset_s']:+.1f} s; report {output / 'report.json'}")
+    options = {"fps": args.fps, "window": args.window, "tolerance": args.tolerance,
+               "persist": args.persist, "start": args.start, "timeout": args.timeout}
+    if args.journey == "all":
+        if args.original:
+            parser.error("--journey all captures the original once per journey")
+        from .journeys import plans
+
+        failed = 0
+        for plan in plans(game):
+            print(f"== {plan['name']}")
+            try:
+                run_one(game, output / plan["name"], plan["name"], None, None, options)
+            except (OSError, ValueError, subprocess.CalledProcessError) as error:
+                failed += 1
+                print(f"  failed: {error}")
+        return int(failed > 0)
+    run_one(game, output, args.journey, args.replay, args.original, options)
+    return 0
+
+
+def run_one(game, output: Path, journey: str | None, replay_path: Path | None,
+            original: Path | None, options: dict) -> dict:
+    output.mkdir(parents=True, exist_ok=True)
+    commands = None
+    if journey:
+        from .journeys import plans, run_script
+
+        plan = next((p for p in plans(game) if p["name"] == journey), None)
+        if plan is None:
+            raise ValueError(f"{game.slug} has no journey {journey}")
+        run_script(game, plan, output / "journey")
+        record = json.loads((output / "journey/replay.json").read_text())
+        replay, commands = journey_replay(f"{game.slug}-{journey}", record)
+        replay_path = output / "original-replay.json"
+        replay_path.write_text(json.dumps(replay, indent=2) + "\n")
+    if original:
+        capture = original.resolve()
+        if replay_path and (json.loads(replay_path.read_text()) !=
+                            json.loads((capture / "replay.json").read_text())):
+            raise ValueError("the reused capture was made with a different replay")
+    else:
+        capture = run_original(game, replay_path.resolve())
+    if not (capture / "original.mkv").is_file():
+        raise ValueError(f"no original recording in {capture}")
+    report = compare(game, capture, output, commands=commands, **options)
+    print(f"recording offset {report['offset_s']:+.1f} s; report {output / 'report.json'}")
     for movie in report["movies"]:
-        print(f"{movie['movie']}: {movie['frames']} frames, "
+        if movie["status"] != "compared":
+            print(f"{movie['movie']}: {movie['frames']} frames, {movie['status']}")
+            continue
+        print(f"{movie['movie']}: {movie['frames']} frames at {movie['offset_s']:+.1f} s, "
               f"{movie['persistent_fraction']:.1%} persistently different, "
               f"{len(movie['regions'])} regions")
         for region in movie["regions"][:8]:
@@ -293,4 +437,4 @@ def main(game, argv: list[str]) -> int:
             who = (f"channel {top['channel']} {top['name'] or top['member']} ink {top['ink']}"
                    if top else "no sprite")
             print(f"  {region['rect']} {region['pixels']} px  top: {who}")
-    return 0
+    return report

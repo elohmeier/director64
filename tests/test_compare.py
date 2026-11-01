@@ -39,7 +39,7 @@ def persistent(port: np.ndarray, original: np.ndarray, offset: int, reach: int) 
 def test_offset_is_recovered():
     original = recording(60)
     port = recording(50, shift=4)  # the port starts 4 frames into the original
-    assert best_offset(port, original, 0, range(-3, 10)) == 4
+    assert best_offset(port, original, range(50), range(-3, 10)) == 4
 
 
 def test_phase_jitter_and_motion_are_not_differences():
@@ -70,3 +70,42 @@ def test_panel_shapes():
     crop = panel(frame, frame, mask, (60, 40, 80, 60, 4))
     # A 20-pixel box with 40-pixel margins, clipped to the 96-pixel stage.
     assert crop.shape == (96, 3 * 100 + 12, 3)
+
+
+def test_journey_becomes_the_same_timed_input():
+    from director64.compare import journey_replay, replay_commands
+
+    record = {
+        "commands": ["step 600 400 300 0", "step 12 120 80 0", "step 4 120 80 1",
+                     "step 600 120 80 0", "text 60 ANNA", "step 12 50 60 0"],
+        "states": [{"tick": 0}, {"tick": 600}, {"tick": 612}, {"tick": 616},
+                   {"tick": 1216}, {"tick": 1216}, {"tick": 1228}],
+        "checkpoints": [{"label": "name-entry", "state": 4}],
+    }
+    replay, commands = journey_replay("findus-ghosts-player-yard", record)
+    actions = replay["actions"]
+    assert [a["type"] for a in actions if a["type"] in ("button_down", "button_up")] == [
+        "button_down", "button_up"]
+    press = next(a for a in actions if a["type"] == "button_down")
+    assert press["at_ms"] == round(612 * 1000 / 60)
+    keys = [a for a in actions if a["type"] == "key"]
+    assert "".join(a["key"] for a in keys) == "ANNA"
+    # Typed just before the dialog's text arrives, in order.
+    assert keys[-1]["at_ms"] < round(1216 * 1000 / 60)
+    assert [a["at_ms"] for a in keys] == sorted(a["at_ms"] for a in keys)
+    assert {"at_ms": round(1216 * 1000 / 60), "type": "checkpoint", "id": "name-entry"} in actions
+    assert commands[:-1] == record["commands"]
+    # The original's replay played on the port keeps the input timeline.
+    replayed = replay_commands(replay)
+    pressed = [c for c in replayed if c.startswith("step") and c.endswith(" 1")]
+    assert sum(int(c.split()[1]) for c in pressed) == 4
+    assert sum(int(c.split()[1]) for c in replayed if c.startswith("step")) == round(
+        replay["duration_ms"] * 60 / 1000)
+
+
+def test_each_segment_finds_its_own_offset():
+    # Input resynchronizes the original: its lag differs before and after a click.
+    original = recording(70)
+    port = np.concatenate([recording(25, shift=4), recording(25, shift=33)])
+    assert best_offset(port, original, range(25), range(-3, 12)) == 4
+    assert best_offset(port, original, range(25, 50), range(-3, 12)) == 8
