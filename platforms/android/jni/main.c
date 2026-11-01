@@ -13,6 +13,7 @@
 #include "web_runtime.h"
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
+#include <android/trace.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
 #include <ctype.h>
@@ -727,6 +728,10 @@ static void *game(void *arg) {
   audio_suspend(holds != 0);
   pthread_mutex_unlock(&state);
   video_init(&videos);
+  // The compositor's OpenMP workers sleep between draws instead of spinning
+  // for libomp's default 200 ms, which would keep idle cores busy.
+  setenv("KMP_BLOCKTIME", "0", 1);
+  setenv("OMP_WAIT_POLICY", "passive", 1);
   unsigned seed = (unsigned)(now() * 1e6) ^ (unsigned)getpid() * 2654435761u;
 #ifdef DIRECTOR64_ANDROID_VALIDATION
   seed = 42; // Repeatable port observations; original projector seeds are unobserved.
@@ -828,6 +833,8 @@ static void *game(void *arg) {
       }
       continue;
     }
+    // Perfetto/systrace spans: service, render and present (docs/android.md).
+    ATrace_beginSection("d64 service");
     double t = now();
     phase += (t - last) * 60e6;
     last = t;
@@ -915,6 +922,7 @@ static void *game(void *arg) {
       snprintf(audio_failure, sizeof(audio_failure), "%s", video_error());
     }
     if (status) {
+      ATrace_endSection();
       char message[512];
       snprintf(message, sizeof(message), "%s",
                status == 2      ? ""
@@ -929,6 +937,7 @@ static void *game(void *arg) {
     bool native_pointer = physical_pointer && !using_pads;
     pthread_mutex_unlock(&state);
     serve_key_field(clicked, px, py);
+    ATrace_endSection();
     service_cost += now() - service_start;
     double render_start = now();
     int kind = !inside ? HOST_CURSOR_HIDDEN :
@@ -937,11 +946,15 @@ static void *game(void *arg) {
     host_cursor_request(&cursor_policy, kind);
     bool show_cursor = inside && host_cursor_software(&cursor_policy);
     pthread_mutex_unlock(&state);
+    ATrace_beginSection("d64 render");
     uint32_t *pixels = d64_render(px, py, show_cursor);
+    ATrace_endSection();
     render_cost += now() - render_start;
     if (pixels || redraw) {
       double present_start = now();
+      ATrace_beginSection("d64 present");
       if(post_cursor_frame(env,d64_pixels(),show_cursor,kind,&redraw))renders++;
+      ATrace_endSection();
       present_cost += now() - present_start;
     } else publish_cursor(env, kind);
 #ifdef DIRECTOR64_ANDROID_VALIDATION

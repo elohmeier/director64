@@ -89,6 +89,50 @@ dg_film_transform_raster_aligned(const dg_film_transform_t *t) {
          t->quad[6] == t->quad[0] && t->quad[7] == t->quad[5];
 }
 
+// A stack of raster-aligned rectangles maps each axis independently: with
+// integral corners b_y, c_x and the bilinear terms are exactly zero, so
+// dg_quad_uv's u depends only on x and v only on y, bit for bit. These give
+// dg_film_transform_point's result for one axis, evaluated once per column or
+// row; a point maps exactly when both of its axes do.
+static inline bool dg_film_transform_separable(const dg_film_transform_t *stack,
+                                               unsigned count) {
+  for (unsigned i = 0; i < count; i++) {
+    const dg_film_transform_t *t = &stack[i];
+    if (!dg_film_transform_raster_aligned(t) || fabsf(t->left) > 65536 ||
+        fabsf(t->top) > 65536 || fabsf(t->quad[0]) > 65536 ||
+        fabsf(t->quad[1]) > 65536 ||
+        !(t->width > 0 && t->width <= 16384 && t->height > 0 &&
+          t->height <= 16384))
+      return false;
+  }
+  return true;
+}
+static inline bool dg_film_transform_x(const dg_film_transform_t *stack,
+                                       unsigned count, float x, float *local_x) {
+  for (unsigned i = 0; i < count; i++) {
+    const dg_film_transform_t *t = &stack[i];
+    float u, v;
+    // At the quad's top edge v is exactly zero, so only u decides.
+    if (!dg_quad_uv(t->quad, x, t->quad[1], &u, &v))
+      return false;
+    x = t->left + u * t->width;
+  }
+  *local_x = x;
+  return true;
+}
+static inline bool dg_film_transform_y(const dg_film_transform_t *stack,
+                                       unsigned count, float y, float *local_y) {
+  for (unsigned i = 0; i < count; i++) {
+    const dg_film_transform_t *t = &stack[i];
+    float u, v;
+    if (!dg_quad_uv(t->quad, t->quad[0], y, &u, &v))
+      return false;
+    y = t->top + v * t->height;
+  }
+  *local_y = y;
+  return true;
+}
+
 // Only destination-independent, fully opaque operations may be flattened.
 // Partial blend and soft masks use Director's destination-dependent integer
 // rounding and must retain their position in the stage's composition order.

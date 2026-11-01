@@ -8,6 +8,7 @@
 #include "flash_render.h"
 #include "shape.h"
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #ifdef DIRECTOR64_DEV_LENIENT
 #define dev_print(...) fprintf(stderr, __VA_ARGS__)
@@ -599,6 +600,21 @@ static void bitmap_work(wc_t *c,dg_runtime_t *d,const dg_sprite_t *sprite,
   }
 }
 
+// Rows of one large bitmap draw are independent: each writes only its own
+// destination row from read-only sources, so splitting them across cores
+// leaves every pixel unchanged. Small draws stay on the calling thread.
+#ifdef _OPENMP
+#define WC_PARALLEL_PIXELS 32768u
+#define WC_PRAGMA(x) _Pragma(#x)
+#define WC_PARALLEL_ROWS(area, reductions) \
+  WC_PRAGMA(omp parallel for schedule(static) reductions if((area) >= WC_PARALLEL_PIXELS))
+#else
+#define WC_PARALLEL_ROWS(area, reductions)
+#endif
+static inline uint64_t rect_area(int l, int t, int r, int b) {
+  return r > l && b > t ? (uint64_t)(r - l) * (unsigned)(b - t) : 0;
+}
+
 static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
                         const wc_image_t *image, int l, int t, int r, int b,
                         unsigned ink, unsigned opacity, int ox, int oy) {
@@ -674,7 +690,10 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
         last = x + 1;
       }
     }
-    for (int y = ct; y < cb && first < last; y++) {
+    WC_PARALLEL_ROWS(first < last ? (uint64_t)(last - first) * (unsigned)(cb > ct ? cb - ct : 0) : 0,
+                     reduction(+:scanned))
+    for (int y = ct; y < cb; y++) {
+      if (first >= last) continue;
       unsigned sy = (unsigned)(((int64_t)(y - t) * 2 + 1) * h / (span_y * 2));
       if (sy >= h)
         sy = h - 1;
@@ -723,10 +742,59 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
     }
     cl = first; cr = last;
   }
+#if DG_D10
+  // A raster-aligned film stack maps columns and rows independently: each
+  // column's and row's source sample, with the same float expressions as the
+  // per-pixel inverse mapping below, is evaluated once. UINT_MAX marks an axis
+  // that falls outside an ancestor or the sprite.
+  unsigned film_rows[WC_HEIGHT];
+  bool film_axes = c->film_transform_count && !transformed && !image->linked_member &&
+      !c->film_clip_disabled &&
+      dg_film_transform_separable(c->film_transform, c->film_transform_count);
+  if (film_axes) {
+    int first = cr, last = cl;
+    for (int x = cl; x < cr; x++) {
+      float sample_x;
+      columns[x] = UINT_MAX;
+      if (!dg_film_transform_x(c->film_transform, c->film_transform_count,
+                               x + 0.5f, &sample_x) ||
+          sample_x < l || sample_x >= r) continue;
+      float u = (sample_x - l) / span_x;
+      columns[x] = (unsigned)(u * w);
+      if (x < first) first = x;
+      last = x + 1;
+    }
+    for (int y = ct; y < cb; y++) {
+      float sample_y;
+      film_rows[y] = UINT_MAX;
+      if (!dg_film_transform_y(c->film_transform, c->film_transform_count,
+                               y + 0.5f, &sample_y) ||
+          sample_y < t || sample_y >= b) continue;
+      float v = (sample_y - t) / span_y;
+      film_rows[y] = (unsigned)(v * h);
+    }
+    cl = first; cr = last;
+  }
+#endif
+  // With independent axes, each column's and row's final source index
+  // (clamped, inside the image, relative to its origin) is known up front.
+  bool axes = mapped;
+#if DG_D10
+  axes |= film_axes;
+#endif
+  if (axes)
+    for (int x = cl; x < cr; x++) {
+      unsigned sx = columns[x];
+      if (sx == UINT_MAX) continue;
+      if (sx >= w) sx = w - 1;
+      columns[x] = (int64_t)sx < source_x || (int64_t)sx >= (int64_t)source_x + image->width
+          ? UINT_MAX : sx - (unsigned)source_x;
+    }
 #if DG_MODERN
   uint32_t fore = opaque_rgb(s->value.flags & 16 ? s->value.fore_rgb : dg_stage_palette(d)[s->value.fore & 255]);
   uint32_t back = opaque_rgb(s->value.flags & 32 ? s->value.back_rgb : dg_stage_palette(d)[s->value.back & 255]);
 #endif
+  WC_PARALLEL_ROWS(rect_area(cl, ct, cr, cb), reduction(+:scanned,sampled))
   for (int y = ct; y < cb; y++) {
     unsigned row_source = 0;
     if (mapped) {
@@ -736,44 +804,64 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
       if ((int64_t)row_source < (int64_t)source_y + image->cover_t ||
           (int64_t)row_source >= (int64_t)source_y + image->cover_b) continue;
     }
+#if DG_D10
+    if (film_axes) {
+      if (film_rows[y] == UINT_MAX) continue;
+      row_source = film_rows[y];
+    }
+#endif
     if(cr>cl)scanned+=(unsigned)(cr-cl);
+    if (axes) {
+      if (row_source >= h) row_source = h - 1;
+      if ((int64_t)row_source < source_y ||
+          (int64_t)row_source >= (int64_t)source_y + image->height) continue;
+      row_source -= (unsigned)source_y;
+    }
     uint32_t *row = &target(c)[y * WC_WIDTH];
     for (int x = cl; x < cr; x++) {
-      unsigned sx = mapped ? columns[x] : 0, sy = row_source;
-      float u = 0, v = 0;
-      float sample_x = x + 0.5f, sample_y = y + 0.5f;
+      unsigned sx, sy;
+      if (axes) {
+        sx = columns[x];
+        if (sx == UINT_MAX) continue;
+        sy = row_source;
+      } else {
+        sx = 0; sy = row_source;
+        float u = 0, v = 0;
+        float sample_x = x + 0.5f, sample_y = y + 0.5f;
 #if DG_D10
-      if (c->film_transform_count &&
-          !dg_film_transform_point(c->film_transform, c->film_transform_count,
-                                   sample_x, sample_y, &sample_x, &sample_y)) continue;
-      if (c->film_transform_count && !transformed) {
-        if (sample_x < l || sample_y < t || sample_x >= r || sample_y >= b) continue;
-        u = (sample_x - l) / span_x; v = (sample_y - t) / span_y;
-        sx = (unsigned)(u * w); sy = (unsigned)(v * h);
-      }
+        if (c->film_transform_count) {
+          if (!dg_film_transform_point(c->film_transform, c->film_transform_count,
+                                       sample_x, sample_y, &sample_x, &sample_y)) continue;
+          if (!transformed) {
+            if (sample_x < l || sample_y < t || sample_x >= r || sample_y >= b) continue;
+            u = (sample_x - l) / span_x; v = (sample_y - t) / span_y;
+            sx = (unsigned)(u * w); sy = (unsigned)(v * h);
+          }
+        }
 #endif
-      if (transformed) {
-        if (!dg_quad_uv(q, sample_x, sample_y, &u, &v))
-          continue;
+        if (transformed) {
+          if (!dg_quad_uv(q, sample_x, sample_y, &u, &v))
+            continue;
 #if DG_MODERN
-        if (s->flip_h) u = 1 - u;
-        if (s->flip_v) v = 1 - v;
+          if (s->flip_h) u = 1 - u;
+          if (s->flip_v) v = 1 - v;
 #endif
-        sx = (unsigned)(u * w); sy = (unsigned)(v * h);
-      }
+          sx = (unsigned)(u * w); sy = (unsigned)(v * h);
+        }
 #if DG_D10
-      if (image->linked_member) {
-        if (!transformed) { u = (sample_x - l) / span_x; v = (sample_y - t) / span_y; }
-        if (!dg_linked_uv(image->linked_member, s, &u, &v)) continue;
-        sx = (unsigned)(u * w); sy = (unsigned)(v * h);
-      }
+        if (image->linked_member) {
+          if (!transformed) { u = (sample_x - l) / span_x; v = (sample_y - t) / span_y; }
+          if (!dg_linked_uv(image->linked_member, s, &u, &v)) continue;
+          sx = (unsigned)(u * w); sy = (unsigned)(v * h);
+        }
 #endif
-      if (sx >= w) sx = w - 1;
-      if (sy >= h) sy = h - 1;
-      if ((int64_t)sx < source_x || (int64_t)sy < source_y ||
-          (int64_t)sx >= (int64_t)source_x + image->width ||
-          (int64_t)sy >= (int64_t)source_y + image->height) continue;
-      sx -= (unsigned)source_x; sy -= (unsigned)source_y;
+        if (sx >= w) sx = w - 1;
+        if (sy >= h) sy = h - 1;
+        if ((int64_t)sx < source_x || (int64_t)sy < source_y ||
+            (int64_t)sx >= (int64_t)source_x + image->width ||
+            (int64_t)sy >= (int64_t)source_y + image->height) continue;
+        sx -= (unsigned)source_x; sy -= (unsigned)source_y;
+      }
       sampled++;
       uint32_t pixel = image->pixels[(size_t)sy * stride + sx];
       unsigned coverage = image->coverage ? image->coverage[(size_t)sy * stride + sx]
@@ -793,6 +881,13 @@ static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
         } else if ((pixel & 0xffffffu) == (opaque_rgb(key) & 0xffffffu))
           continue;
       }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+      // Full-stage Mask layers (Ghosts' rain) dominate D8.5 scenes.
+      if (ink == 9 && opacity && (row[x] >> 24) == 255) {
+        row[x] = dg_rgba_mask_ink(row[x], pixel, coverage, opacity, fore, back);
+        continue;
+      }
+#endif
       if (arithmetic_ink(ink)
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
           || controlled || ink == 9

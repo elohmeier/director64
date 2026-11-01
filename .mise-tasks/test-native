@@ -222,6 +222,8 @@ compile image_alpha tests/native/test_image_alpha.c
 compile image_plan tests/native/test_image_plan.c
 compile mpeg_decoder -Wno-unused-parameter tests/native/test_mpeg_decoder.c
 compile ink_projector -DDIRECTOR64_DIRECTOR_VERSION=10 tests/native/test_ink_projector.c
+compile ink_kernels -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 \
+    tests/native/test_ink_kernels.c
 compile rich_text_d6 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile rich_text_d7 -DDIRECTOR64_DIRECTOR_VERSION=7 -DDIRECTOR64_EXTENDED_D6=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
 compile rich_text_d85 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 -DDIRECTOR64_D85=1 tests/native/test_rich_text.c runtime/director/director.c runtime/lingo/lingo_runtime.c
@@ -367,3 +369,15 @@ for profile in 6 85; do
     done
 done
 
+# Android splits large bitmap draws across cores with OpenMP: the same pixel
+# contracts must hold with several threads.
+omp() {
+    OMP_NUM_THREADS=4 compile "$1_omp" -fopenmp "${@:2}" -Iplatforms/web "tests/native/test_${1%_d*}.c" \
+        platforms/web/compositor.c runtime/director/{director,shape}.c runtime/lingo/lingo_runtime.c
+}
+omp web_compositor_fixes_d6 -DDIRECTOR64_DIRECTOR_VERSION=6 -DDIRECTOR64_EXTENDED_D6=1
+modern=(-DDIRECTOR64_NATIVE_STAGE=1 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1
+        -DDIRECTOR64_D85=1)
+for test in web_compositor_fixes web_render_cache web_metamorphic web_film_work; do
+    omp "${test}_d85" "${modern[@]}"
+done

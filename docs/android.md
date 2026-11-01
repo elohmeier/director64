@@ -150,6 +150,32 @@ uv run --locked python -m director64.android_pacing pacing.log
 It fails on malformed windows, script alerts, or three consecutive windows
 below 95% of 60 Hz service.
 
+## Profiling
+
+The APK is `profileable` from the shell and its game thread marks `d64 service`,
+`d64 render` and `d64 present` trace sections for Perfetto. Each build keeps its
+unstripped library under `build/android/<game>/<source>/symbols/<abi>/`.
+`tools/android/native_profile.py` installs the current APK, restarts the game,
+waits until the pacing log reports a movie, samples the process with
+simpleperf and ranks the game library's functions and source lines:
+
+```sh
+uv run --locked python tools/android/native_profile.py --game findus-ghosts \
+  --emulator --movie LOGIN.DXR --output build/profiling/ghosts-emulator
+uv run --locked python tools/android/native_profile.py --game findus-ghosts \
+  --serial <tv-ip>:<port> --movie LOGIN.DXR --output build/profiling/ghosts-tv
+```
+
+`profile.json` holds the ranking beside the averaged pacing windows of the
+sampled interval. simpleperf and llvm-symbolizer are copied from the toolchain
+image under `build/tools/android-profiling/` on first use. Emulator profiles rank
+hot paths; only the TV measures its own frame cost.
+
+Large bitmap draws split their rows across cores with OpenMP (`-fopenmp`,
+statically linked); the workers sleep between draws (`KMP_BLOCKTIME=0`).
+The web build stays single-threaded. `mise run test-native` repeats the
+compositor pixel contracts with four threads.
+
 ## Source layout
 
 | Piece | Responsibility |

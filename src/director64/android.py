@@ -118,6 +118,9 @@ def makefile(game: GameSpec, output: Path, abis: list[str], *, validation: bool 
         "-fvisibility=hidden",
         "-ffunction-sections",
         "-fdata-sections",
+        "-g",
+        # Large bitmap draws split their rows across the TV's cores (compositor.c).
+        "-fopenmp",
     ]
     if validation:
         flags.append("-DDIRECTOR64_ANDROID_VALIDATION=1")
@@ -138,12 +141,15 @@ def makefile(game: GameSpec, output: Path, abis: list[str], *, validation: bool 
                 f"-include {obj.removesuffix('.o')}.d",
             ]
         lib = f"{rel}/lib/{abi}/lib{library(game)}.so"
+        # The unstripped library stays beside the build for simpleperf --symfs.
+        symbols = f"{rel}/symbols/{abi}/lib{library(game)}.so"
         lines += [
             f"{lib}: {' '.join(objects)}",
-            "\t@mkdir -p $(dir $@)",
+            "\t@mkdir -p $(dir $@) $(dir " + symbols + ")",
             f"\t{cc} -shared -Wl,--gc-sections -Wl,-z,max-page-size=16384 "
-            f"-Wl,--exclude-libs,ALL -o $@ $^ {' '.join(LIBS)}",
-            "\t$(NDK_BIN)/llvm-strip --strip-unneeded $@",
+            f"-Wl,--build-id -Wl,--exclude-libs,ALL -fopenmp -static-openmp "
+            f"-o {symbols} $^ {' '.join(LIBS)}",
+            f"\t$(NDK_BIN)/llvm-strip --strip-unneeded -o $@ {symbols}",
         ]
         targets.append(lib)
     lines.insert(2, "all: " + " ".join(targets))

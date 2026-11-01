@@ -376,6 +376,25 @@ static inline uint32_t dg_rgba_ink(uint32_t destination,uint32_t source,unsigned
   }
   return transparent?dg_rgba_blend(destination,result,coverage*opacity/100):result;
 }
+#if defined(DIRECTOR64_D85) && DIRECTOR64_D85
+// 256-step mix of two pixels' color channels at once. Red/blue and green sit
+// in separate 16-bit lanes: each lane's sum is at most 255*256, so no carry
+// crosses into the next channel and every channel rounds as on its own.
+__attribute__((always_inline)) static inline uint32_t dg_rgb_mix256(uint32_t source,uint32_t destination,unsigned weight) {
+  uint32_t rb=((source&0xff00ffu)*weight+(destination&0xff00ffu)*(256-weight))>>8;
+  uint32_t g=((source&0xff00u)*weight+(destination&0xff00u)*(256-weight))>>8;
+  return (rb&0xff00ffu)|(g&0xff00u);
+}
+// dg_rgba_ink for Mask9 over an opaque destination, with nonzero coverage
+// and opacity: colorize, the sprite blend weight (opacity < 100 only) and the
+// 256-step coverage mix, channel for channel the same integers.
+__attribute__((always_inline)) static inline uint32_t dg_rgba_mask_ink(uint32_t destination,uint32_t source,
+    unsigned coverage,unsigned opacity,uint32_t foreground,uint32_t background) {
+  uint32_t value=((source&background)|(~source&foreground))&0xffffffu;
+  if(opacity<100) value=dg_rgb_mix256(value,destination,(opacity*255+49)/100);
+  return dg_rgb_mix256(value,destination,coverage+(coverage==255))|0xff000000u;
+}
+#endif
 static inline uint32_t dg_rgba_sprite(uint32_t destination,uint32_t source,unsigned ink,
     unsigned coverage,unsigned opacity,uint32_t foreground,uint32_t background) {
   bool arithmetic=dg_ink_arithmetic(ink);

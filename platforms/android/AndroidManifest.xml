@@ -19,6 +19,9 @@
       android:allowBackup="false"
       android:extractNativeLibs="false">
 
+    <!-- simpleperf and Perfetto may sample a release build (docs/android.md). -->
+    <profileable android:shell="true" />
+
     <activity
         android:name=".GameActivity"
         android:exported="true"
