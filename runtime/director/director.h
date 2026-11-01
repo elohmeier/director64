@@ -746,6 +746,7 @@ typedef struct dg_runtime {
 #endif
 #if DG_D10
   uint32_t timeout_length, last_input_tick;
+  int32_t idle_handler_period;
   char timeout_script[32];
 #endif
 #if DG_EXTENDED
@@ -782,6 +783,7 @@ typedef struct dg_runtime {
   bool text_pending, text_reset, pass_event, cleanup_active, ending_sprites, movie_ready, quit_requested;
   unsigned input_stage, input_channel;
   uint32_t idle_tick, hover_tick;
+  bool idle_started, idle_handled;
   bool right_mouse_down, notice_armed;
   char notice[160];
 #endif

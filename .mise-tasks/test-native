@@ -22,6 +22,14 @@ compile lingo tests/native/test_lingo.c runtime/lingo/lingo_runtime.c
 compile director_d85_blend -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 \
     -DDIRECTOR64_D85=1 tests/native/test_director_d85_blend.c \
     runtime/director/director.c runtime/lingo/lingo_runtime.c
+for idle_profile in 6 10 85; do
+    idle_options=(-DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1)
+    if [ "$idle_profile" = 6 ]; then
+        idle_options=(-DDIRECTOR64_DIRECTOR_VERSION=6 -DDIRECTOR64_FULL_ENGINE=1 -DDIRECTOR64_EXTENDED_D6=1)
+    elif [ "$idle_profile" = 85 ]; then idle_options+=(-DDIRECTOR64_D85=1); fi
+    compile "idle_period_$idle_profile" "${idle_options[@]}" tests/native/test_idle_period.c \
+        runtime/director/director.c runtime/lingo/lingo_runtime.c
+done
 compile lingo_d85_order -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR64_EXTENDED_D6=1 \
     -DDIRECTOR64_D85=1 tests/native/test_lingo_d85_order.c runtime/lingo/lingo_runtime.c
 for paths in fallback virtual; do

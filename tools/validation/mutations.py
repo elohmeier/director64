@@ -41,6 +41,15 @@ def main() -> int:
          "source": "platforms/web/compositor.c", "compositor": True,
          "replace": [("if(!c->film_clip_disabled) {cl=tl;ct=tt;cr=tr;cb=tb;}",
                       "if(false) {cl=tl;ct=tt;cr=tr;cb=tb;}")]},
+        {"id": "ignored-idle-period", "test": "tests/native/test_idle_period.c",
+         "source": "runtime/director/director.c", "compositor": False,
+         "replace": [("d->idle_handler_period>0 ?", "false ?")]},
+        {"id": "hidden-inverse-offender", "test": "tests/native/test_web_film_work.c",
+         "source": "platforms/web/compositor.c", "compositor": True,
+         "replace": [("if(pixels>samples*WC_INVERSE_SCAN_RATIO && "
+                      "waste>bad->pixels-bad->sampled_pixels)",
+                      "if(pixels>samples*WC_INVERSE_SCAN_RATIO && waste>previous && "
+                      "waste>bad->pixels-bad->sampled_pixels)")]},
     ]
     results = []
     for case in cases:

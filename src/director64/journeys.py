@@ -55,7 +55,13 @@ def expect(state: dict, expected: dict) -> None:
         keys = ([key.replace("~1", "/").replace("~0", "~") for key in path[1:].split("/")]
                 if path.startswith("/") else path.split("."))
         for key in keys:
-            actual = actual.get(key) if isinstance(actual, dict) else None
+            if isinstance(actual, dict):
+                actual = actual.get(key)
+            elif isinstance(actual, list) and key.isascii() and key.isdecimal():
+                index = int(key)
+                actual = actual[index] if index < len(actual) else None
+            else:
+                actual = None
         if isinstance(wanted, dict):
             if set(wanted) == {"gte"}:
                 ok = isinstance(actual, (int, float)) and actual >= wanted["gte"]
@@ -289,6 +295,9 @@ def run_case(game, plan, output, timeout, baseline, slowdown, memory_growth):
     report["harness_sha256"] = {name: hashlib.sha256((harness / name).read_bytes()).hexdigest()
                                 for name in ("probe.mjs", "metrics.mjs")
                                 if (harness / name).is_file()}
+    report["harness_sha256"].update({
+        "game/host/" + path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((game.directory / "host").glob("*.py"))})
     command = [sys.executable, "-m", "director64", "journey", "--game", game.slug,
                "--source", game.source["id"], plan["name"], "--worker", "--output", str(output),
                "--plan-sha256", report["plan_sha256"]]

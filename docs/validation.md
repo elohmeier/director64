@@ -30,7 +30,8 @@ rich-text sections, so those readers start with valid structured inputs.
 Crashes retain the reproducer under `build/validation/native-fuzz/`.
 
 `test-mutations` compiles isolated source copies with deliberately broken stage
-bounds, scene-cache invalidation, popup blend ownership and film clipping. The
+bounds, scene-cache invalidation, popup blend ownership, film clipping, idle
+cadence and hidden inverse-mapping offenders. The
 unmodified control must pass and each faulty copy must fail. The working tree is
 unchanged.
 
@@ -97,6 +98,13 @@ without being mistaken for sustained cache thrashing. Host timings rank hotspots
 the optional baseline gate compares time and memory on the same host. Neither
 predicts Android frame rates.
 
+The work protocol retains the largest rejected area separately from the largest
+rejected area among draws exceeding the scan-ratio limit. Otherwise a legitimate
+large crop can hide a smaller, very inefficient draw. Protocol version 2 records
+the runtime's ratio threshold; stale counters or a different evaluator policy
+fail explicitly. A synthetic mixed-draw case and its faulty mutation check this
+false-pass regression independently of host timing.
+
 Ghosts' ordinary `rainy-opening` route waits through the publisher reel and then
 sustains the login scene with rain and all four ghosts. The former renderer
 inverse-mapped each small child over its large film container. Integer translation
@@ -111,6 +119,47 @@ These checks cover the registered routes and renderer costs. Extend journeys to
 reach newly discovered problem scenes. Node uses nominal glyphs and records audio
 callbacks; browser visual/audio tests and eventual TV pacing checks provide
 separate evidence.
+
+## Idle scheduling
+
+`idleHandlerPeriod` belongs to the movie runtime, including independent movie
+windows. Positive values space idle dispatches in 60 Hz ticks; changing a period
+does not restart a suspended handler. Zero and negative values consume available
+idle time after ordinary frame/input work, bounded by the existing service budget.
+The scheduler does not invent catch-up idle events after a long handler. Source-free
+tests cover periods 1/2/6/60, within-tick polling, changes during playback,
+wraparound, yielding, frame progress, fresh boots and window isolation.
+
+Ghosts' scene/idle objects and Birthday's event manager explicitly request 30 idle
+updates per second. Their setters previously only stored a process-global value,
+so the scheduling path ignored it and movie windows shared it. The selected
+original 8.5.1r104 engine under Wine confirms default 1, independent window
+readback, positive-period throttling and unrestricted zero/negative periods.
+Its launcher advertises 9.0r383; the observed DIRAPI/IML32 DLLs identify playback
+as 8.5.1r104. Cold first-phase timing is affected by original-game startup, so
+the measurements are behavioral evidence rather than an FPS benchmark.
+
+```sh
+uv run --locked director64 reference --game findus-birthday \
+  --windows-version win7 --experiment idle-handler-values
+uv run --locked director64 reference --game findus-birthday \
+  --windows-version win7 --experiment idle-handler-period --replay REPLAY
+```
+
+For the cadence experiment use a host-monotonic replay of at least 22 seconds
+with a checkpoint near the end. The authored probes contain the input cases and
+expected behavior; capture reports retain engine module hashes and the Wine
+environment. This is original-projector evidence under Wine, not native Windows
+or Android TV qualification. Macromedia's
+[Director MX 2004 Scripting Reference, idleHandlerPeriod](https://eclass.hmu.gr/modules/document/file.php/TP194/drmx2004_scripting_ref.pdf)
+documents positive tick intervals, default 1 and unrestricted zero. The selected
+D6 full-engine profile retains its older zero default; modern profiles use 1.
+The `idle-handler-defaults` probe also confirms default 1 and integer readback
+in the selected Director 7.0.2r85 playback DLLs under Wine. Newly allocated movie
+windows and linked movie contexts initialize their own defaults too.
+The clean ScummVM reference at `41ac2b31847622d0662d22c03fe6979e3b43cfbc`
+provides keyword/event context, but its idle-period scheduling is itself
+unfinished; no implementation was copied from it.
 
 ## Browser images, sequences and PCM
 

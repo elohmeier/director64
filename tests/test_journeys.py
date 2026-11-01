@@ -39,6 +39,11 @@ def test_expectations_fail_on_absent_values_and_wrong_destinations():
     journeys.expect(state, {"save_generation": {"gte": 1}, "globals.name": "ANNA"})
     journeys.expect({"saves": {"player/anna/game.txt": "ANNA"}},
                     {"/saves/player~1anna~1game.txt": {"contains": "ANNA"}})
+    journeys.expect({"sprites": [{"id": 2, "member": 99}]},
+                    {"/sprites/0/id": 2, "/sprites/0/member": 99})
+    for index in ("-1", "1", "wrong"):
+        with pytest.raises(ValueError):
+            journeys.expect({"sprites": [{"id": 2}]}, {f"/sprites/{index}/id": 2})
     with pytest.raises(ValueError, match="movie"):
         journeys.expect(state, {"movie": "ACTIVITY.DXR"})
     with pytest.raises(ValueError, match="missing"):

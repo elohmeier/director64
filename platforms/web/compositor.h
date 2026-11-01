@@ -85,6 +85,13 @@ typedef struct {
 } wc_image_t;
 
 enum { WC_IMAGE_SLOTS = 512, WC_TEXT_SLOTS = 32, WC_CURSOR_SLOTS = 16 };
+enum { WC_INVERSE_SCAN_RATIO = 4 };
+
+typedef struct {
+  uint64_t pixels, sampled_pixels;
+  unsigned channel, member, frame;
+  char movie[40];
+} wc_inverse_work_t;
 
 // Deterministic raster work, independent of host CPU speed. Counters are
 // updated per row/draw, outside the arithmetic for individual pixels.
@@ -95,6 +102,9 @@ typedef struct {
   uint64_t worst_inverse_pixels, worst_inverse_samples;
   unsigned worst_channel, worst_member, worst_frame;
   char worst_movie[40];
+  // Largest rejected area among draws exceeding the scan-ratio threshold.
+  // A larger, legitimate cropped draw must not hide an inefficient small one.
+  wc_inverse_work_t wasteful_inverse;
   unsigned peak_frame_loads, peak_frame_evictions;
   unsigned peak_frame_pressure_evictions, peak_cache_pressure_run;
   size_t peak_image_bytes;

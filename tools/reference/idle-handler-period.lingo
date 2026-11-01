@@ -1,0 +1,69 @@
+-- director64: full-script
+-- Synthetic idle cadence in an original D8.5 debug-movie window under Wine.
+-- Observe default/readback and gaps for periods 1, 2, 6, 0 and -1 over 180 ticks.
+-- Expected: default 1; 2/6 throttle; 0/-1 permit multiple calls within a tick.
+-- Original-game startup affects the cold first phase; this is not an FPS test.
+on startup
+  global out, probeWindow, probePeriods, probePhase, probeStart, probeCount, probeLast, probeMin, probeMax
+  out = new(xtra("fileio"))
+  out.createFile("C:\idle-handler-period.txt")
+  out.openFile("C:\idle-handler-period.txt", 2)
+  out.writeString(string(["default", the idleHandlerPeriod]) & RETURN)
+  reader = new(xtra("fileio"))
+  reader.openFile(the applicationPath & "LINGO.INI", 1)
+  code = reader.readFile()
+  reader.closeFile()
+  probePeriods = [1, 2, 6, 0, -1]
+  probePhase = 1
+  probeCount = 0
+  probeLast = -1
+  probeMin = 2147483647
+  probeMax = 0
+  probeWindow = window("director64-idle-probe")
+  probeWindow.fileName = the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+  probeWindow.open()
+  tell probeWindow
+    handlerMember = new(#script, castLib 1)
+    handlerMember.scriptType = #movie
+    handlerMember.scriptText = code
+    puppetTempo(30)
+    the idleHandlerPeriod = probePeriods[probePhase]
+    out.writeString(string(["installed", the movieName, the idleHandlerPeriod]) & RETURN)
+  end tell
+  probeStart = the ticks
+end
+
+on idle
+  global probePhase, probeCount, probeLast, probeMin, probeMax
+  if (the movieName <> "LOGFILE.DXR") or (probePhase > 5) then exit
+  now = the ticks
+  if probeLast >= 0 then
+    gap = now - probeLast
+    probeMin = min(probeMin, gap)
+    probeMax = max(probeMax, gap)
+  end if
+  probeLast = now
+  probeCount = probeCount + 1
+end
+
+on enterFrame
+  global out, probeWindow, probePeriods, probePhase, probeStart, probeCount, probeLast, probeMin, probeMax
+  if (the movieName <> "LOGFILE.DXR") or (probePhase > 5) then exit
+  elapsed = the ticks - probeStart
+  if elapsed >= 180 then
+    out.writeString(string(["requested", probePeriods[probePhase], "readback", the idleHandlerPeriod, "ticks", elapsed, "calls", probeCount, "minGap", probeMin, "maxGap", probeMax]) & RETURN)
+    probePhase = probePhase + 1
+    if probePhase > 5 then
+      out.closeFile()
+      probeWindow.close()
+      exit
+    end if
+    the idleHandlerPeriod = probePeriods[probePhase]
+    probeStart = the ticks
+    probeCount = 0
+    probeLast = -1
+    probeMin = 2147483647
+    probeMax = 0
+  end if
+  go(1)
+end

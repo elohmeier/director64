@@ -31,7 +31,7 @@ def fresh_build(game: GameSpec) -> dict:
 
 def harness_inputs(root: Path) -> dict[str, str]:
     paths = [*root.glob("src/director64/*.py"), *root.glob("platforms/web/node/*.mjs"),
-             *root.glob("games/*/journeys.json"), Path(__file__),
+             *root.glob("games/*/journeys.json"), *root.glob("games/*/host/*.py"), Path(__file__),
              root / ".mise-tasks/test-journeys"]
     return {str(path.resolve().relative_to(root)): web.sha256(path) for path in paths}
 

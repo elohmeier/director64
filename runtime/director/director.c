@@ -4005,6 +4005,9 @@ void dg_init(dg_runtime_t *d, lv_runtime_t *r, dg_platform_t platform,
   d->mouse_x = 320;
   d->mouse_y = 240;
   d->sound_level = 7;
+#if DG_D10
+  d->idle_handler_period = DG_D7_UP ? 1 : 0;
+#endif
 #if DG_MODERN
   d->color_depth = 32;
   for (unsigned ch = 0; ch < DG_SOUND_CHANNELS; ch++)
@@ -4904,12 +4907,15 @@ static bool d6_idle(dg_runtime_t *d) {
   if (d->input_stage == 2) {
     d->input_stage = 3;
     d->pass_event = false;
-    if (!event_with_mask(d, "idle", d->score[0].script, 0)) d->pass_event = true;
+    if (event_with_mask(d, "idle", d->score[0].script, 0)) d->idle_handled = true;
+    else d->pass_event = true;
     return true;
   }
   if (d->input_stage == 3) {
     d->input_stage = 0;
-    return d->pass_event && dg_event(d, "idle", 0);
+    bool handled=d->pass_event && dg_event(d, "idle", 0);
+    d->idle_handled |= handled;
+    return handled;
   }
 #if DG_D10
   // Director sends idle while the playhead waits. A score more than a tick
@@ -4918,10 +4924,21 @@ static bool d6_idle(dg_runtime_t *d) {
   if (!d->input_stage && d->clock >= d->frame_deadline + 1000000u)
     return false;
 #endif
-  if (!d->input_stage && d->idle_tick != d->ticks) {
+  bool due=d->idle_tick != d->ticks;
+#if DG_D10
+  due=!d->idle_started || (d->idle_handler_period>0 ?
+      (uint32_t)(d->ticks-d->idle_tick)>=(uint32_t)d->idle_handler_period :
+      d->idle_tick!=d->ticks);
+#endif
+  if (!d->input_stage && due) {
     d->idle_tick = d->ticks;
+    d->idle_started = true;
+    d->idle_handled = false;
     d->input_stage = 2;
-    if (sprite_event(d, "mousewithin", d->hover_sprite, 0)) return true;
+    if (sprite_event(d, "mousewithin", d->hover_sprite, 0)) {
+      d->idle_handled=true;
+      return true;
+    }
     return true;
   }
   return false;
@@ -5099,6 +5116,7 @@ bool dg_enter(dg_runtime_t *d, const dg_movie_t *movie, unsigned frame,
 #endif
   d->sel_start = d->sel_end = 0;
   d->idle_tick = UINT32_MAX;
+  d->idle_started = d->idle_handled = false;
   memset(d->sprite_editable, 0, sizeof(d->sprite_editable));
 #endif
 #if DG_D5
@@ -5761,7 +5779,18 @@ bool dg_service(dg_runtime_t *d, unsigned budget) {
 #else
           d->clock < d->frame_deadline)
 #endif
+      {
+#if DG_D10 && DG_EXTENDED
+        // Period zero uses available idle time, including between service
+        // ticks. Re-enter only after ordinary score/input work has drained;
+        // the existing handler budget bounds the burst and preserves yielding.
+        if(d->idle_handler_period<=0 && d->idle_handled) {
+          d->idle_started=false;
+          continue;
+        }
+#endif
         break;
+      }
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85
       // The tempo channel's waits: for sound channel 1 or 2 to finish (a
       // cue point waits as long), or for a click.

@@ -19,7 +19,8 @@ single-player setup on entry and restart. Source-pinned patches bypass its
 hotseat mode chooser without clearing profiles or past scores.
 
 The `login-dog-registration` journey exercises registration, the save on
-return, reboot and restored dog state. The opt-in [invariant model](invariants.json)
+return, reboot and restored dog state, then dog-scene rollovers, encyclopedia
+navigation and linked video play/pause controls. The opt-in [invariant model](invariants.json)
 adds conditional checks for this named route; see the
 [model invocation](../../docs/fuzzing.md#conditional-game-models).
 
@@ -30,4 +31,5 @@ the underscore spelling of the dog-word and sailing narration filenames;
 longer fuzz replays caught both folder and filename lookup failures.
 
 The dog's linked Shockwave animations still need scene-by-scene original-engine
-comparison. The registered route establishes entry and saved state.
+comparison. The registered route checks reachable interactions and saved state;
+it does not establish original visual fidelity.

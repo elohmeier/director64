@@ -33,12 +33,12 @@ regressions; none is an original-projector comparison or Android TV result.
 | Findus Christmas | `full_journey` | All 24 calendar doors and returns; day 16 drag/removal |
 | Findus Mucklas | `full_journey` with activity; `train-station-soak` | Player creation/reload; clock victory, inventory reward/reload; ten simulated minutes in the reported train-station slowdown scene |
 | Findus ghosts | `rainy-opening`, `player-yard` | Natural publisher reel and sustained rain/ghost films; publisher skip, name entry, player save, story to yard |
-| Findus circus | `player-yard` | Clown selection, keyboard name entry, save, story to yard, sustained scene playback |
+| Findus circus | `player-yard`, `puzzle-imaging` | Clown selection/save and yard; generate 16 masked puzzle pieces, drag/rotate all 15 movable pieces and require every slot to fill |
 | Findus birthday | `player-registration` | Bedroom film loops, name entry, saved registration, room entry and sustained playback |
 | Löwenzahn 1 | `full_journey` | Both complete intro clips, volume slider and retained settings, all nine menus/first topics and panorama returns |
 | Löwenzahn 6 | `login-frog-video` | Profile selection, preferences, exterior navigation and frog video playback |
 | Löwenzahn 7 | `login-piano` | Music profile, roof navigation, piano entry and key input |
-| Löwenzahn 8 | `login-dog-registration` | Boat profile, intro skip, pet name entry, return/save, reboot and restored dog state |
+| Löwenzahn 8 | `login-dog-registration` | Pet registration/save/reload; interactive dog-scene rollovers, encyclopedia/contents navigation, linked wolf video and pause/resume button state |
 | Löwenzahn Advent | `countdown-wagon-desk` | Seasonal start, countdown exit, desk navigation and nutcracker interaction |
 | Löwenzahn Optik | `wagon-laptop-topic` | Intro, desk, laptop, first topic menu, quiz entry and sustained playback |
 | Lernerfolg Deutsch 1–2 | `full_journey` | Name/class selection, saved profile, room and exercise entry, Flash answer selection, Ctrl+Shift+Q statistics, controller task selection and TEST2CB1 field layout |
@@ -54,7 +54,7 @@ The six additional experimental adapters register these routes:
 | Löwenzahn 4 | `rocket-login` | Rocket intro, skeleton profile, saved preferences and wagon exterior |
 | Löwenzahn 5 | `opening-login` | Device checks, snail profile, opening story skip and wagon exterior |
 
-The suite registers 24 default journeys across 20 games. The compatibility
+The suite registers 25 default journeys across 20 games. The compatibility
 workarounds and conversion limits are documented in
 [additional-ports.md](additional-ports.md). Each route includes concrete
 state expectations; startup alone does not establish activity coverage.
@@ -73,6 +73,21 @@ fuzzing's separate alert policy, journeys do not tolerate script alerts.
 Capability failures remain failures; the runner has no expected-failure
 allowlist. Pointer, keyboard, editable text, pad input and save-preserving
 reboots are allowed; arbitrary movie jumps or script/state injection are not.
+
+Circus's scripted puzzle route reads its own filled-slot list and active dragged
+piece through `inspect GLOBAL PROPERTY...`, a read-only production-probe query.
+It checks that each observation leaves the game clock unchanged. Its saved replay
+contains only player inputs; observations are retained separately. The cached
+and fully recomposited executions of the complete solve also match per-tick
+pixels, state and audio callbacks. This does not establish original-engine pixel
+or audible-output fidelity.
+
+The dog route skips Peter's opening through the normal interface before using
+its hotspots. It exercises leash, bush and bird rollovers, opens the encyclopedia
+and its contents, returns to the wagon, reenters and operates the linked video's
+play/pause controls. Array indices in expectation paths such as
+`/sprites/1/member` let it require both buttons' actual member changes. Registered
+dog data must remain saved after these visits.
 
 `--timeout` bounds each journey including all its probe sessions (default
 600 seconds); timeout termination includes the process group. The runner

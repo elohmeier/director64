@@ -1024,7 +1024,7 @@ static void quoted(const char *text) { quoted_bytes(text,strlen(text)); }
 EMSCRIPTEN_KEEPALIVE const char *d64_render_work_json(void) {
   const wc_work_t *w=&compositor.work;
   output_length=0;output[0]=0;
-  emit("{\"version\":1,\"stage_pixels\":%u,\"image_budget\":%llu,\"frames\":%llu,\"scene_frames\":%llu,"
+  emit("{\"version\":2,\"inverse_scan_ratio\":%u,\"stage_pixels\":%u,\"image_budget\":%llu,\"frames\":%llu,\"scene_frames\":%llu,"
        "\"bitmap_calls\":%llu,\"bitmap_pixels\":%llu,\"inverse_pixels\":%llu,"
        "\"translated_pixels\":%llu,\"translated_bounds_pixels\":%llu,"
        "\"peak_frame_pixels\":%llu,\"peak_frame_inverse_pixels\":%llu,"
@@ -1032,7 +1032,7 @@ EMSCRIPTEN_KEEPALIVE const char *d64_render_work_json(void) {
        "\"peak_frame_pressure_evictions\":%u,\"peak_cache_pressure_run\":%u,"
        "\"peak_image_bytes\":%llu,"
        "\"render_us\":%llu,\"peak_render_us\":%llu,\"peak_render_frame\":%u,\"peak_render_movie\":",
-       WC_WIDTH*WC_HEIGHT,(unsigned long long)compositor.image_budget,
+       WC_INVERSE_SCAN_RATIO,WC_WIDTH*WC_HEIGHT,(unsigned long long)compositor.image_budget,
        (unsigned long long)w->frames,(unsigned long long)w->scene_frames,
        (unsigned long long)w->bitmap_calls,(unsigned long long)w->bitmap_pixels,
        (unsigned long long)w->inverse_pixels,(unsigned long long)w->translated_pixels,
@@ -1046,7 +1046,13 @@ EMSCRIPTEN_KEEPALIVE const char *d64_render_work_json(void) {
        "\"channel\":%u,\"member\":%u,\"frame\":%u,\"movie\":",
        (unsigned long long)w->worst_inverse_pixels,(unsigned long long)w->worst_inverse_samples,
        w->worst_channel,w->worst_member,w->worst_frame);
-  quoted(w->worst_movie);emit("}}");
+  quoted(w->worst_movie);
+  const wc_inverse_work_t *bad=&w->wasteful_inverse;
+  emit("},\"wasteful_inverse\":{\"pixels\":%llu,\"sampled_pixels\":%llu,"
+       "\"channel\":%u,\"member\":%u,\"frame\":%u,\"movie\":",
+       (unsigned long long)bad->pixels,(unsigned long long)bad->sampled_pixels,
+       bad->channel,bad->member,bad->frame);
+  quoted(bad->movie);emit("}}");
   return output;
 }
 #ifdef DIRECTOR64_GAME_PROBE
@@ -1156,6 +1162,23 @@ EMSCRIPTEN_KEEPALIVE const char *d64_rpc(const char *command) {
 #endif
   if (!strcmp(command, "reboot")) {
     d64_boot(seed);
+  } else if (!strncmp(command, "inspect ", 8)) {
+    // Read-only observation for gameplay assertions; no script invocation or
+    // movie/sprite mutation is exposed by a production probe.
+    char words[8][48];
+    int n = sscanf(command + 8, "%47s %47s %47s %47s %47s %47s %47s %47s", words[0], words[1],
+                   words[2], words[3], words[4], words[5], words[6], words[7]);
+    lv_t v = {0};
+    for (unsigned i = 0; i < values.global_count; i++)
+      if (n > 0 && !strcmp(global_names[i], words[0])) v = values.globals[i];
+    for (int i = 1; i < n && !values.failed; i++)
+      v = lv_get(&values, NULL, words[i], v);
+    static char text[16384];
+    if (!lv_format(&values, v, text, sizeof(text))) strcpy(text, "<format failed>");
+    emit("{\"inspect\":");
+    quoted(text);
+    emit("}\n");
+    return output;
 #ifdef DIRECTOR64_DEV_LENIENT
   } else if (sscanf(command, "member %u", &member_id) == 1) {
     // Development: what a sprite's member id names.
@@ -1187,22 +1210,6 @@ EMSCRIPTEN_KEEPALIVE const char *d64_rpc(const char *command) {
                        lv_make(LV_MEMBER, (int32_t)director.sprites[member_id].value.member));
     emit("{\"text\":");
     quoted(lv_cstr(&values, text));
-    emit("}\n");
-    return output;
-  } else if (!strncmp(command, "inspect ", 8)) {
-    // Development: a global, then a property path, formatted.
-    char words[8][48];
-    int n = sscanf(command + 8, "%47s %47s %47s %47s %47s %47s %47s %47s", words[0], words[1],
-                   words[2], words[3], words[4], words[5], words[6], words[7]);
-    lv_t v = {0};
-    for (unsigned i = 0; i < values.global_count; i++)
-      if (n > 0 && !strcmp(global_names[i], words[0])) v = values.globals[i];
-    for (int i = 1; i < n && !values.failed; i++)
-      v = lv_get(&values, NULL, words[i], v);
-    static char text[16384];
-    if (!lv_format(&values, v, text, sizeof(text))) strcpy(text, "<format failed>");
-    emit("{\"inspect\":");
-    quoted(text);
     emit("}\n");
     return output;
 #if defined(DIRECTOR64_D85) && DIRECTOR64_D85

@@ -88,6 +88,12 @@ int main(void) {
   assert(dg_enter(&stage,&movie,1,NULL,0));
   assert(dg_service(&stage,DG_SERVICE_BUDGET));
   assert(stage.movie==&movie && stage.window_runtime && stage.window_runtime->movie==&control);
+  lv_set(&values,NULL,"idlehandlerperiod",(lv_t){0},lv_num(6));
+  dg_runtime_t *idle_window=dg_window_begin(&stage);
+  assert(idle_window && lv_integer(&values,lv_get(&values,NULL,"idlehandlerperiod",(lv_t){0}))==1);
+  lv_set(&values,NULL,"idlehandlerperiod",(lv_t){0},lv_num(2));
+  dg_window_end(&stage);
+  assert(lv_integer(&values,lv_get(&values,NULL,"idlehandlerperiod",(lv_t){0}))==6);
   lv_t numeric=lv_list(&values,2,(lv_t[]){lv_num(1),lv_num(2)},true);
   assert(lv_integer(&values,call("fx_errornumber",1,&numeric))==0 && !values.failed);
   assert(lv_truth(&values,call("fx_fileexists",2,(lv_t[]){(lv_t){0},lv_text(&values,"C:\\global\\control.DXR",false)})));

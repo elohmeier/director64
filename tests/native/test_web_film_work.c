@@ -69,6 +69,19 @@ int main(void) {
  assert(reference.work.inverse_pixels==(uint64_t)WC_WIDTH*WC_HEIGHT);
  assert(reference.work.worst_inverse_pixels>reference.work.worst_inverse_samples*100);
  assert(optimized.work.worst_inverse_pixels<=(13u+2)*(9u+2));
+ // An earlier legitimate crop has more absolute waste than the following
+ // half-stage film scan. Keep the ratio offender independently of that crop.
+ optimized.work=(wc_work_t){0};reference.work=(wc_work_t){0};
+ uint64_t stage=(uint64_t)WC_WIDTH*WC_HEIGHT;
+ optimized.work.worst_inverse_pixels=reference.work.worst_inverse_pixels=stage;
+ optimized.work.worst_inverse_samples=reference.work.worst_inverse_samples=stage*5/12;
+ director.sprites[1].value.width=WC_WIDTH/2;
+ compare();
+ assert(reference.work.worst_inverse_pixels==stage);
+ assert(reference.work.wasteful_inverse.pixels>stage/4);
+ assert(reference.work.wasteful_inverse.pixels>
+        reference.work.wasteful_inverse.sampled_pixels*WC_INVERSE_SCAN_RATIO);
+ director.sprites[1].value.width=WC_WIDTH+2;
 #else
  // D10's native films have a separate container-compositing contract.
  assert(!reference.work.inverse_pixels && !optimized.work.inverse_pixels);

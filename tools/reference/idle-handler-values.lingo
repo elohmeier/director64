@@ -1,0 +1,23 @@
+-- Synthetic readback, window scope and integer boundaries in original D8.5.
+-- Expected: defaults 1; setting the window to 2 leaves the stage at 6;
+-- every listed signed integer reads back unchanged.
+global out
+out = new(xtra("fileio"))
+out.createFile("C:\idle-handler-values.txt")
+out.openFile("C:\idle-handler-values.txt", 2)
+out.writeString(string(["default", the idleHandlerPeriod]) & RETURN)
+the idleHandlerPeriod = 6
+w = window("director64-idle-values")
+w.fileName = the applicationPath & "DEBUG\ALLGEMEI\LOGFILE.DXR"
+w.open()
+tell w
+  out.writeString(string(["windowDefault", the idleHandlerPeriod]) & RETURN)
+  the idleHandlerPeriod = 2
+end tell
+out.writeString(string(["stageAfterWindowSet", the idleHandlerPeriod]) & RETURN)
+repeat with value in [0, 1, 2, 6, 60, 2147483647, -1]
+  the idleHandlerPeriod = value
+  out.writeString(string(["set", value, "readback", the idleHandlerPeriod]) & RETURN)
+end repeat
+out.closeFile()
+w.close()

@@ -71,6 +71,7 @@ int main(void) {
   assert(!wc_render(&compositor,&host,0,0,false,0));
 
   dg_runtime_t *child=dg_linked_begin(&host,1);
+  assert(child && child->idle_handler_period==1);
   assert(child);
   child->visual_revision=host.visual_revision; // force every previous cache key to match
   dg_pixel_image_t snapshot;

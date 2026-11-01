@@ -16,5 +16,9 @@
       {"wait": {"movie": "HOF.DXR"}, "ticks": 12000, "label": "yard"},
       {"idle": 3600, "expect": {"movie": "HOF.DXR"}, "label": "yard-playback"}
     ]
+  }, {
+    "name": "puzzle-imaging", "legacy": "puzzle_journey",
+    "description": "Reach the patch puzzle, generate its 16 masked images, drag and rotate every movable piece into place.",
+    "covers": ["startup", "profiles", "navigation", "imaging", "alpha-masks", "dragging", "rotation", "puzzle-completion"]
   }]
 }

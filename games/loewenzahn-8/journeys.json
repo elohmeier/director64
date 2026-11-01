@@ -3,7 +3,7 @@
   "journeys": [
     {
       "name": "login-dog-registration",
-      "description": "Select a boat profile, skip the intro, open the dog, name it and require registration to persist.",
+      "description": "Register and reload the dog, exercise dog-scene rollovers and encyclopedia navigation, then play, pause and resume a linked video.",
       "covers": [
         "startup",
         "profile-selection",
@@ -13,7 +13,12 @@
         "text-entry",
         "save",
         "reboot",
-        "profile-reload"
+        "profile-reload",
+        "hover",
+        "topic-navigation",
+        "linked-video",
+        "video-controls",
+        "sustained-playback"
       ],
       "steps": [
         {
@@ -137,6 +142,186 @@
             }
           },
           "label": "pet-name-restored"
+        },
+        {
+          "click": [
+            400,
+            400
+          ],
+          "settle": 600,
+          "expect": {
+            "movie": "TS2HUNDE.DXR",
+            "frame": 9
+          },
+          "label": "dog-interactive"
+        },
+        {
+          "command": "step 180 664 268 0",
+          "expect": {
+            "movie": "TS2HUNDE.DXR",
+            "frame": 40
+          },
+          "label": "dog-leash-animation"
+        },
+        {
+          "command": "step 120 400 570 0",
+          "expect": {
+            "frame": 9
+          }
+        },
+        {
+          "command": "step 180 98 475 0",
+          "expect": {
+            "movie": "TS2HUNDE.DXR",
+            "frame": 100
+          },
+          "label": "dog-bush-animation"
+        },
+        {
+          "command": "step 120 400 570 0",
+          "expect": {
+            "frame": 9
+          }
+        },
+        {
+          "command": "step 180 595 113 0",
+          "expect": {
+            "movie": "TS2HUNDE.DXR",
+            "frame": 24
+          },
+          "label": "dog-bird-animation"
+        },
+        {
+          "command": "step 120 400 570 0",
+          "expect": {
+            "frame": 9
+          }
+        },
+        {
+          "click": [
+            664,
+            268
+          ],
+          "settle": 600,
+          "expect": {
+            "movie": "HUNDEWOE.DXR",
+            "frame": 477
+          },
+          "label": "dog-encyclopedia"
+        },
+        {
+          "click": [
+            67,
+            541
+          ],
+          "settle": 600,
+          "expect": {
+            "movie": "HUNDEWOE.DXR",
+            "frame": 1
+          },
+          "label": "dog-encyclopedia-contents"
+        },
+        {
+          "click": [
+            725,
+            558
+          ],
+          "settle": 600,
+          "expect": {
+            "movie": "VORNE.DXR",
+            "globals.gtamagotchi": {
+              "contains": "#name:\"REX\""
+            }
+          },
+          "label": "dog-topic-return"
+        },
+        {
+          "click": [
+            554,
+            54
+          ],
+          "settle": 600,
+          "expect": {
+            "movie": "TS2HUNDE.DXR"
+          }
+        },
+        {
+          "click": [
+            400,
+            400
+          ],
+          "settle": 600,
+          "expect": {
+            "movie": "TS2HUNDE.DXR",
+            "frame": 9
+          }
+        },
+        {
+          "click": [
+            597,
+            373
+          ],
+          "settle": 60,
+          "expect": {
+            "movie": "VIDEOMAT.DXR",
+            "frame": 290
+          },
+          "label": "dog-wolf-video"
+        },
+        {
+          "idle": 600,
+          "expect": {
+            "movie": "VIDEOMAT.DXR",
+            "frame": 290
+          },
+          "label": "dog-video-playback"
+        },
+        {
+          "click": [
+            283,
+            517
+          ],
+          "settle": 120,
+          "expect": {
+            "movie": "VIDEOMAT.DXR",
+            "/sprites/1/id": 2,
+            "/sprites/1/member": 86048897,
+            "/sprites/2/id": 3,
+            "/sprites/2/member": 86048899
+          },
+          "label": "dog-video-paused"
+        },
+        {
+          "click": [
+            238,
+            517
+          ],
+          "settle": 120,
+          "expect": {
+            "movie": "VIDEOMAT.DXR",
+            "/sprites/1/id": 2,
+            "/sprites/1/member": 86048896,
+            "/sprites/2/id": 3,
+            "/sprites/2/member": 86048898
+          },
+          "label": "dog-video-resumed"
+        },
+        {
+          "click": [
+            715,
+            558
+          ],
+          "settle": 600,
+          "expect": {
+            "movie": "VORNE.DXR",
+            "globals.gtamagotchi": {
+              "contains": "#name:\"REX\""
+            },
+            "/saves/lz8.usr": {
+              "contains": "REX"
+            }
+          },
+          "label": "dog-video-return"
         }
       ]
     }

@@ -121,6 +121,7 @@ static bool window_load(dg_runtime_t *d, const dg_movie_t *movie) {
     child->ticks = d->ticks; child->clock = d->clock;
     child->sound_level = d->sound_level; child->color_depth = d->color_depth;
     child->float_precision = d->float_precision;
+    child->idle_handler_period = DG_D7_UP ? 1 : 0;
     child->linked_instance = ++d->linked_next_instance;
     memcpy(child->channel_volume, d->channel_volume, sizeof(child->channel_volume));
     if (!linked_state_new(child)) { free(child); return false; }

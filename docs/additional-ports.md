@@ -27,7 +27,7 @@ uv run --locked director64 journey --game all --list
 ```
 
 All 20 default game editions have completed conversion. The default suite
-registers 23 rendered journeys. The six new routes now exercise profile or
+registers 25 rendered journeys. The six new routes now exercise profile or
 navigation state beyond startup; their coverage is listed in
 [journeys.md](journeys.md). They remain representative regressions, with
 later activities needing additional routes.

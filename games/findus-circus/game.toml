@@ -20,6 +20,7 @@ director_version = 850
 media_root = "PF2"
 
 [port]
+host_package = "director64_findus_circus"
 extended_d6 = true
 director_version = 850
 media_root = "PF2"

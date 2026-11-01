@@ -859,8 +859,6 @@ static void d85_sound_service(dg_runtime_t *d) {
   }
 }
 #endif
-// Settings the 8.5 projectors read back that change nothing on the target.
-static int32_t d10_idle_period;
 static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
   if (flash_playback_property(d,name,owner,out,false)) return true;
   if (linked_get(d, name, owner, out)) return true;
@@ -1010,7 +1008,7 @@ static bool d10_get(dg_runtime_t *d, const char *name, lv_t owner, lv_t *out) {
       *out = lv_list(r, 4, items, false);
       return true;
     }
-    if (ln == LN_IDLEHANDLERPERIOD) { *out = lv_num(d10_idle_period); return true; }
+    if (ln == LN_IDLEHANDLERPERIOD) { *out = lv_num(d->idle_handler_period); return true; }
     if (ln == LN_TIMEOUTLENGTH) { *out = lv_num((int32_t)d->timeout_length); return true; }
     if (ln == LN_TIMEOUTSCRIPT) { *out = lv_text(r, d->timeout_script, false); return true; }
     if (ln == LN_TIMEOUTLAPSED) { *out = lv_num((int32_t)(d->ticks - d->last_input_tick)); return true; }
@@ -1313,7 +1311,10 @@ static bool d10_set(dg_runtime_t *d, const char *name, lv_t owner, lv_t value) {
     return true;
   }
   if (lv_type(owner) == LV_VOID) {
-    if (ln == LN_IDLEHANDLERPERIOD) { d10_idle_period = (int32_t)lv_integer(r, value); return true; }
+    if (ln == LN_IDLEHANDLERPERIOD) {
+      d->idle_handler_period=(int32_t)lv_integer(r,value);
+      return true;
+    }
     // Authoring and mixer settings with nothing to change on the target.
     if ((ln == LN_DEBUGPLAYBACKENABLED) || (ln == LN_SOUNDDEVICE) || (ln == LN_SOUNDKEEPDEVICE) ||
         (ln == LN_RANDOMSEED) || (ln == LN_USEFASTQUADS) ||

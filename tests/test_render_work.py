@@ -9,19 +9,22 @@ from director64.project import repository
 
 
 def work():
-    return {"version": 1, "stage_pixels": 480000, "image_budget": 96 * 1024 * 1024,
+    return {"version": 2, "inverse_scan_ratio": 4, "stage_pixels": 480000,
+            "image_budget": 96 * 1024 * 1024,
             **dict.fromkeys((*render_work.COUNTERS, *render_work.PEAKS), 0),
             "frames": 1, "scene_frames": 1, "bitmap_pixels": 500000,
             "peak_frame_pixels": 500000, "peak_render_us": 300,
             "peak_render_frame": 75, "peak_render_movie": "LOGIN.DXR",
             "worst_inverse": {"pixels": 0, "sampled_pixels": 0, "channel": 0,
+                                  "member": 0, "frame": 0, "movie": ""},
+            "wasteful_inverse": {"pixels": 0, "sampled_pixels": 0, "channel": 0,
                                   "member": 0, "frame": 0, "movie": ""}}
 
 
 def test_clipping_regression_fails_even_with_fast_host_timing():
     value = work()
     assert render_work.findings(value) == []
-    value["worst_inverse"] = {"pixels": 960000, "sampled_pixels": 6800,
+    value["wasteful_inverse"] = {"pixels": 960000, "sampled_pixels": 6800,
                                   "channel": 16, "member": 123, "frame": 75,
                                   "movie": "LOGIN.DXR"}
     result = render_work.summarize([{"movie": "MENU.DXR", "frame": 1,
@@ -33,6 +36,23 @@ def test_clipping_regression_fails_even_with_fast_host_timing():
     # The oracle measures actual rejected sampling, even without recognizing
     # an integer translation or depending on the optimized clipping helper.
     assert value["translated_pixels"] == 0
+
+
+def test_legitimate_larger_draw_cannot_hide_a_smaller_fault():
+    value = work()
+    value["worst_inverse"] = {"pixels": 480000, "sampled_pixels": 200000,
+                              "channel": 1, "member": 1, "frame": 1, "movie": "CROP"}
+    value["wasteful_inverse"] = {"pixels": 200000, "sampled_pixels": 1000,
+                                 "channel": 2, "member": 2, "frame": 1, "movie": "FAULT"}
+    assert "FAULT" in render_work.findings(value)[0]
+    value["wasteful_inverse"]["pixels"] = 100000
+    assert render_work.findings(value) == []  # Below the absolute waste budget.
+
+
+def test_runtime_and_evaluator_must_use_the_same_scan_ratio_policy():
+    value = work()
+    value["inverse_scan_ratio"] = 8
+    assert render_work.findings(value)
 
 
 @pytest.mark.parametrize(("key", "bad"), [
@@ -63,7 +83,7 @@ def test_one_time_cache_turnover_is_reported_without_claiming_sustained_thrash()
 def test_malformed_metrics_do_not_pass(change):
     value = work()
     if change == "version":
-        value["version"] = 2
+        value["version"] = 1
     elif change == "negative":
         value["bitmap_pixels"] = -1
     elif change == "bool":

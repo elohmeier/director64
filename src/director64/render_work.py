@@ -14,21 +14,27 @@ PEAKS = ("peak_frame_pixels", "peak_frame_inverse_pixels", "peak_frame_loads",
          "peak_image_bytes", "peak_render_us")
 
 
-def findings(work: dict, limits: dict | None = None) -> list[str]:
+def findings(work: dict) -> list[str]:
     """Reject missing/malformed work and excessive scans, independent of wall time."""
-    limits = LIMITS | (limits or {})
-    if type(work.get("version")) is not int or work["version"] != 1:
+    limits = LIMITS
+    if type(work.get("version")) is not int or work["version"] != 2:
         return ["renderer work metrics missing or unsupported; rebuild the web runtime"]
+    if (type(work.get("inverse_scan_ratio")) is not int or
+            work["inverse_scan_ratio"] != limits["inverse_scan_ratio"]):
+        return ["renderer scan-ratio policy differs; rebuild the web runtime"]
     keys = (*COUNTERS, *PEAKS, "stage_pixels", "image_budget")
     if any(type(work.get(key)) is not int or work[key] < 0 for key in keys):
         return ["invalid renderer work counters"]
     stage = work["stage_pixels"]
     if stage not in (640 * 480, 800 * 600):
         return ["invalid renderer stage size"]
-    worst = work.get("worst_inverse", {})
-    if not isinstance(worst, dict) or any(type(worst.get(key)) is not int or worst[key] < 0
-           for key in ("pixels", "sampled_pixels", "channel", "member", "frame")):
-        return ["invalid inverse-mapping work counters"]
+    for name in ("worst_inverse", "wasteful_inverse"):
+        draw = work.get(name)
+        if (not isinstance(draw, dict) or any(type(draw.get(key)) is not int or draw[key] < 0
+                for key in ("pixels", "sampled_pixels", "channel", "member", "frame")) or
+                draw["sampled_pixels"] > draw["pixels"] or not isinstance(draw.get("movie"), str)):
+            return ["invalid inverse-mapping work counters"]
+    worst = work["wasteful_inverse"]
     errors = []
     if (worst["pixels"] > max(1, worst["sampled_pixels"]) * limits["inverse_scan_ratio"]
             and worst["pixels"] - worst["sampled_pixels"] >
@@ -76,7 +82,8 @@ def summarize(samples: list[dict]) -> dict:
                 "peak_frame_pixels": work["peak_frame_pixels"],
                 "peak_frame_inverse_pixels": work["peak_frame_inverse_pixels"],
                 "image_budget": work.get("image_budget"),
-                "worst_inverse": work.get("worst_inverse")})
+                "worst_inverse": work.get("worst_inverse"),
+                "wasteful_inverse": work.get("wasteful_inverse")})
     result["available"] = not result["missing_samples"] and result["samples"] > 0
     # Preserve findings in full; ranking is diagnostic and is not a device-FPS estimate.
     result["hotspots"].sort(key=lambda row: (row["peak_render_ms"],

@@ -587,6 +587,12 @@ static void bitmap_work(wc_t *c,dg_runtime_t *d,const dg_sprite_t *sprite,
       c->work.worst_frame=d->frame;
       snprintf(c->work.worst_movie,sizeof(c->work.worst_movie),"%s",d->movie->code->name);
     }
+    wc_inverse_work_t *bad=&c->work.wasteful_inverse;
+    if(pixels>samples*WC_INVERSE_SCAN_RATIO && waste>bad->pixels-bad->sampled_pixels) {
+      *bad=(wc_inverse_work_t){.pixels=pixels,.sampled_pixels=samples,
+        .channel=c->work_channel,.member=sprite->value.member,.frame=d->frame};
+      snprintf(bad->movie,sizeof(bad->movie),"%s",d->movie->code->name);
+    }
   }
   if(translated) {
     c->work.translated_pixels+=pixels;c->work.translated_bounds_pixels+=bounds;

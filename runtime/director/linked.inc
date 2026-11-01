@@ -184,6 +184,7 @@ static dg_linked_child_t *linked_create(dg_runtime_t *parent, unsigned channel, 
   child->ticks = parent->ticks; child->clock = parent->clock;
   child->sound_level = parent->sound_level; child->color_depth = parent->color_depth;
   child->float_precision = parent->float_precision;
+  child->idle_handler_period = DG_D7_UP ? 1 : 0;
   for (unsigned ch = 0; ch < DG_SOUND_CHANNELS; ch++) child->channel_volume[ch] = parent->channel_volume[ch];
   if (!(member->linked_flags & 8)) {
     child->platform.sound = NULL; child->platform.sound_busy = NULL;

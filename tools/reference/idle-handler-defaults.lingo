@@ -1,0 +1,12 @@
+-- Synthetic defaults/readback for selected original D7 and later engines.
+-- Expected on selected D7/8.5: default 1 and exact signed-integer readback.
+global out
+out = new(xtra("fileio"))
+out.createFile("C:\idle-handler-defaults.txt")
+out.openFile("C:\idle-handler-defaults.txt", 2)
+out.writeString(string(["default", the idleHandlerPeriod]) & RETURN)
+repeat with value in [0, 1, 2, 6, 60, 2147483647, -1]
+  the idleHandlerPeriod = value
+  out.writeString(string(["set", value, "readback", the idleHandlerPeriod]) & RETURN)
+end repeat
+out.closeFile()

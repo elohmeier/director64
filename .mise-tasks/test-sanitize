@@ -20,7 +20,7 @@ for name in web_metamorphic web_render_cache web_flash_cache web_flash_text_hit 
         runtime/package/package.c -lm -o "build/sanitize/$name"
     "build/sanitize/$name"
 done
-for name in user_files user_images text_limit buttons; do
+for name in user_files user_images text_limit buttons idle_period; do
     "$cc" "${flags[@]}" "tests/native/test_$name.c" runtime/director/director.c \
         runtime/lingo/lingo_runtime.c -lm -o "build/sanitize/$name"
     "build/sanitize/$name"
