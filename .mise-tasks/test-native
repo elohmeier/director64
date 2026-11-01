@@ -381,3 +381,12 @@ modern=(-DDIRECTOR64_NATIVE_STAGE=1 -DDIRECTOR64_DIRECTOR_VERSION=10 -DDIRECTOR6
 for test in web_compositor_fixes web_render_cache web_metamorphic web_film_work; do
     omp "${test}_d85" "${modern[@]}"
 done
+# The web and Android builds compile with clang, whose warnings differ from
+# the host compiler's (an unused static inline helper broke the web build).
+if command -v clang >/dev/null; then
+    for flags in "-DDIRECTOR64_DIRECTOR_VERSION=6" "${modern[*]}"; do
+        # shellcheck disable=SC2086
+        clang -std=c17 -Wall -Wextra -Werror -pedantic -fsyntax-only "${includes[@]}" \
+            -Iplatforms/web $flags platforms/web/compositor.c
+    done
+fi

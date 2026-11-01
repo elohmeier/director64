@@ -608,12 +608,12 @@ static void bitmap_work(wc_t *c,dg_runtime_t *d,const dg_sprite_t *sprite,
 #define WC_PRAGMA(x) _Pragma(#x)
 #define WC_PARALLEL_ROWS(area, reductions) \
   WC_PRAGMA(omp parallel for schedule(static) reductions if((area) >= WC_PARALLEL_PIXELS))
-#else
-#define WC_PARALLEL_ROWS(area, reductions)
-#endif
 static inline uint64_t rect_area(int l, int t, int r, int b) {
   return r > l && b > t ? (uint64_t)(r - l) * (unsigned)(b - t) : 0;
 }
+#else
+#define WC_PARALLEL_ROWS(area, reductions)
+#endif
 
 static void draw_bitmap(wc_t *c, dg_runtime_t *d, const dg_sprite_t *s,
                         const wc_image_t *image, int l, int t, int r, int b,
