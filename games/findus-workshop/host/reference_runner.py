@@ -807,6 +807,10 @@ def container_capture(args: argparse.Namespace) -> int:
                 "512",
                 "-f",
                 "x11grab",
+                # The host pointer is not stage content; image comparisons
+                # would report it as a difference in every frame.
+                "-draw_mouse",
+                "0",
                 "-video_size",
                 f"{width}x{height}",
                 "-framerate",

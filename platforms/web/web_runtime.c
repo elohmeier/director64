@@ -1179,6 +1179,28 @@ EMSCRIPTEN_KEEPALIVE const char *d64_rpc(const char *command) {
     quoted(text);
     emit("}\n");
     return output;
+  } else if (!strcmp(command, "sprites")) {
+    // Read-only observation for image comparisons: every occupied channel in
+    // drawing order with its member, ink and stage bounds.
+    const uint16_t *order;
+    unsigned count = dg_draw_order(&director, &order);
+    emit("{\"sprites\":[");
+    for (unsigned k = 0; k < count; k++) {
+      unsigned i = order[k];
+      const dg_sprite_t *sp = &director.sprites[i];
+      const dg_member_t *m = dg_member(&director, sp->value.member);
+      int l, t, r, b;
+      dg_bounds(&director, i, &l, &t, &r, &b);
+      emit("%s{\"channel\":%u,\"member\":%u,\"cast\":%u,\"number\":%u,\"name\":", k ? "," : "",
+           i, sp->value.member, m ? m->cast : 0, m ? m->number : 0);
+      quoted(m && m->name ? m->name : "");
+      emit(",\"member_type\":%u,\"ink\":%u,\"blend\":%u,\"visible\":%s,\"rect\":[%d,%d,%d,%d],"
+           "\"film_frame\":%u}",
+           m ? m->type : 0, sp->value.ink, sp->value.blend, sp->visible ? "true" : "false",
+           l, t, r, b, sp->film_frame);
+    }
+    emit("]}\n");
+    return output;
 #ifdef DIRECTOR64_DEV_LENIENT
   } else if (sscanf(command, "member %u", &member_id) == 1) {
     // Development: what a sprite's member id names.

@@ -78,6 +78,7 @@ Every game command takes `--game <slug>` and optionally `--source <id>`.
 | `director64 parity` | Compare two builds state by state |
 | `director64 journey` | Run regression journeys with timing and memory reports (`--game all` for every port) |
 | `director64 reference` | Capture original projectors and synthetic experiments under Wine |
+| `director64 compare` | Find persistent image differences between the port and the original projector under Wine ([validation](docs/validation.md#original-projector-image-comparison)) |
 | `director64 visual` | Compare actual browser images, animation and PCM against reviewed local baselines |
 | `director64 metamorphic` | Compare cached/recomposited and batched/split executions, including serviced frames |
 | `director64 android-validate` | Replay input through a separate Android validation APK |

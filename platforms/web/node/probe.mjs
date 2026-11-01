@@ -275,6 +275,17 @@ for await (const line of createInterface({input: process.stdin, crlfDelay: Infin
     if (!accepted) throw new Error("no matching player document operation is pending");
     rpc = "step 1 0 0 0";
   }
+  // "capture NAME" writes the current stage as raw RGBA into
+  // DIRECTOR64_PROBE_CAPTURE (director64 compare) and reports the state.
+  const capture = /^capture ([A-Za-z0-9_.-]{1,64})$/.exec(command);
+  if (capture) {
+    const directory = process.env.DIRECTOR64_PROBE_CAPTURE;
+    if (!directory) throw new Error("capture requires DIRECTOR64_PROBE_CAPTURE");
+    const width = module._d64_stage_width(), height = module._d64_stage_height();
+    writeFileSync(join(directory, capture[1]), module.HEAPU8.subarray(
+      module._d64_pixels(), module._d64_pixels() + width * height * 4));
+    rpc = "state";
+  }
   const reply = module.ccall("d64_rpc", "string", ["string"], [rpc]);
   const ok = reply !== "" && checkpoint(JSON.stringify(line.trimEnd()));
   metrics.end(started, line.trimEnd(), module);

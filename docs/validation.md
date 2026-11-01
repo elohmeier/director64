@@ -256,6 +256,44 @@ establish actual font or audible-output equivalence. Sessions have finite total
 timeouts and bounded input streams; a slow uncached reference can need a longer
 timeout. A timeout is a failure, not an accepted comparison.
 
+## Original-projector image comparison
+
+`director64 compare` runs one timed input replay (the reference runner's
+`host_monotonic_ms` format) through the original projector under Wine and the
+port's web probe, then reports where the port's images differ from the
+original's:
+
+```sh
+uv run --locked director64 compare --game findus-ghosts --replay REPLAY --start 60
+uv run --locked director64 compare --game findus-ghosts \
+  --original build/findus-ghosts/<source>/reference/<capture> --start 60
+```
+
+Both sides start without saves; differing saves change what scenes show, so a
+device with player data is not comparable. The original runs in real time and
+the two clocks start at different moments, so the tool samples both at
+`--fps` (5), finds the global time offset over the whole recording, and compares
+each port frame with every original frame within `--window` seconds (1.5),
+keeping each pixel's closest match. Animation phase, rain and timing jitter
+drop out; content the original never shows there does not. A 4×4 block that
+differs by more than `--tolerance` (48) in at least `--persist` (80%) of a
+movie's frames is persistent. `--start` skips seconds of replay in the
+analysis, not in the offset search.
+
+Output under `build/<game>/<source>/compare/`: `report.json` with the offset
+and, per movie, the persistent regions with the port sprites drawn there (top
+first: channel, member name, ink, blend, bounds, visibility), plus images:
+port | closest original | persistent difference, for the whole stage and for
+each region. The probe's `capture NAME` and `sprites` commands supply the
+frames and attribution. Text uses the Node probe's nominal glyphs and is
+expected to differ.
+
+The recorder omits the host pointer (`-draw_mouse 0`); a capture that
+still shows it reports the pointer as a small persistent region, which is a
+convenient sensitivity check. Ghosts' opening and login scene match apart from
+a 4-pixel edge sliver (2026-11-01). Source-free tests cover offset recovery,
+phase jitter and a missing static object (`tests/test_compare.py`).
+
 ## Original Director evidence
 
 ```sh

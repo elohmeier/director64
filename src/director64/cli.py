@@ -69,6 +69,8 @@ def main(argv=None):
         "visual": "Arguments: capture | compare | approve (local visual/audio evidence)",
         "metamorphic": "Options: --replay FILE --relation cache|chunks|clip|all --output DIR",
         "android-validate": "Replay journeys through an isolated Android validation APK",
+        "compare": "Options: --original CAPTURE | --replay FILE, --start SECONDS --fps N "
+        "--window SECONDS --tolerance N --persist FRACTION --output DIR",
         "convert": "Options: --force --output DIR (default build/<slug>/<source>/converted)",
         "web": "Options: --reconvert --serve --port N (default 18064) --no-build (docs/web.md)",
     }
@@ -90,6 +92,7 @@ def main(argv=None):
         "visual",
         "metamorphic",
         "android-validate",
+        "compare",
     ):
         p = sub.add_parser(name, epilog=help_text.get(name))
         p.add_argument("--game", required=True)
@@ -163,6 +166,10 @@ def main(argv=None):
             from .android_validation import main as android_validate
 
             return android_validate(game, remaining)
+        if args.command == "compare":
+            from .compare import main as compare
+
+            return compare(game, remaining)
         if args.command == "reference":
             from .reference import main as reference
 
